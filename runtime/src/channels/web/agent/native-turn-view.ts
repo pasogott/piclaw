@@ -12,7 +12,7 @@ export function createNativeTurnView(database: Database, channel: NativeTurnView
   let runId: number | undefined, base: Record<string, unknown> | undefined;
   let thought = "", draft = "", completedThought = "", completedDraft = "", partialThought = "", partialDraft = "";
   let operationId = "", lastTool: Record<string, unknown> | undefined;
-  const tools = new Map<string, string>();
+  const tools = new Map<string, { signature: string; payload: Record<string, unknown> }>();
   const titles = createToolTitleTracker();
   let lastStatus = "";
   const status = (data: Record<string, unknown>) => {
@@ -73,34 +73,42 @@ export function createNativeTurnView(database: Database, channel: NativeTurnView
     panel("draft", [completedDraft, partialDraft].filter(Boolean).join("\n\n"));
     const calls = new Map(messages.flatMap((item: any) => item.content ?? []).filter((block: any) => block.type === "toolCall").map((block: any) => [block.id, block]));
     const results = messages.filter((item: any) => item.role === "toolResult");
-    const slots = [...(live.tools ?? []), ...(live.nestedTools ?? [])];
     const resultText = (result: any) => (result?.content ?? []).filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
-    // Final output need not have been streamed through slot.output.
-    for (const result of results) if (!slots.some((slot: any) => slot.callId === result.toolCallId)) slots.push({ callId: result.toolCallId, name: result.toolName, status: "done", output: resultText(result) });
+    // Historical completions precede current slots. Appending old results after
+    // live tools can replace a new running notification with the first result.
+    const byCallId = new Map<string, any>();
+    for (const result of results) byCallId.set(result.toolCallId, { callId: result.toolCallId, name: result.toolName, status: "done", output: resultText(result) });
+    for (const slot of [...(live.tools ?? []), ...(live.nestedTools ?? [])]) byCallId.set(slot.callId, slot);
+    const slots = [...byCallId.values()].sort((a, b) => Number(a.status !== "done") - Number(b.status !== "done"));
     const activeTools = slots.filter((slot: any) => slot.status !== "done").map((slot: any) => ({
-      tool_call_id: slot.callId, tool_name: slot.name, title: slot.name, status: slot.status,
+      tool_call_id: slot.callId, tool_name: slot.name, title: titles.remember(slot.callId, slot.name, slot.arguments ?? (calls.get(slot.callId) as any)?.arguments), status: slot.status,
       ...(slot.arguments ? { tool_args: slot.arguments } : {}),
       ...(slot.output ? { output_preview: slot.output.slice(-4000), output_preview_lines: slot.output.split("\n").length } : {}),
     }));
+    let currentTool: Record<string, unknown> | undefined;
     for (const slot of slots) {
       const result = results.find((item: any) => item.toolCallId === slot.callId);
       const output = slot.output || resultText(result);
-      const signature = JSON.stringify([slot, output]);
-      if (tools.get(slot.callId) === signature) continue;
-      tools.set(slot.callId, signature);
       const call: any = calls.get(slot.callId);
       const args = slot.arguments ?? call?.arguments;
-      lastTool = { type: output || slot.status === "done" ? "tool_status" : "tool_call", title: titles.remember(slot.callId, slot.name, args), tool_call_id: slot.callId, tool_name: slot.name,
+      // Diagnostics and live/committed slot shape changes are not UI activity.
+      const signature = JSON.stringify([slot.name, slot.status, args, output]);
+      const previous = tools.get(slot.callId);
+      if (previous?.signature === signature) { currentTool = previous.payload; continue; }
+      currentTool = { type: output || slot.status === "done" ? "tool_status" : "tool_call", title: titles.remember(slot.callId, slot.name, args), tool_call_id: slot.callId, tool_name: slot.name,
         tool_args: args, status: slot.status, active_tools: activeTools, active_tool_count: activeTools.length, last_event_at: new Date().toISOString(),
         ...(output ? { output_preview: output.slice(-16000), output_preview_lines: output.split("\n").length } : {}) };
-      status(lastTool);
+      tools.set(slot.callId, { signature, payload: currentTool });
+      status(currentTool);
     }
-    if (!activeTools.length && live.generation) {
+    if (currentTool) lastTool = { ...currentTool, active_tools: activeTools, active_tool_count: activeTools.length };
+    if (activeTools.length && lastTool) status(lastTool);
+    else if (!activeTools.length && live.generation) {
       // Retain the last tool and its output while the model resumes. A phase
       // update must not erase the Output pane or a fast tool's feedback.
       status(lastTool ? { ...lastTool, active_tools: [], active_tool_count: 0, last_activity: true, phase: partialDraft ? "drafting" : "thinking" }
         : { type: "thinking", title: partialDraft ? "Writing response..." : "Thinking...", phase: partialDraft ? "drafting" : "thinking", active_tools: [], active_tool_count: 0,
           ...(live.generation.retry ? { title: "Retrying", retry_at: live.generation.retry.at } : {}) });
-    }
+    } else if (currentTool && lastTool) status(lastTool);
   };
 }

@@ -157,7 +157,7 @@ function formatToolTitle(toolName: string, args: unknown): string {
   if (!record) return toolName;
   let detail: string | null = null;
 
-  const command = record.command;
+  const command = record.command ?? (toolName === "exec_command" ? record.cmd : undefined);
   if (typeof command === "string") detail = command;
 
   if (!detail && Array.isArray(record.commands)) {
