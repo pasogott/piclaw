@@ -29,7 +29,6 @@ import { validateAccessStartup } from "../db/access-state.js";
 import { startAuthMaintenance } from "./auth-maintenance.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { prepareMcpInstanceConfig } from "../core/config-mcp.js";
-import { inspectOwnedSession } from "./owned-session-control.js";
 import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
@@ -422,7 +421,7 @@ function resolveSessionControlTarget(agentPool: AgentPool, request: SessionContr
 function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): void {
   setSessionControlHandler((request) => web.runInternalDispatch(async (): Promise<SessionControlResult> => {
     if (getSessionIsolationLevel() === "full") throw new Error("Session isolation is full; session_control is disabled.");
-    if (readAccessConfig().mode !== "single-user") return inspectOwnedSession(agentPool, request);
+    if (readAccessConfig().mode !== "single-user") throw new Error("Session control requires single-user access.");
     const target = resolveSessionControlTarget(agentPool, request);
     const base = {
       action: request.action,
@@ -586,10 +585,6 @@ export async function startWebChannel(
   // register their HTTP routes during the first session resource reload.
   // createSessionInDir() freezes the registry after that initial load pass.
 
-  if (readAccessConfig().mode === "family-shared") {
-    registerSessionControlHandler(agentPool, web);
-    return web;
-  }
 
   // Wire the first-class add-on runtime API to the web channel's in-process
   // message storage/queue/run path. Add-ons should use this instead of
@@ -687,6 +682,3 @@ export async function startOptionalPushoverChannel(): Promise<PushoverChannel | 
   await pushover.start();
   return pushover;
 }
-
-
-

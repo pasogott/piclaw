@@ -39,7 +39,7 @@ function dispatchStoredReplyWebPush(
   interaction: ReturnType<WebChannelLike["storeMessage"]>,
   dispatchWebPushNotification?: (interaction: ReturnType<WebChannelLike["storeMessage"]>) => Promise<unknown>,
 ): void {
-  if (!interaction || !["single-user", "family-shared"].includes(readAccessConfig().mode)) return;
+  if (!interaction || !(readAccessConfig().mode === "single-user")) return;
   void (dispatchWebPushNotification || sendStoredAgentReplyWebPushNotification)(interaction).catch((error) => {
     debugSuppressedError(log, "Failed to dispatch Web Push for stored agent reply.", error, {
       chatJid: interaction.chat_jid,

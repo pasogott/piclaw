@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
 
 import { createRunToolCeilingController, type SessionWithToolControl } from "../../src/agent-pool/run-tool-ceiling.js";
-import { withExecutionIdentity, type ExecutionIdentity } from '../../src/core/execution-context.js';
-import { FAMILY_WEB_TOOLS } from '../../src/core/family-workspace-policy.js';
 
 function createToolSession(initial: string[]) {
   let activeTools = [...initial];
@@ -102,30 +100,7 @@ test("run tool ceiling rejects owners without complete tool controls", () => {
   })]);
 });
 
-test('family ceiling is mandatory, intersects narrower callers and survives reactivation/replacement', () => {
-  const identity: ExecutionIdentity = { mode: 'family-shared', username: 'alice', displayName: 'Alice', role: 'admin', rootChatJid: 'web:alice',
-    toolPolicy: { revision: 0, allowed: FAMILY_WEB_TOOLS, denied: [] },
-    provenance: { kind: 'interactive', actorUserId: 'alice', ownerUserId: 'alice', chatJid: 'web:alice', authenticationSessionId: 'login' } };
-  withExecutionIdentity(identity, () => {
-    for (const filter of [undefined, () => true, (name: string) => name === 'read']) {
-      const owner = createToolSession(['read', 'messages', 'bash', 'keychain', 'delegate', 'unknown-addon']);
-      const ceiling = createRunToolCeilingController({ chatJid: 'web:alice', runOptions: { toolCeilingFilter: filter } });
-      expect(ceiling.apply(owner.session)).toBe(true);
-      const expected = filter?.('messages') === false ? ['read'] : ['read', 'messages'];
-      expect(owner.active()).toEqual(expected);
-      owner.session.setActiveToolsByName!(['read', 'messages', 'bash', 'delegate', 'unknown-addon']); expect(owner.active()).toEqual(expected);
-      const replacement = createToolSession(['write', 'read', 'messages']); ceiling.apply(replacement.session); expect(replacement.active()).toEqual(expected);
-      expect(() => ceiling.apply({})).toThrow('requires active-tool controls');
-      expect(() => ceiling.apply(null)).toThrow('requires active-tool controls');
-      ceiling.release();
-    }
-    const owner = createToolSession([...FAMILY_WEB_TOOLS, 'shell', 'introspect_sql', 'mcp', 'delegate']);
-    const ceiling = createRunToolCeilingController({ chatJid: 'web:alice', runOptions: {} }); ceiling.apply(owner.session);
-    expect(owner.active()).toEqual([...FAMILY_WEB_TOOLS]); ceiling.release();
-  });
-});
-
-test("explicit required ceilings fail closed outside family mode too", () => {
+test("explicit required ceilings fail closed", () => {
   const controller=createRunToolCeilingController({chatJid:'operation:test',runOptions:{requireToolCeiling:true,toolCeilingFilter:()=>false}});
   expect(()=>controller.apply(null)).toThrow('active-tool controls');
   expect(()=>controller.apply({})).toThrow('active-tool controls');

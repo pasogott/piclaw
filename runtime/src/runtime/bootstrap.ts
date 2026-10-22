@@ -117,7 +117,7 @@ export interface RuntimeBootstrapDeps {
   triggerPattern: RegExp;
   pollIntervalMs: number;
   signalRegistrar: RuntimeSignalRegistrar;
-  initializeRuntimeEnvironment(state: RuntimeBootstrapState): { effectiveMode: "single-user" | "family-shared" } | void;
+  initializeRuntimeEnvironment(state: RuntimeBootstrapState): { effectiveMode: "single-user" } | void;
   hydrateMcpCredentials(): Promise<HydratedMcpCredential[]>;
   clearMcpCredentials(entries: HydratedMcpCredential[]): void;
   createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"]): Promise<RuntimeBootstrapAgentPool>;
@@ -141,7 +141,6 @@ export interface RuntimeBootstrapDeps {
   ): void;
   queueStartupResumePendingIpc(): void;
   startRuntimeLoop(deps: StartRuntimeLoopDeps): Promise<void>;
-  waitForFamilyShutdown?(): Promise<void>;
   /** Synchronous certificate, before shutdown's process.exit can bypass main's finally. */
   onShutdownComplete?(): void;
   log(message: string): void;
@@ -234,7 +233,6 @@ export function createDefaultRuntimeBootstrapDeps(
     startRuntimeWorkers,
     queueStartupResumePendingIpc,
     startRuntimeLoop,
-    waitForFamilyShutdown: () => new Promise<void>(() => {}),
     log: (message) => log.info(message, { operation: "bootstrap.banner" }),
     stopIpcWatcher,
     stopSchedulerLoop,
@@ -263,8 +261,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
   };
 
   const access = deps.initializeRuntimeEnvironment(state);
-  const familyMode = access?.effectiveMode === "family-shared";
-  const hydratedMcpCredentials = familyMode ? [] : await deps.hydrateMcpCredentials();
+  const hydratedMcpCredentials = await deps.hydrateMcpCredentials();
   try {
     if (prepareApplicationBackend) {
       assert(runtimeOwner?.enabled && runtimeOwner.strictOwnership, "Strict runtime owner required");
@@ -279,8 +276,8 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       if (!("broadcastEvent" in web) || typeof web.broadcastEvent !== "function") throw Error("Backend requires channel publisher");
       backend.attachChannel(web as unknown as Parameters<NonNullable<RuntimeBackend["attachChannel"]>>[0]);
     }
-    const pushover = familyMode ? null : await deps.startOptionalPushoverChannel();
-    if (!familyMode) deps.startBackgroundModelRefresh(agentPool);
+    const pushover = await deps.startOptionalPushoverChannel();
+    deps.startBackgroundModelRefresh(agentPool);
 
     const baseShutdown = deps.createShutdownHandler({
       queue,
@@ -309,14 +306,6 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
     deps.registerRuntimeShutdownSignals(deps.signalRegistrar, shutdown);
 
     const senders = deps.createRuntimeSenders(web, pushover);
-    if (familyMode) {
-      await Promise.race([
-        deps.waitForFamilyShutdown?.() ?? new Promise<void>(() => {}),
-        shutdownCompletion.promise,
-      ]);
-      if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
-      return;
-    }
     deps.startRuntimeWorkers(queue, agentPool, web, senders);
 
     if (messageLoopController.signal.aborted) {
@@ -342,7 +331,6 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
           try {
             assert(runtimeOwner?.enabled && runtimeOwner.strictOwnership, "Strict runtime owner required");
             runtimeOwner.assertCurrentOwner();
-            assert(!familyMode, "Family ingress is not migration-qualified");
             const installedChannels = [web, ...(pushover ? [pushover] : [])];
             assert(installedChannels.every(channel => channel === web && channel instanceof WebChannel),
               "Unsupported installed channel");

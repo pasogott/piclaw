@@ -51,9 +51,3 @@ skel/.piclaw/core-addons/defaults/
 
 # Workspace project tracking (Scotty)
 projects/
-
-# Local dependency installations
-/node_modules/
-/runtime/node_modules/
-/node_modules
-/runtime/node_modules

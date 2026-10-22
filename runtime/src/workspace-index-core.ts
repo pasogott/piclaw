@@ -16,7 +16,6 @@ import { getDb } from "./db.js";
 import { getWorkspaceDir, getWorkspaceSearchConfig } from "./core/config.js";
 import { createLogger, debugSuppressedError } from "./utils/logger.js";
 import { workspaceIndexAccess,WorkspaceIndexAccessDenied } from './core/workspace-index-access.js';
-import { familyWorkspaceIndexStatus,familyWorkspaceScope,refreshFamilyWorkspaceIndex,staleFamilyWorkspaceIndex } from './family-workspace-index.js';
 
 import { markNoteIndexDirty } from "./note-retrieval/coordinator.js";
 
@@ -163,7 +162,6 @@ async function walkFiles(root: string, validate: () => void, allowMissingRoot = 
 
 export function normalizeWorkspaceIndexRoots(scope: string | undefined): string[] {
   const access=workspaceIndexAccess();
-  if(access.mode==='family-shared'){const selected=familyWorkspaceScope(scope);return (selected==='notes'?['notes/family']:selected==='skills'?['.pi/skills']:['notes/family','.pi/skills']).map(root=>path.resolve(access.workspace,root));}
   return workspaceIndexPolicyRoots(scope).map(root => path.join(getWorkspaceRoot(), root));
 }
 
@@ -374,14 +372,14 @@ export function getAffectedWorkspaceIndexScopes(paths: string[]): WorkspaceSearc
 }
 
 export function getWorkspaceIndexStatus(params?: { scope?: WorkspaceSearchScope | string }): WorkspaceIndexStatus {
-  const access=workspaceIndexAccess();if(access.mode==='family-shared')return familyWorkspaceIndexStatus(params?.scope);
+  const access=workspaceIndexAccess();
   const scope = normalizeWorkspaceSearchScope(params?.scope);
   const roots = normalizeWorkspaceIndexRoots(scope);
   return buildStatusSnapshot(scope, roots, getStatusRow(scope));
 }
 
 export function markWorkspaceIndexCoreStale(params?: { scope?: WorkspaceSearchScope | string; paths?: string[] }): WorkspaceSearchScope[] {
-  const access=workspaceIndexAccess();if(access.mode==='family-shared')return staleFamilyWorkspaceIndex(params);
+  const access=workspaceIndexAccess();
   const databaseFile=(getDb().query('PRAGMA database_list').get() as {file?:string})?.file;
   if(databaseFile&&params?.scope !== 'skills') markNoteIndexDirty(params?.paths?.map(p => path.relative(getWorkspaceRoot(), path.resolve(getWorkspaceRoot(),p)).split(path.sep).join('/')));
   const explicitScope = params?.paths?.length ? null : normalizeWorkspaceSearchScope(params?.scope);
@@ -403,7 +401,7 @@ export function markWorkspaceIndexCoreStale(params?: { scope?: WorkspaceSearchSc
 }
 
 export async function refreshWorkspaceIndex(params?: { scope?: WorkspaceSearchScope | string; max_kb?: number }): Promise<WorkspaceIndexStatus> {
-  const access=workspaceIndexAccess();if(access.mode==='family-shared')return refreshFamilyWorkspaceIndex(params);
+  const access=workspaceIndexAccess();
   const database=getDb(), policy=workspaceIndexPolicySnapshot();let denied=false;
   const validate=()=>{access.validate();policy.validate();if(denied||getDb()!==database){denied=true;throw new WorkspaceIndexAccessDenied();}};
   const scope = normalizeWorkspaceSearchScope(params?.scope);

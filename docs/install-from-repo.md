@@ -31,7 +31,7 @@ The first start seeds missing workspace files from `skel/`, including `AGENTS.md
 
 ## Access modes and upgrades
 
-Only single-user mode is supported, regardless of Docker or native installation. Development account APIs do not enable family mode; see [Access modes](multi-user/README.md). Back up configuration, database, sessions and bootstrap key together before changing versions. Never remove access markers to downgrade a store or point an older binary at a multi-user database.
+Only single-user mode is supported for Docker and native installation. See [Access modes](access-modes.md); preserve database, configuration, session files and key material in backups.
 
 ## Post-install: update AGENTS.md
 

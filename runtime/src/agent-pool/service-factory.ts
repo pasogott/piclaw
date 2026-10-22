@@ -55,7 +55,7 @@ export interface AgentPoolServices {
 }
 
 async function resolveSessionExtensionFactories(chatJid: string): Promise<ExtensionFactory[]> {
-  // Never load persisted legacy SSH credentials or connect a shared remote shell for family hydration.
+  // Only single-user sessions may load instance SSH credentials.
   if (readAccessConfig().mode !== 'single-user') return [];
   let sshConfig: ReturnType<typeof getSshConfig> | undefined;
   try {

@@ -2,7 +2,7 @@
 
 Piclaw uses the following web-first authentication, message, agent, media, and lifecycle flows. [whatsapp.md](whatsapp.md) describes the WhatsApp channel.
 
-The flows below describe supported single-user operation unless marked **gated family backend**. Family/isolated startup is disabled; branch queues, tools, WebSocket upgrades and notification delivery still need full owner-context integration.
+The flows below describe single-user operation. Native runtime ownership, accepted sources and operations remain durable across restart.
 
 ## Authentication flow (single-user TOTP + passkeys)
 
@@ -15,22 +15,6 @@ The web UI can be gated behind TOTP with optional WebAuthn passkeys. Passkeys ar
 - **Login**: optional conditional passkey mediation or explicit passkey button; enabled TOTP is a separate form. Explicit passkey/code actions cancel competing passkey work.
 - **Multiple passkeys**: list, name, rename and remove in Settings. Writes require a login no older than five minutes. Removal must leave an accepted sign-in factor and does not revoke existing sessions. `/passkey list` remains read-only; enrol/delete redirect to Settings.
 - Every TOTP card submission returns explicit feedback describing validation success/failure and any changes performed
-
-## Gated family backend flows
-
-These code paths are tested behind the startup gate, not available as a family deployment or complete browser workflow:
-
-1. Resolve the request principal from its account cookie; never derive identity from `chat_jid`, an internal secret or a caller-supplied username header.
-2. Select the current owned home when a target is omitted; reject explicit foreign, unknown or malformed targets. Validate the authoritative parent chain before reads/forks.
-3. Scope search in SQL before pagination. Bind SSE to the authorised chat and login; revalidate before delivery and every 30-second heartbeat. Unknown/global events are withheld.
-4. Fork captures a stable boundary, rechecks execution identity after asynchronous reads, then commits child registry and seed atomically. First-use hydration persists/reopens before clearing the seed; friendly rename uses the current stored handle.
-5. Account administration requires live role/login checks and recent authentication for mutations. Restricted TOTP invitations enable only the invited account after possession proof; they do not issue login cookies.
-6. Each account can register multiple passkeys through login/RP/Origin-bound, expiring, one-use ceremonies. Removing a key cannot remove the final factor permitted by current policy/RP.
-7. Another recently authenticated admin can reset an account into disabled/no-factor state and issue a restricted invitation, without changing conversation ownership.
-8. Text-only message admission commits the user message and immutable execution authority together. Queue wakes recover that authority per persisted message before hydration; replies revalidate the current owner. Explicit owner retry/skip runs on the same chat lane and appends a recovery grant instead of modifying admission or silently skipping held failures. Attachment/control/steering variants and special automatic followups remain disabled.
-9. Startup auth maintenance prunes transient expiry after access validation and every minute. Confirmed factors/accounts/audit records are preserved.
-
-See [Access modes](multi-user/README.md) and the [HTTP inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) for exact routes and unfinished work.
 
 ## Web UI → Agent → Web UI
 
@@ -264,7 +248,7 @@ This cache is browser-local performance state, not backend truth. It reduces vis
 
 ## Branch JID rename behavior (single-user maintenance)
 
-This is distinct from a friendly handle rename. Family mode denies internal JID migration, merge and purge. Its separate owner-bound root creation, home selection and archive/restore routes preserve durable IDs and do not reuse this migration path; see [owned-session lifecycle](multi-user/README.md#owned-roots-home-selection-and-archiverestore).
+A friendly handle rename preserves the chat JID and native binding. Internal JID maintenance is a separate operation.
 
 Chat JID rename/migration now treats descendants as any JID under `oldJid + ":"`, not only legacy `:branch:` forms.
 

@@ -85,7 +85,7 @@ export function readOwnedForkSeed(database: Database, principal: AuthenticatedPr
   const row = database.query(`SELECT o.owner_user_id,o.seed_json,s.chat_jid AS source_chat_jid FROM owned_fork_operations o
     JOIN chat_branches s ON s.branch_id=o.source_branch_id WHERE o.target_branch_id=?`).get(target.branch_id) as { owner_user_id: string; seed_json: string | null; source_chat_jid: string } | null;
   if (!row) {
-    // A family child without an atomic fork operation cannot fall back to a legacy file seed.
+    // An owned child without an atomic fork operation cannot fall back to a legacy file seed.
     if (target.parent_branch_id) throw new ChatAccessDenied();
     return null;
   }

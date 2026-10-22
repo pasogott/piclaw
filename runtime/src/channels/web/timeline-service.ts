@@ -23,7 +23,6 @@ import {
 
 import type { InteractionRow } from "../../db/types.js";
 import { readAccessConfig } from "../../core/config-access.js";
-import { isFamilyTurnHidden } from "../../db/family-turn-queue.js";
 import { getChatProject } from "../../db/chat-project.js";
 
 const QUEUE_PLACEHOLDER_MARKER = "\u2063";
@@ -194,7 +193,6 @@ export function getSearchResponse(
 /** Build a single thread's messages for GET /thread/:id. */
 export function getThreadResponse(chatJid: string, id: number | null): { status: number; body: unknown } {
   if (!id) return { status: 404, body: { error: "Thread not found" } };
-  if (readAccessConfig().mode === "family-shared" && isFamilyTurnHidden(chatJid, id)) return { status: 404, body: { error: "Thread not found" } };
   const thread = getMessageByRowId(chatJid, id);
   if (!thread) return { status: 404, body: { error: "Thread not found" } };
   return { status: 200, body: { thread: annotateProjectRepositories([thread]) } };

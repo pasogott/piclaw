@@ -344,7 +344,7 @@ export async function handleAgentModelsRequest(req: Request, ctx: AgentStatusCon
 }
 
 /** Opt-in UI status envelope. Existing status clients keep their response shape.
- * Family routes validate query allowlists before this operator-only handler. */
+ * The operator-only handler validates its query allowlist. */
 export async function handleAgentUiSnapshotRequest(req: Request, ctx: AgentStatusContext, extra: {
   getSystemMetrics(): Promise<unknown>;
   getAgentName(): string;

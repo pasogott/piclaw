@@ -12,12 +12,10 @@ import { acceptQueuedInputSource } from "../runtime/queued-followup-lifecycle-se
 import { getAddonLocalDispatchBlock } from "../../../addons/local-dispatch.js";
 import { withVerifiedAddonMessage } from "../../../addons/local-context.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
-import { readAccessConfig } from "../../../core/config-access.js";
-import { isFamilyWebToolAllowed } from '../../../core/family-workspace-policy.js';
+import { isSingleUserAccess } from "../../../core/config-access.js";
 import { withExecutionIdentity, type ExecutionIdentity } from "../../../core/execution-context.js";
 import { withChatContext } from "../../../core/chat-context.js";
 import { ChatAccessDenied } from "../../../db/session-ownership.js";
-import { resolveFamilyMessageAuthority } from "../messaging/family-message-authority.js";
 import {
   getIdentityConfig,
   getRoutingConfig,
@@ -649,7 +647,7 @@ function captureInputAuthority(channel: WebChannelLike, req: Request): () => voi
   if (authEnabled && !principal && !internal) throw Error('Incoming request has no verified authority.');
   return () => {
     req.signal.throwIfAborted();
-    if (readAccessConfig().mode !== 'single-user' || (gateway?.isAuthEnabled?.() === true) !== authEnabled) throw Error('Incoming request authority changed.');
+    if (!isSingleUserAccess() || (gateway?.isAuthEnabled?.() === true) !== authEnabled) throw Error('Incoming request authority changed.');
     if (internal) {
       if (!gateway.isInternalSecretEnabled() || !gateway.verifyInternalSecret(req)) throw Error('Internal request authority changed.');
     } else if (key(gateway?.getPrincipal?.(req, true) ?? null) !== principalKey) {
@@ -678,7 +676,7 @@ async function handleAgentMessageInScope(
   chatJid: string,
   defaultAgentId: string
 ): Promise<Response> {
-  if (readAccessConfig().mode !== "single-user") return channel.json({ error: "Use account-bound text message admission." }, 403);
+  if (!isSingleUserAccess()) return channel.json({ error: "Single-user message admission is required." }, 403);
   let internalAuthority: ReturnType<typeof readInputRequestAuthority>;
   let revalidateInputAuthority: ValidateInputAuthority;
   try { internalAuthority = readInputRequestAuthority(req, chatJid, pathname); revalidateInputAuthority = internalAuthority?.validate ?? captureInputAuthority(channel, req); revalidateInputAuthority(); }
@@ -1740,18 +1738,7 @@ export async function processChat(
   threadRootId?: number,
   browserObservability?: BrowserObservabilityContext,
 ): Promise<void> {
-  const mode = readAccessConfig().mode;
-  if (mode === "single-user") return processAuthorisedChat(channel, chatJid, agentId, threadRootId, browserObservability);
-  if (mode !== "family-shared") throw new ChatAccessDenied();
-  const pending = getMessagesSince(chatJid, getChatCursor(chatJid), getIdentityConfig().assistantName);
-  if (!pending.length) return; // Never materialise unprovenanced legacy follow-ups in family mode.
-  const message = pending[0]!;
-  const identity = resolveFamilyMessageAuthority(chatJid, message.id);
-  // Family failures need an explicit owner-authorised retry/skip; never use legacy stale-failure skipping.
-  if (getFailedRun(chatJid)) throw new Error("Family message processing is held for an authorised recovery action.");
-  const rootId = message.thread_id ?? getMessageRowIdById(chatJid, message.id) ?? undefined;
-  return withExecutionIdentity(identity, () => withChatContext(chatJid, "web", () =>
-    processAuthorisedChat(channel, chatJid, agentId, rootId, { userId: identity.provenance.actorUserId }, identity)));
+  return processAuthorisedChat(channel, chatJid, agentId, threadRootId, browserObservability);
 }
 
 async function processAuthorisedChat(
@@ -2119,9 +2106,8 @@ async function processAuthorisedChat(
   const output = startupFailure ? {status: "error" as const, result: null, error: startupFailure, failureCategory: classifyOpaqueAgentFailure(startupFailure)} : await withVerifiedAddonMessage(chatJid, currentMessage, () => channel.agentPool.runAgent(prompt, chatJid, {
     ...(identity ? {
       executionProvenance: identity.provenance,
-      // Narrow initial family conversation tools; global mutators lack owner-scoped entry points.
-      toolCeilingFilter: isFamilyWebToolAllowed,
-    } : {}),
+      // Execution-identity runs use an explicit tool ceiling.
+      } : {}),
     timeoutMs,
     turnId,
     ...(browserObservability?.userId ? { userId: browserObservability.userId } : {}),

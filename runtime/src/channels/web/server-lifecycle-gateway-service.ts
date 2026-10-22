@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { CdpViewConnection, closeCdpViewConnections } from './cdp-view.js';
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { ServerWebSocket } from "bun";
-import { readAccessConfig } from "../../core/config-access.js";
+import { isSingleUserAccess } from "../../core/config-access.js";
 
 import { purgeExpiredLinkPreviewImageCache } from "../../db.js";
 import { createLogger } from "../../utils/logger.js";
@@ -391,7 +391,7 @@ export class WebServerLifecycleGatewayService {
       } catch { return this.deps.json({ error: 'Authenticated add-on socket access denied.' }, 403); }
     }
     if (pathname === "/cdp-view/ws") {
-      if (readAccessConfig().mode !== "single-user") return this.denyMultiUserUpgrade();
+      if (!isSingleUserAccess()) return this.denyMultiUserUpgrade();
       if (!this.deps.authGateway.isAuthEnabled() || !this.deps.authGateway.isAuthenticated(req)) return Response.json({ error: "Authentication required." }, { status: 401 });
       if (!checkCsrfOrigin(req)) return Response.json({ error: "Invalid origin." }, { status: 403 });
       return server?.upgrade(req, { data: { kind: "cdp-view" } }) ? undefined : Response.json({ error: "WebSocket upgrade failed." }, { status: 400 });
@@ -406,7 +406,7 @@ export class WebServerLifecycleGatewayService {
   }
 
   handleTerminalWebSocketUpgrade(req: Request, server?: Bun.Server<WebSocketSessionData>): Response | undefined {
-    if (readAccessConfig().mode !== "single-user") return this.denyMultiUserUpgrade();
+    if (!isSingleUserAccess()) return this.denyMultiUserUpgrade();
     if (!this.deps.webRuntimeConfig.terminalEnabled) {
       return this.deps.json({ error: "Web terminal is disabled." }, 404);
     }
@@ -481,7 +481,7 @@ export class WebServerLifecycleGatewayService {
   }
 
   async handleVncWebSocketUpgrade(req: Request, server?: Bun.Server<WebSocketSessionData>): Promise<Response | undefined> {
-    if (readAccessConfig().mode !== "single-user") return this.denyMultiUserUpgrade();
+    if (!isSingleUserAccess()) return this.denyMultiUserUpgrade();
     const url = new URL(req.url);
     const targetId = url.searchParams.get("target")?.trim() || "";
     const handoffToken = url.searchParams.get("handoff")?.trim() || "";

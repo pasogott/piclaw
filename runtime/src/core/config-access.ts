@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { getConfigPath } from "./config-context.js";
 import { registerDomainConfig, stringField, type DomainConfigField } from "./domain-config.js";
 
-export const ACCESS_MODES = ["single-user", "family-shared", "isolated-containers"] as const;
+export const ACCESS_MODES = ["single-user", "isolated-containers"] as const;
 export type AccessMode = typeof ACCESS_MODES[number];
 
 export interface IsolationBackend {
@@ -121,4 +121,9 @@ export function readAccessConfig(configPath = getConfigPath()): AccessConfig & {
   if (mode === "isolated-containers" && !component) throw new Error("isolated-containers requires access.isolation component and trust configuration.");
   if (mode !== "isolated-containers" && component) throw new Error("access.isolation is only valid in isolated-containers mode.");
   return { mode, isolation: component, modeExplicit };
+}
+
+/** Capability check for public entrypoints; invalid configuration never enables execution. */
+export function isSingleUserAccess(): boolean {
+  try { return readAccessConfig().mode === "single-user"; } catch { return false; }
 }

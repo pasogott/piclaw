@@ -52,8 +52,3 @@ Start with [getting started](getting-started.md) for installation, first chat, a
 ## Gated multi-user development
 
 Family and isolated-container modes cannot start. These guides support implementation review and controlled testing, not deployment:
-
-- [Access modes and implementation status](multi-user/README.md)
-- [Family preview user guide](multi-user/user-guide.md)
-- [Administrator guide](multi-user/administrator-guide.md) and [troubleshooting](multi-user/troubleshooting.md)
-- [Copy-only migration](multi-user/migration-copy.md) and [offline recovery](multi-user/operator-recovery.md)

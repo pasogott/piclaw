@@ -803,21 +803,13 @@ See [runtime/docs/dream-memory.md](../runtime/docs/dream-memory.md) for the deta
 
 ## Access mode
 
-`domains.access.mode` defaults to `single-user` on fresh or legacy single-user stores. Only this mode can start. Account, ownership, authentication and fork APIs exist for development, but `family-shared` and `isolated-containers` are rejected by startup until their integration gates pass.
-
-```json
-{ "domains": { "access": { "mode": "single-user" } } }
-```
-
-Access configuration is read directly from `.piclaw/config.json`, outside the ordinary environment override precedence above: there is no access-mode environment variable or top-level `access` alias. Unknown keys, malformed values, incompatible isolation settings and a configuration/store mode mismatch fail closed. Creating accounts, assigning roots or migrating handle namespaces does not activate a mode. Do not edit `access_state` to bypass the gate.
-
-The planned family profile shares workspace files, tools, skills, add-ons and provider credentials. It offers application-level ownership, not filesystem isolation from other tool-capable users. The per-user container gateway is not implemented. See [Access modes and implementation status](multi-user/README.md) for backend APIs, remaining work, coordinated backup and downgrade constraints.
+Only `single-user` can start. Set `domains.access.mode` in `.piclaw/config.json`; the default is `single-user`. Invalid configuration and incompatible store markers fail closed. Family features are removed. See [Access modes](access-modes.md).
 
 ## Authentication (TOTP + passkeys)
 
 The setup below applies to supported **single-user deployments**. A 6-digit TOTP challenge can gate the UI, with optional WebAuthn passkeys. The manifest, service worker, agent avatar/icons, fonts, login bundles and static images have explicit public exceptions; arbitrary `/static/*` assets and app bundles are not all public. See `runtime/src/channels/web/http/route-flags.ts` for the classification.
 
-The login shell discovers enabled methods through public `/auth/options`, displays a username field only when family TOTP requires it, and offers an explicit passkey action. A failed policy fetch leaves credential entry disabled until retry. The gated family backend uses per-account TOTP, multiple independent passkeys, restricted invitations, device revocation and administrator-assisted reset. It does not use the shared `/totp` seed or legacy `/passkey enrol` flow as a multi-user setup procedure. Its account/passkey mutations require a matching Origin and recent authentication; its public asset exceptions are narrower. The restricted invitation page uses `/auth/invitation#token=<grant>` (fragment only) and a Secure HttpOnly enrolment cookie; use HTTPS and deliver grants privately. It is an implemented development UI, not a way to bypass family startup validation. The [family API inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) describes the implemented endpoints, not an available deployment option.
+The login shell discovers enabled methods through public `/auth/options`. Code login sends only a six-digit code. A failed policy fetch leaves credential entry disabled until retry. Passkey management requires a recent owner login and matching Origin.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -881,7 +873,7 @@ In single-user mode, internal automation can use `/internal/post` with the confi
 
 ## Keychain secrets
 
-See [keychain.md](keychain.md) for full details. The same bootstrap key material also encrypts the separate user TOTP-factor store. Back up both stores and the key together; changing the key alone makes existing ciphertext unreadable. [Offline factor re-encryption](multi-user/README.md#authentication-maintenance) does not rotate generic keychain entries or change configuration.
+See [keychain.md](keychain.md) for full details. Preserve existing key material and historical authentication records in coordinated backups.
 
 The keychain is disabled unless you provide a master key:
 

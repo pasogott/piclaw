@@ -4,7 +4,7 @@ import {
   changePickerPins,
   parsePinChange,
 } from "../../../db/picker-pins.js";
-import { requireAccountActor } from "../../../db/account-administration.js";
+import { requireAccountActor } from "../../../db/account-actor.js";
 import { resolveAuthorisedChat } from "../../../db/session-ownership.js";
 import { getChatBranchByChatJid } from "../../../db/chat-branches.js";
 import type { AuthenticatedPrincipal } from "../../../core/access-types.js";

@@ -581,56 +581,6 @@ export class AgentRuntimeFacade {
     } finally { release?.(); }
   }
 
-  /** Owner-authorized active-session model/thinking mutation; never writes shared defaults. */
-  async applyOwnedModelControl(
-    chatJid: string,
-    command: Extract<AgentControlCommand, { type: "model" | "thinking" }>,
-  ): Promise<AgentControlResult> {
-    const identity = getExecutionIdentity();
-    if (readAccessConfig().mode !== "family-shared" || identity?.mode !== "family-shared" || identity.provenance.chatJid !== chatJid) {
-      throw new Error("Session access denied.");
-    }
-    requireOwnedSessionExecution(chatJid);
-    const runtime = await this.options.getOrCreateRuntime(chatJid);
-    const session = runtime.session;
-    if (session.isStreaming || session.isCompacting || session.isRetrying) {
-      return { status: "error", message: "Wait for the current session operation to finish before changing its model." };
-    }
-    if (command.type === "model") {
-      if (!command.provider || !command.modelId || command.compact) return { status: "error", message: "Select one exact available model." };
-      const available = await this.getAvailableModels(chatJid, { includeProviderUsage: false, includeProviderDiagnostics: false });
-      const requested = `${command.provider}/${command.modelId}`;
-      if (!available.model_options.some(option => option.label === requested)) return { status: "error", message: "Selected model is unavailable." };
-      // Standard handler applies context-fit checks. AgentSession.setModel persists only
-      // to this transcript unless persist:true is supplied (it is not).
-      return await withChatContext(chatJid, detectChannel(chatJid), () => handleModel(session, this.options.modelRegistry, command, { refreshRegistry: false, allowCompaction: false }));
-    }
-    if (!session.model) return { status: "error", message: "No model selected yet." };
-    const requested = typeof command.level === "string" ? command.level.trim().toLowerCase() : "";
-    if (!requested) {
-      return {
-        status: "success",
-        message: "Current thinking level.",
-        thinking_level: session.thinkingLevel ?? null,
-        thinking_level_label: formatThinkingLevelForDisplay(session.thinkingLevel, session.model),
-      };
-    }
-    const resolved = resolveThinkingAlias(requested, session.model);
-    const available = getAvailableThinkingLevelsForModel(session.model, session.getAvailableThinkingLevels());
-    if (!THINKING_LEVELS.includes(resolved as never) || !available.includes(resolved)) {
-      return { status: "error", message: "Selected thinking level is unavailable for this model." };
-    }
-    // SDK default options persist only to this session transcript, not SettingsManager.
-    session.setThinkingLevel(resolved as never);
-    const applied = session.thinkingLevel ?? resolved;
-    return {
-      status: "success",
-      message: `Thinking level set to ${formatThinkingLevelForDisplay(applied, session.model)}.`,
-      thinking_level: applied,
-      thinking_level_label: formatThinkingLevelForDisplay(applied, session.model),
-    };
-  }
-
   async getCurrentModelLabel(chatJid: string): Promise<string | null> {
     const durable = this.getDurableSession(chatJid);
     if (durable) {
@@ -914,37 +864,6 @@ export class AgentRuntimeFacade {
       const message = err instanceof Error ? err.message : String(err);
       return { queued: false, error: message };
     }
-  }
-
-  /** Owner-authorized active-session steering. Durable authority stays in the family queue ledger. */
-  async queueOwnedStreamingMessage(
-    chatJid: string,
-    text: string,
-    behavior: "steer",
-  ): Promise<{ queued: boolean; error?: string }> {
-    requireOwnedSessionExecution(chatJid);
-    const session = this.options.pool.get(chatJid)?.runtime.session;
-    if (!session) return { queued: false };
-    if (!session.isStreaming) return { queued: false };
-    try {
-      return await withChatContext(chatJid, detectChannel(chatJid), async () => {
-        await session.prompt(text, { streamingBehavior: behavior });
-        return { queued: true };
-      });
-    } catch (error) {
-      return { queued: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /** Owner-authorized abort; checked again inside the execution identity immediately before mutation. */
-  async abortOwnedRun(chatJid: string): Promise<AgentControlResult> {
-    requireOwnedSessionExecution(chatJid);
-    const runtime = this.options.pool.get(chatJid)?.runtime;
-    if (!runtime || !(runtime.session.isStreaming || runtime.session.isCompacting || runtime.session.isRetrying || runtime.session.isBashRunning)) {
-      return { status: "error", message: "No active response to abort." };
-    }
-    return await withChatContext(chatJid, detectChannel(chatJid), () =>
-      (this.options.applyControlCommandFn ?? applyControlCommand)(runtime, this.options.modelRegistry, { type: "abort", raw: "/abort" }));
   }
 
   async removeQueuedFollowupMessage(chatJid: string, queuedContent?: string): Promise<boolean> {

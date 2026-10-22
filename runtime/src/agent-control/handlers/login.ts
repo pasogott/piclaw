@@ -21,7 +21,7 @@ import { join } from "path";
 import { randomUUID } from "node:crypto";
 import { getPiclawAgentDir } from "../../core/agent-dir.js";
 import { getChatJid } from "../../core/chat-context.js";
-import { readAccessConfig } from "../../core/config-access.js";
+import { isSingleUserAccess } from "../../core/config-access.js";
 import { createLogger } from "../../utils/logger.js";
 import { getProviderDefs, type ProviderDef } from "../provider-defs.js";
 import { handleModel } from "./model.js";
@@ -472,7 +472,7 @@ export function revokeNativeProviderAuthContext(context: NativeProviderAuthConte
   cancelProviderAuthFlows(context);
 }
 
-/** Provider credentials belong to the instance; family sessions have no login authority. */
+/** Provider credentials belong to the instance owner. */
 function getRuntimeAuthOwner(session: ProviderAuthSubject): RuntimeAuthOwner {
   assertNativeAuthCurrent(session);
   const chatJid = getChatJid(), sessionId = authBindingId(session), runtime = getModelRuntime(session);
@@ -1089,7 +1089,7 @@ async function handleLoginOwned(
   modelRegistry: ModelRegistry,
   command: LoginCommand,
 ): Promise<AgentControlResult> {
-  if (readAccessConfig().mode !== "single-user") return { status: "error", message: "Provider authentication is an instance-owner operation; unavailable in family sessions." };
+  if (!isSingleUserAccess()) return { status: "error", message: "Provider authentication is an instance-owner operation; requires single-user access." };
   const existingOwner = runtimeAuthOwners.get(session);
   if (disposedAuthSessions.has(session) || (existingOwner && existingOwner.chatJid !== getChatJid())) return { status: "error", message: "Provider authentication belongs to its initiating session and chat." };
   const modelRuntime = getModelRuntime(session);
@@ -1137,7 +1137,7 @@ async function handleLogoutOwned(
   modelRegistry: ModelRegistry,
   command: LogoutCommand,
 ): Promise<AgentControlResult> {
-  if (readAccessConfig().mode !== "single-user") return { status: "error", message: "Provider authentication is an instance-owner operation; unavailable in family sessions." };
+  if (!isSingleUserAccess()) return { status: "error", message: "Provider authentication is an instance-owner operation; requires single-user access." };
   const existingOwner = runtimeAuthOwners.get(session);
   if (disposedAuthSessions.has(session) || (existingOwner && existingOwner.chatJid !== getChatJid())) return { status: "error", message: "Provider authentication belongs to its initiating session and chat." };
   const modelRuntime = getModelRuntime(session);

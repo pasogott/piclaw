@@ -10,7 +10,6 @@ import { materializeDeferredFollowups } from "./process-chat-control-runtime.js"
 import type { AttachmentInfo } from "../../../agent-pool/attachments.js";
 import type { AgentTurnCause, AgentTurnKind } from "../../../agent-pool/contracts.js";
 import type { ChatChannel } from "../../../router.js";
-import { completeFamilyTurnRun } from "../../../db/family-turn-queue.js";
 
 const log = createLogger("web.runtime.process-chat-finalization");
 
@@ -45,8 +44,7 @@ export async function finalizeSuccessfulProcessChatRun(options: ProcessChatFinal
   const { channel, chatJid } = options;
   // Stale protected intent was removed atomically with terminal persistence.
   // This update only clears inflight/failed run state.
-  if (readAccessConfig().mode === "family-shared") completeFamilyTurnRun(chatJid);
-  else endChatRun(chatJid);
+  endChatRun(chatJid);
   const cursorAfterEnd = getChatCursor(chatJid);
   const pendingSteerTimestamps = channel.consumePendingSteering(chatJid);
   const cursorAfterSteer = getChatCursor(chatJid);

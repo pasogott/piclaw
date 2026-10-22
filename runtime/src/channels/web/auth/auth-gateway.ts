@@ -23,7 +23,6 @@ import { createLogger } from "../../../utils/logger.js";
 
 import { getDb, getWebSession } from "../../../db.js";
 import { getUser } from "../../../db/users.js";
-import { UserAuthFactors } from "../../../secure/user-auth-factors.js";
 import { checkCsrfOrigin } from "../http/security.js";
 import { getSessionTokenFromRequest } from "./session-auth.js";
 import { getIdentityConfig } from "../../../core/config.js";
@@ -102,10 +101,6 @@ export class WebAuthGateway {
       logAuthEvent: (req, event) => this.logAuthEvent(req, event),
       failureTracker: this.deps.failureTracker,
     });
-    if (this.config.accessMode && this.config.accessMode !== "single-user") {
-      context.isTotpEnabled = () => !this.isPasskeyOnly();
-      context.verifyUserTotp = (username, code) => new UserAuthFactors(getDb()).verifyLogin(username, code);
-    }
     return context;
   }
 

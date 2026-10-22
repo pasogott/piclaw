@@ -56,7 +56,6 @@ import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-poo
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
-import { ownAccountModelDefaults } from './agent-pool/family-model-defaults.js';
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
 import {
   type ChatBranchRecord,
@@ -551,24 +550,12 @@ export class AgentPool {
     return this.runtimeFacade.applyControlCommand(chatJid, command);
   }
 
-  async applyOwnedModelControl(chatJid: string, command: Extract<AgentControlCommand, { type: "model" | "thinking" }>): Promise<AgentControlResult> {
-    return this.runtimeFacade.applyOwnedModelControl(chatJid, command);
-  }
-
-  async queueOwnedStreamingMessage(chatJid: string, text: string, behavior: "steer"): Promise<{ queued: boolean; error?: string }> {
-    return this.runtimeFacade.queueOwnedStreamingMessage(chatJid, text, behavior);
-  }
-
-  async abortOwnedRun(chatJid: string): Promise<AgentControlResult> {
-    return this.runtimeFacade.abortOwnedRun(chatJid);
-  }
-
   async getCurrentModelLabel(chatJid: string): Promise<string | null> {
     return this.runtimeFacade.getCurrentModelLabel(chatJid);
   }
 
   async runSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
-    // Preserve the family-mode boundary before budget bookkeeping or session
+    // Preserve the single-user boundary before budget bookkeeping or session
     // hydration. Side prompts remain single-user-only regardless of which
     // admission controls are installed around them.
     if (readAccessConfig().mode !== "single-user") {
@@ -588,9 +575,6 @@ export class AgentPool {
     return this.runtimeFacade.getAvailableModels(chatJid, options);
   }
 
-  accountModelDefaults(actor: import('./core/access-types.js').AuthenticatedPrincipal, input?: unknown) {
-    return ownAccountModelDefaults(getDb(), actor, this.modelRuntime, this.settingsManager, input);
-  }
 
   resolveBudgetProviderAccountRef(providerId: string): Promise<string | null> {
     return resolveProviderUsageAccountRef(this.modelRuntime, providerId);
@@ -773,9 +757,6 @@ export class AgentPool {
     return this.branchManager.renameChatBranch(chatJid, options);
   }
 
-  async changeOwnedSessionLifecycle(actor: import("./core/access-types.js").AuthenticatedPrincipal, chatJid: string, action: "archive" | "restore", agentName?: string): Promise<ChatBranchRecord> {
-    return this.branchManager.changeOwnedSessionLifecycle(actor, chatJid, action, agentName);
-  }
 
   async pruneChatBranch(chatJid: string): Promise<ChatBranchRecord> {
     return this.branchManager.pruneChatBranch(chatJid);
@@ -874,7 +855,7 @@ export class AgentPool {
   /** Execute a raw slash command in the AgentSession (extension commands). */
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
     if (this.hostCommandDispatch) {
-      if (readAccessConfig().mode !== "single-user") throw Error("Native slash commands require owned family execution");
+      if (readAccessConfig().mode !== "single-user") throw Error("Native slash commands require single-user execution");
       return this.hostCommandDispatch(chatJid, rawText);
     }
     if (this.durableApplication) throw Error("Native slash command unavailable");

@@ -33,7 +33,6 @@ import { createUuid } from "../../../utils/ids.js";
 import { createLogger } from "../../../utils/logger.js";
 import { getWebRecoveryConfig } from "../../../core/config.js";
 import { readAccessConfig } from "../../../core/config-access.js";
-import { settleRecoveredFamilyTurn } from "../../../db/family-turn-queue.js";
 
 const log = createLogger("web.recovery");
 
@@ -166,7 +165,6 @@ export interface WebRecoveryStore {
   getKnownChatJids(): string[];
   getDeferredQueuedFollowups(chatJid: string): DeferredQueuedFollowupRecord[];
   getMessagesSince(chatJid: string, since: string, assistantName: string): unknown[];
-  settleRecoveredFamilyTurn?(chatJid: string, messageId: string): unknown;
 }
 
 function getKnownChatJids(): string[] {
@@ -203,7 +201,6 @@ const defaultStore: WebRecoveryStore = {
   getKnownChatJids,
   getDeferredQueuedFollowups,
   getMessagesSince,
-  settleRecoveredFamilyTurn,
 };
 
 /**
@@ -261,8 +258,7 @@ export function recoverStaleInflightRun(
           chatJid: inflight.chatJid,
           startedAt: inflight.startedAt,
         });
-        if (readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
-        else store.clearInflightMarker(inflight.chatJid);
+        store.clearInflightMarker(inflight.chatJid);
         return;
       }
 
@@ -272,8 +268,7 @@ export function recoverStaleInflightRun(
           chatJid: inflight.chatJid,
           startedAt: inflight.startedAt,
         });
-        if (readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
-        else store.clearInflightMarker(inflight.chatJid);
+        store.clearInflightMarker(inflight.chatJid);
         return;
       }
 
@@ -302,12 +297,10 @@ export function recoverStaleInflightRun(
     const draft = ctx.getDraftRecovery?.(inflight.chatJid) ?? null;
     if (draft?.text?.trim()) {
       const persisted = persistRecoveredDraft(inflight.chatJid, inflight, ctx.assistantName, draft);
-      if (persisted && readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
       ctx.clearDraftRecovery?.(inflight.chatJid);
       return true;
     }
     const persisted = persistInterruptedTurnOutcome(inflight.chatJid, inflight, ctx.assistantName, "runtime_stale");
-    if (persisted && readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
     ctx.clearDraftRecovery?.(inflight.chatJid);
     return true;
   }
@@ -542,8 +535,7 @@ export function recoverInflightRuns(
             chatJid: inflight.chatJid,
             startedAt: inflight.startedAt,
           });
-          if (readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
-          else store.clearInflightMarker(inflight.chatJid);
+          store.clearInflightMarker(inflight.chatJid);
           continue;
         }
 
@@ -553,8 +545,7 @@ export function recoverInflightRuns(
             chatJid: inflight.chatJid,
             startedAt: inflight.startedAt,
           });
-          if (readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
-          else store.clearInflightMarker(inflight.chatJid);
+          store.clearInflightMarker(inflight.chatJid);
           continue;
         }
 
@@ -587,13 +578,11 @@ export function recoverInflightRuns(
     const draft = ctx.getDraftRecovery?.(inflight.chatJid) ?? null;
     if (draft?.text?.trim()) {
       const persisted = persistRecoveredDraft(inflight.chatJid, inflight, ctx.assistantName, draft);
-      if (persisted && readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
       ctx.clearDraftRecovery?.(inflight.chatJid);
       continue;
     }
 
     const persisted = persistInterruptedTurnOutcome(inflight.chatJid, inflight, ctx.assistantName, "service_restart");
-    if (persisted && readAccessConfig().mode === "family-shared" && store.settleRecoveredFamilyTurn) store.settleRecoveredFamilyTurn(inflight.chatJid, inflight.messageId);
     ctx.clearDraftRecovery?.(inflight.chatJid);
   }
 }

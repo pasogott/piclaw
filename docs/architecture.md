@@ -90,17 +90,7 @@ flowchart LR
 
 ## Access and ownership boundaries
 
-Only `single-user` can start. The [multi-user implementation guide](multi-user/README.md) describes gated backend work; the diagrams above describe the supported single-user execution paths, not completed multi-user isolation.
-
-- `core/config-access.ts` and `db/access-state.ts` validate the configured/stored mode before add-ons, maintenance and listeners start.
-- `auth/principal.ts` resolves a browser actor; a login session, an agent session and the owning user are distinct identities. Admin role alone grants no foreign transcript access.
-- `db/session-ownership.ts` validates the stored parent chain. `db/session-handles.ts` separates legacy handles from owner-local names; friendly renames preserve durable IDs.
-- `http/family-authorisation.ts` makes a terminal HTTP allow/deny decision before legacy add-on/widget dispatch. It enables scoped reads, SSE and selected fork/account operations; unsupported routes deny.
-- `db/owned-forks.ts` commits child registry and deferred seed together. Session hydration revalidates server execution provenance before reading/replaying the seed. Background family prewarm remains disabled.
-- `secure/` contains account invitations, multiple-passkey registration, recovery and encrypted TOTP factors. `runtime/auth-maintenance.ts` prunes transient auth state every minute after access validation.
-- `core/execution-context.ts` carries immutable actor/owner metadata through AsyncLocalStorage. The memory hook selects personal files plus explicit family memory; this does not confine tools or shared files.
-
-Separate terminal/VNC WebSocket upgrades now reject family/isolated modes before target resolution or socket upgrade. Legacy `/totp`/`/passkey` commands, direct card actions and HTTP side-prompt services also deny multi-user mode before reading or mutating state. These blocked features still need owner-aware replacements. Owner-bound cross-session discovery and metadata inspection now use execution/chat context without global fallback; sends and mutating session controls are denied at both tool and runtime/registry boundaries. Message-tool reads use an owner-bound SQL scope (including row-ID/context and search fallback paths), while message writes, raw SQL introspection and scheduling tools deny multi-user mode. Session status exposes only owned activity without arguments or restart permission. Remaining direct tools/transports, queues, browser storage and notification recipients need end-to-end ownership integration; HTTP route gating alone does not secure those paths. The isolated-container gateway and per-user deployment profile are not implemented; no family-mode release gate has passed.
+Single-user access validation runs before add-ons, maintenance, workers and listeners. Native ownership and accepted-source records remain authoritative for execution and recovery. Scheduled work requires the active server-owned dispatch scope; supplied provenance cannot manufacture admission. Family account APIs are removed. See [Access modes](access-modes.md).
 
 ## Code layout (high level)
 

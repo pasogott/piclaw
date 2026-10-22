@@ -7,7 +7,7 @@ import {
   replaceMessageContent,
 } from "../../../db.js";
 import { setWebTotpSecret } from "../../../core/config.js";
-import { readAccessConfig } from "../../../core/config-access.js";
+import { isSingleUserAccess } from "../../../core/config-access.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 import type { SendMessageOptions } from "../messaging/message-write-flows.js";
 import {
@@ -185,7 +185,7 @@ export class WebAdaptiveCardSidePromptService {
   }
 
   async handleAdaptiveCardAction(req: Request): Promise<Response> {
-    if (readAccessConfig().mode !== "single-user") return this.denyUnscopedAction();
+    if (!isSingleUserAccess()) return this.denyUnscopedAction();
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -665,7 +665,7 @@ export class WebAdaptiveCardSidePromptService {
   }
 
   async handleAgentSidePrompt(req: Request): Promise<Response> {
-    if (readAccessConfig().mode !== "single-user") return this.denyUnscopedAction();
+    if (!isSingleUserAccess()) return this.denyUnscopedAction();
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -687,7 +687,7 @@ export class WebAdaptiveCardSidePromptService {
   }
 
   async handleAgentSidePromptStream(req: Request): Promise<Response> {
-    if (readAccessConfig().mode !== "single-user") return this.denyUnscopedAction();
+    if (!isSingleUserAccess()) return this.denyUnscopedAction();
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 

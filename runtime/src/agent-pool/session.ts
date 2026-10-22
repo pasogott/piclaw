@@ -46,12 +46,8 @@ import { detectChannel } from "../router.js";
 import { createBuiltinExtensionFactories } from "../extensions/index.js";
 import { canConstructMcpOwner, bindMcpCodemodePolicy, mcpCodemodeExtension, selectedMcpPolicy } from "./mcp-codemode-runtime.js";
 import { readAccessConfig } from '../core/config-access.js';
-import { requireOwnedSessionExecution } from './owned-session-access.js';
-import { familySessionModelOptions } from './family-model-defaults.js';
 import { installSessionThinkingPolicy, readThinkingPreference, THINKING_POLICY_ENTRY } from './thinking-policy.js';
 import { getDb } from '../db/connection.js';
-import { readOwnedForkSeed } from '../db/owned-forks.js';
-import { createFamilyBuiltinTools, createFamilyToolCallGuard } from './family-builtin-tools.js';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { sanitizePersistedSessionMessage } from "../extensions/persisted-tool-result-sanitizer.js";
 import { freezeExtensionRoutes } from "../channels/web/http/extension-routes.js";
@@ -550,11 +546,7 @@ export async function createSessionInDir(
     chatJid?: string;
   }
 ): Promise<AgentSessionRuntime> {
-  const mode = readAccessConfig().mode;
-  if (mode !== 'single-user') {
-    if (mode !== 'family-shared' || !options.chatJid) throw new Error('Owned family session identity is required.');
-    requireOwnedSessionExecution(options.chatJid);
-  }
+  if (readAccessConfig().mode !== "single-user") throw new Error("Single-user session execution is required.");
   ensureValidProcessCwd();
   const operationProfile = operationSessionProfile(options.chatJid);
   const channelSystemPromptAppendix = operationProfile ? '' : getChannelSystemPromptAppendix(options.chatJid);
@@ -562,14 +554,8 @@ export async function createSessionInDir(
   const additionalExtensionPaths = operationProfile ? [] : getBundledExtensionPaths(options.chatJid);
 
   const workspaceDir = getWorkspaceDir();
-  const owner = mode === 'family-shared' ? requireOwnedSessionExecution(options.chatJid!) : null;
-  const pendingSeed = owner ? readOwnedForkSeed(getDb(), owner, options.chatJid!) : null;
-  const pendingAdoption = pendingSeed !== null && JSON.parse(pendingSeed).mode === 'adopted_jsonl';
-  // Do not load or mutate an unverified legacy file before importing the captured adoption snapshot.
-  if (!pendingAdoption) {
-    await sanitizePersistedSessionFileBeforeLoad(sessionDir);
-    trimPreCompactionEntries(sessionDir);
-  }
+  await sanitizePersistedSessionFileBeforeLoad(sessionDir);
+  trimPreCompactionEntries(sessionDir);
 
   const createRuntime = async ({
     cwd,
@@ -582,7 +568,6 @@ export async function createSessionInDir(
     sessionManager: SessionManager;
     sessionStartEvent?: SessionStartEvent;
   }) => {
-    if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
     assertCurrentProviderSelection(options.settingsManager, sessionManager);
     const mcpAvailable = !operationProfile && canConstructMcpOwner();
     const mcpOwner = !mcpAvailable ? null : createMcpBridgeOwner((bridge, onLifecycle) => selectedMcpPolicy().engine === 'native'
@@ -600,7 +585,6 @@ export async function createSessionInDir(
     }), undefined, { requireLifecycle: true });
     try {
     const builtinExtensionFactories = operationProfile ? [] : [
-      ...(mode === 'family-shared' ? [createFamilyToolCallGuard(options.chatJid!)] : []),
       ...createBuiltinExtensionFactories({
         compactionStreamFn: createCompactionStreamFn(options.modelRuntime, options.settingsManager),
         modelRuntime: options.modelRuntime,
@@ -624,7 +608,6 @@ export async function createSessionInDir(
     });
     await resourceLoader.reload();
     mcpOwner?.assertLoaded(resourceLoader.getExtensions());
-    if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
     freezeExtensionRoutes();
 
     const services: AgentSessionServices = {
@@ -645,22 +628,18 @@ export async function createSessionInDir(
       sessionManager,
       sessionStartEvent,
       ...(recordedThinking !== null ? { thinkingLevel: recordedThinking } : {}),
-      ...(mode === 'family-shared' ? familySessionModelOptions(options.chatJid!, sessionManager, options.modelRuntime, options.settingsManager) : {}),
       // Do not pass `tools` here — pi-coding-agent ≥0.68 treats it as an
       // allowlist that silently blocks every extension tool not listed.
       // The tool-activation extension sets the correct default-active set
       // via its session_start handler instead.
       ...(operationProfile ? { tools: operationSessionTools(options.chatJid!) } : {}),
-      customTools: operationProfile ? [] : mode === 'family-shared'
-        ? createFamilyBuiltinTools(cwd, options.chatJid!, (options.customTools ?? []) as ToolDefinition[])
-        : options.customTools as any,
+      customTools: operationProfile ? [] : options.customTools as any,
     });
     try {
     if (mcpOwner) {
       bindMcpBridgeOwner(result.session, resourceLoader, mcpOwner);
       bindMcpCodemodePolicy(result.session);
     }
-    if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
 
     const normalizeResourceDiagnostics = (items: Array<{ path?: string; error?: string }> = []) =>
       items.map((item) => ({
@@ -699,7 +678,7 @@ export async function createSessionInDir(
   return await createAgentSessionRuntime(createRuntime as any, {
     cwd: workspaceDir,
     agentDir: AGENT_DIR,
-    sessionManager: pendingAdoption ? SessionManager.create(workspaceDir, sessionDir) : SessionManager.continueRecent(workspaceDir, sessionDir),
+    sessionManager: SessionManager.continueRecent(workspaceDir, sessionDir),
   });
 }
 

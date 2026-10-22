@@ -137,7 +137,7 @@ const unregister = externalRoutes.register({
 
 External routes are reserved for installed startup add-ons that authenticate their own transport requests. Piclaw dispatches `/api/addons/<id>/...` before browser session and CSRF guards, so these routes must not rely on browser authentication.
 
-In supported single-user operation, these routes use their own protocol authentication. The gated family HTTP dispatcher runs before this registry and currently denies `/api/addons/*` and add-on config routes; package ownership does not establish a user principal or session owner. Tool/transport and direct WebSocket entry points still need multi-user integration. See [Access modes](multi-user/README.md).
+External routes use their own protocol authentication in supported single-user operation.
 
 Core enforces:
 

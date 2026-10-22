@@ -39,9 +39,6 @@ import {
 } from "./thinking-cleanup.js";
 import { getSearchMatchMode } from "../core/config.js";
 import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "../utils/fts-query.js";
-import { readAccessConfig } from '../core/config-access.js';
-import { migrationDismissalFilter } from './migration-input-holds.js';
-import { familyTurnTimelineFilter } from './family-turn-queue.js';
 
 /**
  * Internal representation of a raw row from the `messages` table.
@@ -628,16 +625,15 @@ export function deleteThreadByRowId(chatJid: string, rowId: number): number[] {
  */
 export function getTimeline(chatJid: string, limit: number, beforeId?: number): InteractionRow[] {
   const db = getDb();
-  const familyFilter = readAccessConfig().mode === "family-shared" ? familyTurnTimelineFilter(db) : "";
   const rows = beforeId
     ? (db
         .prepare(
-          `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? AND rowid < ? ${familyFilter} ORDER BY rowid DESC LIMIT ?`
+          `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?`
         )
         .all(chatJid, beforeId, limit) as StoredMessageRow[])
     : (db
         .prepare(
-          `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? ${familyFilter} ORDER BY rowid DESC LIMIT ?`
+          `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? ORDER BY rowid DESC LIMIT ?`
         )
         .all(chatJid, limit) as StoredMessageRow[]);
 
@@ -661,9 +657,8 @@ export function getTimeline(chatJid: string, limit: number, beforeId?: number): 
 /** Check whether there are messages older than the given rowid in a chat. */
 export function hasOlderMessages(chatJid: string, oldestId: number): boolean {
   const db = getDb();
-  const familyFilter = readAccessConfig().mode === "family-shared" ? familyTurnTimelineFilter(db) : "";
   const row = db
-    .prepare(`SELECT rowid FROM messages WHERE chat_jid = ? AND rowid < ? ${familyFilter} LIMIT 1`)
+    .prepare(`SELECT rowid FROM messages WHERE chat_jid = ? AND rowid < ? LIMIT 1`)
     .get(chatJid, oldestId) as { rowid: number } | undefined;
   return Boolean(row);
 }
@@ -675,10 +670,9 @@ export function hasOlderMessages(chatJid: string, oldestId: number): boolean {
 export function getMessagesByHashtag(chatJid: string, hashtag: string, limit: number, offset: number): InteractionRow[] {
   const db = getDb();
   const pattern = `%#${hashtag}%`;
-  const familyFilter = readAccessConfig().mode === "family-shared" ? familyTurnTimelineFilter(db) : "";
   const rows = db
     .prepare(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? AND content LIKE ? COLLATE NOCASE ${familyFilter} ORDER BY rowid DESC LIMIT ? OFFSET ?`
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE chat_jid = ? AND content LIKE ? COLLATE NOCASE ORDER BY rowid DESC LIMIT ? OFFSET ?`
     )
     .all(chatJid, pattern, limit, offset) as StoredMessageRow[];
 
@@ -694,7 +688,6 @@ export function getMessagesByHashtag(chatJid: string, hashtag: string, limit: nu
  */
 function searchMessagesInternal(chatJids: string[] | null, query: string, limit: number, offset: number): InteractionRow[] {
   const db = getDb();
-  const familyFilter = readAccessConfig().mode === "family-shared" ? familyTurnTimelineFilter(db) : "";
   const hasChatFilter = Array.isArray(chatJids);
   if (hasChatFilter && chatJids.length === 0) return [];
   const chatClause = hasChatFilter ? `chat_jid IN (${chatJids.map(() => "?").join(",")}) AND ` : "";
@@ -708,7 +701,7 @@ function searchMessagesInternal(chatJids: string[] | null, query: string, limit:
     const pattern = `%#${tag}%`;
     const rows = db
       .prepare(
-        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${chatClause}content LIKE ? COLLATE NOCASE ${familyFilter} ORDER BY rowid DESC LIMIT ? OFFSET ?`
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${chatClause}content LIKE ? COLLATE NOCASE ORDER BY rowid DESC LIMIT ? OFFSET ?`
       )
       .all(...chatParams, pattern, limit, offset) as StoredMessageRow[];
     return rows.map((row) => buildInteraction(row, getMediaIdsForMessage(row.rowid)));
@@ -725,7 +718,7 @@ function searchMessagesInternal(chatJids: string[] | null, query: string, limit:
         `SELECT messages.rowid, messages.chat_jid, messages.sender, messages.sender_name, messages.content, messages.screen_hint, messages.content_blocks, messages.link_previews, messages.thread_id, messages.timestamp, messages.is_bot_message
          FROM messages
          JOIN messages_fts ON messages_fts.rowid = messages.rowid
-         WHERE ${ftsChatClause}messages_fts MATCH ? ${familyFilter}
+         WHERE ${ftsChatClause}messages_fts MATCH ?
          ORDER BY messages.rowid DESC
          LIMIT ? OFFSET ?`
       )
@@ -735,7 +728,7 @@ function searchMessagesInternal(chatJids: string[] | null, query: string, limit:
     const fallbackTerms = extractFtsFallbackTerms(rawQuery, { dropFtsKeywords: operatorQuery });
     if (fallbackTerms.length === 0) return [];
     const clauses = fallbackTerms.map(() => "content LIKE ? COLLATE NOCASE").join(" AND ");
-    const sql = `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${chatClause}${clauses} ${familyFilter} ORDER BY rowid DESC LIMIT ? OFFSET ?`;
+    const sql = `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${chatClause}${clauses} ORDER BY rowid DESC LIMIT ? OFFSET ?`;
     const params = [...chatParams, ...fallbackTerms.map((term) => `%${term}%`), limit, offset];
     const rows = db.prepare(sql).all(...params) as StoredMessageRow[];
     return rows.map((row) => buildInteraction(row, getMediaIdsForMessage(row.rowid)));
@@ -764,9 +757,6 @@ export function getNewMessages(
   const db = getDb();
 
   const placeholders = jids.map(() => "?").join(",");
-  const familyQueueFilter = readAccessConfig().mode === 'family-shared'
-    ? "AND NOT EXISTS (SELECT 1 FROM family_turn_queue fq WHERE fq.message_rowid=messages.rowid)"
-    : "";
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, screen_hint, timestamp
     FROM messages
@@ -774,8 +764,6 @@ export function getNewMessages(
       AND is_bot_message = 0 AND content NOT LIKE ?
       AND LTRIM(content) NOT LIKE '/%'
       AND COALESCE(is_steering_message, 0) = 0
-      ${familyQueueFilter}
-      ${readAccessConfig().mode === 'family-shared' ? migrationDismissalFilter(db) : ''}
     ORDER BY timestamp, rowid
   `;
 
@@ -799,23 +787,14 @@ export function getMessagesSince(
   botPrefix: string
 ): NewMessage[] {
   const db = getDb();
-  const familyMode = readAccessConfig().mode === 'family-shared';
-  const familySelection = familyMode ? `AND (
-    EXISTS (SELECT 1 FROM family_turn_queue fq WHERE fq.message_rowid=messages.rowid AND fq.message_id=messages.id
-      AND fq.chat_jid=messages.chat_jid AND fq.state='ready')
-    OR (messages.timestamp > ? AND NOT EXISTS (SELECT 1 FROM family_turn_queue fq WHERE fq.message_rowid=messages.rowid))
-  )` : "AND timestamp > ?";
-  const familyOrder = familyMode ? `ORDER BY CASE WHEN EXISTS (SELECT 1 FROM family_turn_queue fq WHERE fq.message_rowid=messages.rowid AND fq.state='ready') THEN 0 ELSE 1 END,
-    COALESCE((SELECT queue_position FROM family_turn_queue fq WHERE fq.message_rowid=messages.rowid), messages.rowid), messages.timestamp, messages.rowid` : "ORDER BY timestamp, rowid";
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, screen_hint, content_blocks, timestamp, thread_id
     FROM messages
-    WHERE chat_jid = ? ${familySelection}
+    WHERE chat_jid = ? AND timestamp > ?
       AND is_bot_message = 0 AND content NOT LIKE ?
       AND LTRIM(content) NOT LIKE '/%'
       AND COALESCE(is_steering_message, 0) = 0
-      ${readAccessConfig().mode === 'family-shared' ? migrationDismissalFilter(db) : ''}
-    ${familyOrder}
+    ORDER BY timestamp, rowid
   `;
   const rows = db.prepare(sql).all(chatJid, sinceTimestamp, `${botPrefix}:%`) as Array<Omit<NewMessage, "content_blocks"> & { content_blocks?: string | null }>;
   return rows.map((row) => ({

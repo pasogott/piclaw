@@ -11,7 +11,6 @@ import { getSearchMatchMode } from "./core/config.js";
 import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "./utils/fts-query.js";
 import { createLogger, debugSuppressedError } from "./utils/logger.js";
 import { workspaceIndexAccess,WorkspaceIndexAccessDenied } from './core/workspace-index-access.js';
-import { familyWorkspaceScope,searchFamilyWorkspaceIndex } from './family-workspace-index.js';
 import { workspaceIndexPolicySnapshot, workspaceIndexPathDecision, workspaceIndexSafePath } from './core/workspace-index-policy.js';
 import {
   getWorkspaceIndexStatus,
@@ -106,7 +105,7 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
   const limit = clampNumber(params.limit, 10, 1, 50);
   const offset = clampNumber(params.offset, 0, 0, 1_000_000);
   const refresh = params.refresh === true;
-  const scope = access.mode==='family-shared'?familyWorkspaceScope(params.scope):normalizeWorkspaceSearchScope(params.scope);
+  const scope = normalizeWorkspaceSearchScope(params.scope);
 
   if (!query) {
     return { rows: [], limit, offset, error: "Provide a query." };
@@ -122,7 +121,6 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
   }
 
   access.validate();policy?.validate();
-  if(access.mode==='family-shared')return searchFamilyWorkspaceIndex(query,scope,limit,offset);
 
   const operatorQuery = isFtsOperatorQuery(query);
   const ftsQuery = prepareFtsQuery(query, getSearchMatchMode());

@@ -1,6 +1,6 @@
 # Getting started
 
-PiClaw runs one persistent, single-user agent workspace. Docker is the recommended deployment; portable bundles include Bun for Docker-free use. All installation methods have the same [access-mode limits](multi-user/README.md).
+PiClaw runs one persistent single-user agent workspace. Docker and native installations use the same access validation; family accounts are removed.
 
 ## Docker
 
