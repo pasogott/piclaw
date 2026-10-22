@@ -42,6 +42,7 @@ import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
+import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "./host-model-controls.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledAddon, bindInstalledAddon, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
@@ -393,6 +394,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const accountBindings = new WeakMap<CodexOperation, { accountRef: string | null; provider: object | undefined }>();
   const codexAuthPath = join(getPiclawAgentDir(), "auth.json");
   const codexServices = codex ? new HostCodexModelServices({
+    preserveHostTools: true,
     async capture(signal, model, original) {
       assertCodex();
       const scope = taskModelRequestScope(original);
@@ -586,16 +588,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   } catch (error) { closeResources(); throw error; } finally { catalog.runtime.invalidate("Application extension preflight ended"); }
   let infrastructureClosed = false;
   const closeInfrastructure = () => { if (infrastructureClosed) return; infrastructureClosed = true; for (const qualified of infrastructure) if (qualified.kind === "imap") (qualified.nativeExports["index.ts"]!.disposeImapPool as () => void)(); };
-  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...hostModelToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
   const fetchDefault = [...baseApplicationToolNames, "fetch"];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
-    ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
-      (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name)) ||
-      // SDK configure persists tool registration order, not catalogue order.
-      // Match only this complete known set (including uniqueness), never subsets.
-      (tools.length === fetchDefault.length && new Set(tools).size === fetchDefault.length && fetchDefault.every(name => tools.includes(name))) ||
-      (tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
+  let previousModelDefault: readonly string[] = [];
+  const completeToolSet = (value: unknown, names: readonly string[]) => Array.isArray(value) && value.length === names.length && new Set(value).size === names.length && names.every(name => value.includes(name));
+  const isFactoryDefault = (value: unknown) => isOldDefault(value) || completeToolSet(value, defaultToolNames) ||
+    completeToolSet(value, previousDefault) || completeToolSet(value, fetchDefault) ||
+    completeToolSet(value, baseApplicationToolNames) || completeToolSet(value, previousModelDefault) ||
+    completeToolSet(value, previousModelDefault.filter(name => name !== "codemode"));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
   let sandboxClose: Promise<void> | undefined;
@@ -628,6 +629,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   mcp = await createHostMcp({ offlineMaintenance, assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
   const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
+  previousModelDefault = applicationToolNames.filter(name => !(hostModelToolNames as readonly string[]).includes(name));
   if (drawio) {
     drawioHost = drawio.addon.bindDrawioVendorHost({
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); },
@@ -671,7 +673,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   };
   const instructionsFor = (chatJid?: string) => loadHostInstructions({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(),
     projectTrusted: true, additionalSkillPaths: [...settings.getSkillPaths(), ...infrastructure.flatMap(item => [...item.skillPaths]), ...resourceQualifications.flatMap(item => [...item.skillPaths]), ...(regrets?.skillPaths ?? [])],
-    channelAppendix: [chatJid ? buildChannelSystemPromptAppendix(detectChannel(chatJid), chatJid) ?? "" : "", ...infrastructure.map(infrastructurePrompt)].filter(Boolean).join("\n\n") });
+    channelAppendix: [nativeToolInstructions, chatJid ? buildChannelSystemPromptAppendix(detectChannel(chatJid), chatJid) ?? "" : "", ...infrastructure.map(infrastructurePrompt)].filter(Boolean).join("\n\n") });
   const instructionUpgrades = new Map<number, string>();
   const toolUpgrades: number[] = [];
   // Validate stored choices without opening/writing SDK documents or bundle ports.
@@ -804,6 +806,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
   const builtins = [...tools];
+  tools.push(...createHostModelTools({
+    assertCurrent() { assert(); lifetime.signal.throwIfAborted(); if (readAccessConfig().mode !== "single-user") throw Error("Native model controls unavailable"); },
+    readContext: call => runtime().readToolModelContext(call),
+    available: () => available.filter(model => host.modelRegistry.getAvailable().some(current => current.provider === model.provider && current.id === model.id)),
+    assertModel: choice => check({ provider: choice.provider, id: choice.modelId }, lifetime.signal),
+    captureSourceGuard: captureSource,
+  }));
   tools.push(...infrastructureTools, ...(codexGroup?.tools ?? []));
   if (regretsTool) tools.push(regretsTool);
   if (remoteTool) tools.push(remoteTool);

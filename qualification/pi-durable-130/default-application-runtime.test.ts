@@ -2491,7 +2491,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "fetch", "codemode"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "list_models", "get_model_state", "set_model", "switch_model", "switch_thinking", "fetch", "codemode"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();

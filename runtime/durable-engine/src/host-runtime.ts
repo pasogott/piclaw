@@ -1,3 +1,4 @@
+import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
 import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
@@ -261,6 +262,7 @@ export class HostConversationRuntime {
       if (!parent) throw Error("Unknown scheduled root");
       const position = choice && (await parent.entries({ order: "descending" }, 1, undefined, this.context)).items[0]?.id;
       const view = choice && await parent.context(this.context); this.fence();
+      const promptSectionBytes = view ? await this.measurePromptSections(parent, view.messages, choice) : undefined; this.fence();
       return this.harness.commit(async tx => {
       this.fence();
       if (!this.options.existingConversationIds.includes(parentId)) throw Error("Unknown scheduled root");
@@ -269,7 +271,7 @@ export class HostConversationRuntime {
       if (requireHistory && !head) throw Error("Side prompt history unavailable");
       if (choice && head?.id !== position) throw Error("Scheduled parent changed");
       const agent = await tx.doc(AgentDoc, parentId);
-      if (target && view) this.assertContextFitsModel(view.messages, agent, target);
+      if (target && view) this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
       const fork = head ? await tx.forkConversation(parentId, head.id, { ownership: { kind: "ownerless" } })
         : await tx.createConversation({ ownership: { kind: "ownerless" } });
       // Empty roots have no public fork point. Copy only configuration, never fabricate an entry.
@@ -459,6 +461,15 @@ export class HostConversationRuntime {
       return label;
     });
   }
+  async readToolModelContext(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }): Promise<readonly import("@earendil-works/pi-ai").Message[]> {
+    await this.captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+    return this.observe(async () => {
+      const conversation = await this.harness.conversation(call.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing tool conversation");
+      const view = await conversation.context(this.context); this.fence();
+      return view.messages;
+    });
+  }
   async readSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
     return (await this.readSessionChoice(binding)).model;
   }
@@ -484,15 +495,16 @@ export class HostConversationRuntime {
       const conversation = await this.harness.conversation(id, this.context); this.fence();
       if (!conversation) throw new Error("Missing existing conversation");
       const view = await conversation.context(this.context); this.fence();
+      const promptSectionBytes = await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel); this.fence();
       await o.withIdleModelGuard!(() => conversation.commit(async tx => {
         this.fence();
         for (const conversationId of o.existingConversationIds) {
           if ((await tx.doc(InboxDoc, conversationId)).items.length || (await tx.doc(LiveDoc, conversationId)).run) throw new Error("Runtime is not idle");
         }
-        // Candidate-only admission bound, NOT proof that the host's next full prompt fits.
-        // Dynamic sections cannot be bounded here without executing host prompt callbacks.
+        // Candidate-only admission bound, including read-only prompt preparation.
+        // The SDK still prepares the actual next request at its normal boundary.
         const agent = await tx.doc(AgentDoc, id);
-        this.assertContextFitsModel(view.messages, agent, target);
+        this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
         if (thinkingLevel !== undefined) {
           if (agent.model?.provider !== choice.provider || agent.model.modelId !== choice.modelId) throw new Error("Thinking model changed");
           await configure(tx, id, { thinkingLevel: thinkingLevel as ModelThinkingLevel });
@@ -503,19 +515,16 @@ export class HostConversationRuntime {
     this.active.add(operation);
     try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
   }
-  private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }): void {
-    if (!Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
-      !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw Error("Model context unavailable");
-    const registry = this.options.harnessOptions.registry.snapshot();
-    if (registry.sections().length) throw Error("Dynamic prompt overhead unavailable");
-    const tools = registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
-    const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
-    const usage = messages.reduce((max, message) => message.role === "assistant"
-      ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
-    if (messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image")))
-      throw Error("Non-text context overhead unavailable");
-    if (!Number.isFinite(usage) || Math.max(bytes, usage) + 8192 + target.maxTokens > target.contextWindow)
-      throw Error("Candidate context bound exceeded; compact first");
+  private async measurePromptSections(conversation: import("@earendil-works/pi-durable").Conversation, messages: readonly import("@earendil-works/pi-ai").Message[], model?: { provider: string; modelId: string }, thinkingLevel?: string): Promise<number> {
+    const current = await conversation.agent(this.context); this.fence();
+    const agent = { ...current, ...(model ? { model } : {}), ...(thinkingLevel !== undefined ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}) };
+    const read = { snapshot: this.harness.snapshot.bind(this.harness), snapshotAsOf: this.harness.snapshotAsOf.bind(this.harness) };
+    const env = await this.options.harnessOptions.env?.({ conversationId: conversation.id, cwd: agent.cwd, read }, this.context); this.fence();
+    const bytes = await measureModelPromptSections(messages, { conversationId: conversation.id, agent, env, read }, this.context); this.fence();
+    return bytes;
+  }
+  private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }, promptSectionBytes?: number): void {
+    assertModelContextFits(messages, agent, target, this.options.harnessOptions.registry.snapshot(), promptSectionBytes);
   }
   /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
   async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {

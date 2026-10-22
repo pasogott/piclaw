@@ -61,12 +61,13 @@ applicationTest("all 23 installed: actual default factory public provider termin
   let calls = 0;
   let fixtureError: unknown;
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => { throw Error("No HTTP allowed in combined factory fixture"); });
-  const names = ["exec_command", "write_stdin", "apply_patch", "view_image", "web_search", "image_generation"];
+  const names = ["read", "bash", "edit", "write", "codemode", "set_model", "list_models", "view_image", "web_search", "image_generation"];
   const run: Parameters<typeof runtime.registerNativeProvider>[0]["streamSimple"] = (actual, context, options) => {
     calls++;
     expect(actual.provider).toBe(model.provider); expect(actual.id).toBe(model.id); expect(actual.api).toBe(model.api);
     const tools = getCurrentTools(context.messages);
     for (const name of names) expect(tools.some(t => t.name === name)).toBe(true);
+    for (const name of ["exec_command", "write_stdin", "apply_patch"]) expect(tools.some(t => t.name === name)).toBe(false);
     expect(options?.onPayload).toBeFunction();
     const stream = createAssistantMessageEventStream();
     void (async () => {
