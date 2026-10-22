@@ -34,6 +34,14 @@ These rules apply to core UI, add-ons and generated interactive surfaces. Visual
 - syntax-highlighted previews for common text/code attachments
 - theme and tint controls via `/theme` and `/tint`
 
+### Native reply threads
+
+A native terminal reply uses the thread root of its accepted user message. The host resolves that message from the immutable source ID and payload reference. It never selects the latest timeline message. Existing null-rooted and self-threaded roots are valid; cross-chat and nested roots are rejected.
+
+Queued compose input starts a new thread unless the request supplies `thread_id`. An explicit selection survives both busy-input admission and a turn becoming busy during storage. Native settlement publishes the reply once through the terminal commit. Message-reference pills open and highlight the referenced timeline post.
+
+The resolver is in [`host-message-thread.ts`](../runtime/durable-engine/src/host-message-thread.ts). [`application-web.test.ts`](../qualification/pi-durable-130/application-web.test.ts) covers normal and queued publication with the real pool and channel.
+
 ### Tool and turn status
 
 The status surface is designed to keep the most useful in-flight context visible

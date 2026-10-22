@@ -51,6 +51,8 @@ export interface MaterializedAnswer {
 export interface RuntimeOptions {
   readonly incarnation: string;
   readonly onOperationSettled?: (operationId: string) => void;
+  /** Host timeline root for this exact accepted input, including queued messages. */
+  readonly replyThreadFor?: (input: AcceptedInput) => number | null;
   /** Public evidence preparation outside SQLite; effect is invocation-local. */
   readonly prepareTerminalEffect?: (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>;
   readonly onMaintenanceSettled?: (workId: string) => void;
@@ -159,6 +161,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
     prepareTerminalEffect: o.prepareTerminalEffect?.bind(o),
+    replyThreadFor: o.replyThreadFor?.bind(o),
     onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o), cancelSideSource: o.cancelSideSource?.bind(o),
     cancelOperationSource: o.cancelOperationSource?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
@@ -1523,7 +1526,7 @@ export class HostConversationRuntime {
     }
     const timeline: CommitTerminalRequest["timeline"] = cancelled || scheduled
       ? { mode: "none", placeholderRowId: null, chatJid: input.chatJid, contentRef: null, threadId: null, mediaIds: [], contentBlocksRef: null }
-      : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, ...materialized, threadId: null };
+      : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, ...materialized, threadId: o.replyThreadFor?.(input) ?? null };
     const request: CommitTerminalRequest = sealed({ effect: effect(`runtime:terminal:${input.requestId}`, input.operationId, input.sourceSeq),
       expectedChatJid: input.chatJid, expectedVersion: operation.version, expectedHarness: operation.harness,
       disposition: cancelled ? "cancelled" as const : modelFailed ? "failed" as const : "completed" as const, errorCode: modelFailed ? "model_error" : null, terminalAuthorityRef: null,

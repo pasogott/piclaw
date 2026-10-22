@@ -212,7 +212,7 @@ function validateThreadRoot(
   const root = database
     .prepare(
       `SELECT 1 present FROM messages
-       WHERE rowid=? AND chat_jid=? AND thread_id IS NULL`,
+       WHERE rowid=? AND chat_jid=? AND (thread_id IS NULL OR thread_id=rowid)`,
     )
     .get(threadId, chatJid) as { present?: unknown } | undefined;
   if (root?.present !== 1) {

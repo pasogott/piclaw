@@ -905,11 +905,9 @@ async function handleAgentMessageInScope(
     extras: QueueDeferredFollowupExtras = {}
   ): Promise<Response> => {
     const queuedAt = new Date().toISOString();
-    // Don't inherit the active turn's thread root. Deferred followups are
-    // independent messages typed while the agent was busy — they should
-    // start their own thread when materialized (self-rooted via
-    // storeWebMessage's default behaviour).
-    const queuedThreadId: number | null = null;
+    // Never inherit the active turn's root. Preserve an explicitly selected
+    // thread; ordinary compose input remains self-rooted when materialized.
+    const queuedThreadId: number | null = normalized.threadId ?? null;
     const queuedBy = extras.browserContext
       ? {
           ...(extras.browserContext.userId ? { userId: extras.browserContext.userId } : {}),
@@ -1228,7 +1226,7 @@ async function handleAgentMessageInScope(
         if (!queuedDuringAdmission) return false;
         deferredAt = new Date().toISOString();
         deferredRowId = channel.enqueueQueuedFollowupItem(chatJid, 0, content,
-          null, deferredAt, {
+          normalized.threadId ?? null, deferredAt, {
             source: deferredSource, mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
             linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
             queuedBy: { ...(browserObservability.userId ? { userId: browserObservability.userId } : {}),
@@ -1255,9 +1253,9 @@ async function handleAgentMessageInScope(
 
   if (queuedDuringAdmission) {
     channel.broadcastEvent('agent_followup_queued', { chat_jid: chatJid, row_id: deferredRowId, content,
-      thread_id: null, timestamp: deferredAt, source: deferredSource });
+      thread_id: normalized.threadId ?? null, timestamp: deferredAt, source: deferredSource });
     if (!isChatActive()) channel.resumeChat(chatJid);
-    return channel.json({ thread_id: null, queued: 'followup' }, 201);
+    return channel.json({ thread_id: normalized.threadId ?? null, queued: 'followup' }, 201);
   }
   if (!interaction) return channel.json({ error: "Failed to store message" }, 500);
 

@@ -1,5 +1,6 @@
 // Single-root application composition; execution and recovery remain SDK-owned.
 import type { Database } from "bun:sqlite";
+import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
@@ -187,6 +188,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+        replyThreadFor(input) { assert(); return resolveAcceptedMessageThread(root, input); },
         cancelOperationSource(input, expectedVersion) {
           root.transaction(() => {
             assert();

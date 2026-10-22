@@ -133,6 +133,20 @@ describe("EF-S02 authority matrix and composed state", () => {
     }
   });
 
+  test("self-threaded web roots are valid but nested replies are not roots", async () => {
+    for (const threadId of [20, 19]) {
+      const subject = openSqliteSubject(":memory:", [], false);
+      try {
+        subject.seedOperation(terminalOperation());
+        subject.seedDraft({ operationId: "operation-1", rowId: 20, revision: 1,
+          chatJid: "web:terminal", threadId, contentRef: "payload:draft" });
+        const result = await subject.store.commitTerminal(terminalRequest({ threadId: 20 }));
+        expect(result.ok).toBe(threadId === 20);
+        if (!result.ok) expect(result.error._tag).toBe("owner_conflict");
+      } finally { subject.dispose?.(); }
+    }
+  });
+
   test("terminal time fences cover accepted sources cancellation latest draft and outbox equality", async () => {
     const variants = [
       {

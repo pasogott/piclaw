@@ -112,6 +112,29 @@ describe("manual command deferred model lookup ownership", () => {
 });
 
 describe("web agent message handler", () => {
+  for (const duringAdmission of [false, true]) {
+    test(`explicit queued thread survives busy input; admission race=${duringAdmission}`, async () => {
+      let busy = !duringAdmission;
+      const queued: any[][] = [], events: any[] = [];
+      const channel = {
+        agentPool: { isStreaming: () => busy, isActive: () => busy }, getQueuedFollowupCount: () => 0,
+        async admitUserMessage(_chat: string, _content: string, _media: unknown, _options: unknown, check: () => void, _signal: unknown, defer: () => boolean) {
+          busy = true; check(); expect(defer()).toBe(true); return null;
+        },
+        enqueueQueuedFollowupItem(...args: any[]) { queued.push(args); return -42; },
+        async admitQueuedFollowupItem(args: any[], check: () => void) { check(); queued.push(args); return -42; },
+        broadcastEvent(event: string, data: unknown) { events.push({ event, data }); },
+        json: (body: unknown, status = 200) => Response.json(body, { status }),
+      } as any;
+      const response = await handleAgentMessage(channel, new Request('https://fixture/agent/default/message', {
+        method: 'POST', body: JSON.stringify({ content: 'explicit reply', thread_id: 17, mode: 'queue' }),
+      }), '/agent/default/message', 'web:test', 'default');
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ queued: 'followup', thread_id: 17 });
+      expect(queued).toHaveLength(1); expect(queued[0][3]).toBe(17);
+      expect(events).toContainEqual({ event: 'agent_followup_queued', data: expect.objectContaining({ thread_id: 17 }) });
+    });
+  }
   test('idle input becoming busy during storage is queued atomically before acknowledgement',async()=>{
     let busy=false,committed=false,scheduled=0;const queued:any[]=[];const events:string[]=[];
     let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});

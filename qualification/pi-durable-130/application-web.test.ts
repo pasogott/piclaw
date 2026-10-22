@@ -518,6 +518,8 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(queue.isLaneBusy(`chat:${chat}`)).toBe(false);
       const answers = db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1 ORDER BY rowid").all(chat) as { content: string }[];
       expect(answers[0]).toEqual({ content: "synthetic answer" });
+      expect(db.query("SELECT thread_id FROM messages WHERE chat_jid=? AND is_bot_message=1 ORDER BY rowid LIMIT 1").get(chat))
+        .toEqual({ thread_id: row.rowid });
       expect(answers).toHaveLength(deferred ? 2 : 1);
       if (deferred) expect(answers[1].content).toContain(compactSucceeds ? "Context compacted" : "did not complete");
       const accepted = db.query("SELECT source_seq FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id) as { source_seq: number };
@@ -557,8 +559,8 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       const holdAgain = barrier(), enteredAgain = barrier();
       base.host.modelHold = holdAgain;
       base.host.onModelEnter = () => enteredAgain.release();
-      const post = (content: string) => channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
-        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content }),
+      const post = (content: string, thread_id?: number) => channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content, thread_id }),
       }));
       const callsBefore = base.host.modelCalls;
       expect((await post("held primary again")).status).toBe(201);
@@ -582,7 +584,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       };
       try {
         expect(await (await post("/compact")).json()).toMatchObject({ queued: "followup" });
-        expect(await (await post("accepted behind compact")).json()).toMatchObject({ queued: "followup" });
+        expect(await (await post("accepted behind compact", row.rowid)).json()).toMatchObject({ queued: "followup", thread_id: row.rowid });
       } finally { holdAgain.release(); }
       if (uncertain) {
         try {
@@ -614,6 +616,15 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
         { content: "accepted followup answer" },
       ]);
       expect(base.host.transcripts.at(-1)?.includes("second deferred summary")).toBe(compactSucceeds);
+      expect(db.query("SELECT thread_id FROM messages WHERE chat_jid=? AND content='accepted behind compact'").get(chat))
+        .toEqual({ thread_id: row.rowid });
+      // Each native reply follows its own accepted message, including a queued source.
+      expect(db.query(`SELECT count(*) AS n FROM service_effect_s02_commits c
+        JOIN service_effect_s01_operations o ON o.operation_id=c.operation_id
+        JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+        JOIN messages u ON u.chat_jid=s.chat_jid AND u.id=s.source_id
+        JOIN messages a ON a.rowid=c.message_row_id
+        WHERE c.chat_jid=? AND a.thread_id=coalesce(u.thread_id,u.rowid)`).get(chat)).toEqual({ n: 4 });
       expect(db.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid=?").all(chat))
         .toEqual(Array.from({ length: 4 }, () => ({ phase: "terminal" })));
       expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toHaveLength(4);
