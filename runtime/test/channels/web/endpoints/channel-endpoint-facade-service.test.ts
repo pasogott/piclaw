@@ -107,6 +107,7 @@ function createFacade(getIdentitySnapshot: () => WebChannelIdentitySnapshot) {
 
   return {
     facade: new WebChannelEndpointFacadeService(options),
+    options,
     ensureCalls,
     postCalls,
     scheduledWarmups,
@@ -219,4 +220,58 @@ describe("web channel endpoint facade service", () => {
     expect(await response.json()).toEqual({ chats: [{ chat_jid: "web:branch", agent_name: "Branch" }] });
     expect(scheduledPriorityWarmups).toEqual(["web:branch"]);
   });
+});
+
+
+function nativeActiveFixture() {
+  const base = createFacade(() => createIdentitySnapshot());
+  const statuses = new Map<string, Record<string, unknown> | null>();
+  const known = ["web:idle", "web:provider", "web:tool", "web:queued", "web:terminal", "web:maintenance"].map(chat_jid => ({ chat_jid, agent_name: chat_jid,
+    is_active: true, is_streaming: true, is_compacting: true, activity_status: "streaming" }));
+  let recoveries = 0, reads = 0, stale = false;
+  const context: any = { getAgentStatus(jid: string) { reads++; if(stale) throw Error("Stale native owner"); return statuses.get(jid) ?? null; },
+    recoverStaleInflightRun() { recoveries++; throw Error("read must not recover"); },
+    getExtensionWorkingState() { throw Error("unrelated extension worker is not native activity"); },
+    getBuffer() { return undefined; } };
+  const facade = new WebChannelEndpointFacadeService({ ...base.options,
+    listActiveChats() { throw Error("legacy pool must not be read"); }, listKnownChats: () => known,
+    agentPool: { isDurableRuntime: () => true, getSessionGenerationForChat: (jid: string) => "native:" + jid } as any,
+    endpointContexts: { ...base.options.endpointContexts, agentStatus: () => context } });
+  return { facade, statuses, known, stats: () => ({ recoveries, reads }), revoke() { stale = true; } };
+}
+
+test("native active-chats projects provider, tool, queued and maintenance work without legacy sessions", async () => {
+  const f = nativeActiveFixture();
+  f.statuses.set("web:provider", { type: "thinking", title: "Working" });
+  f.statuses.set("web:tool", { type: "tool", title: "Running tool" });
+  f.statuses.set("web:queued", { type: "thinking", title: "Queued", queued_count: 1 });
+  f.statuses.set("web:maintenance", { type: "intent", title: "Compacting", intent_key: "native_task" });
+  f.statuses.set("web:terminal", { type: "done", title: "Idle" });
+  const body = await f.facade.handleAgentActiveChats().json();
+  expect(body.chats).toHaveLength(6);
+  const byJid = new Map(body.chats.map((row: any) => [row.chat_jid, row])) as Map<string, any>;
+  for (const jid of ["web:provider", "web:tool", "web:queued", "web:maintenance"]) expect(byJid.get(jid).is_active).toBe(true);
+  expect(byJid.get("web:provider").activity_status).toBe("streaming");
+  expect(byJid.get("web:tool").activity_status).toBe("working");
+  expect(byJid.get("web:tool").session_id).toBe("native:web:tool");
+  for (const jid of ["web:idle", "web:terminal"]) expect(byJid.get(jid)).toMatchObject({ is_active: false, is_streaming: false, is_compacting: false, activity_status: "idle", activity_label: "Idle" });
+  expect(body.chats.slice(0, 4).every((row: any) => row.is_active)).toBe(true);
+  expect(f.stats()).toEqual({ recoveries: 0, reads: 6 });
+});
+
+test("native active-chats reads fresh terminal state and does not revive retained errors or cleanup", async () => {
+  const f = nativeActiveFixture();
+  f.statuses.set("web:tool", { type: "tool", title: "Tool" });
+  expect((await f.facade.handleAgentActiveChats().json()).chats.find((row: any) => row.chat_jid === "web:tool").is_active).toBe(true);
+  for (const type of ["done", "error"]) {
+    f.statuses.set("web:tool", { type, title: "Terminal", classifier: "provider_auth" });
+    const row = (await f.facade.handleAgentActiveChats().json()).chats.find((row: any) => row.chat_jid === "web:tool");
+    expect(row).toMatchObject({ is_active: false, activity_status: "idle" });
+  }
+  expect(f.stats().recoveries).toBe(0);
+});
+
+test("native active-chats rejects owner loss rather than returning all-idle or stale activity", () => {
+  const f = nativeActiveFixture(); f.revoke();
+  expect(() => f.facade.handleAgentActiveChats()).toThrow("Stale native owner");
 });

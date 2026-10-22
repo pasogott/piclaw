@@ -1148,9 +1148,9 @@ test("runtime: native context reader follows branch, trailing content and reset 
   const head = await harness.commit(tx => tx.appendEntry(AssistantEntry, root, { model: [assistant(17, 1)] }), context);
   await harness.commit(async tx => {
     child = (await tx.forkConversation(root, head.id, { ownership: { kind: "ownerless" } })).id;
-    await tx.appendEntry(root, { kind: "qualification.trailing", model: [{ role: "user", content: "trailing context", timestamp: 2 }] });
+    await tx.appendEntry(root, { kind: "pi.user", model: [{ role: "user", content: "trailing context", timestamp: 2 }] });
     await tx.appendEntry(AssistantEntry, root, { model: [assistant(900, 3)] });
-    await tx.appendEntry(child, { kind: "qualification.trailing", model: [{ role: "user", content: "child trailing", timestamp: 4 }] });
+    await tx.appendEntry(child, { kind: "pi.user", model: [{ role: "user", content: "child trailing", timestamp: 4 }] });
   }, context);
   const rootView = await (await harness.conversation(root, context))!.context(context);
   const childView = await (await harness.conversation(child, context))!.context(context);
@@ -1172,6 +1172,9 @@ test("runtime: native context reader follows branch, trailing content and reset 
   await resetting.close(context);
   f.runtime = await HostConversationRuntime.open(f.options, context);
   expect((await f.runtime.readSessionContextUsage(binding)).tokens).toBe(0);
+  const tree = await f.runtime.readSessionTree(binding);
+  expect(tree.nodes.at(-1)?.type).toBe("custom");
+  expect(tree.leafId).toBe(tree.nodes.at(-1)?.id ?? null);
   expect(f.base.host.modelCalls).toBe(0);
 }));
 
