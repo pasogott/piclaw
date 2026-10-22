@@ -47,18 +47,41 @@ test("checkpoint worker performs PASSIVE IO off-thread and preserves a live read
     expect(f.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
   } finally { worker.terminate(); reader.close(); f.close(); }
 });
-test("worker failure restores safe built-in checkpointing", async () => {
-  const f = fixture(), stop = registerSqliteCheckpoint(f.db, f.path, true)!;
+test("worker failure restores safe checkpointing despite an already closed peer", async () => {
+  const f = fixture(), second = new Database(f.path);
+  const stop = registerSqliteCheckpoint(f.db, f.path, true)!, stopSecond = registerSqliteCheckpoint(second, f.path, true)!;
   let moved = false;
   try {
     await waitFor(() => (f.db.query("PRAGMA wal_autocheckpoint").get() as any).wal_autocheckpoint === 0, 3000);
+    second.close();
     renameSync(f.path, f.path + ".moved"); moved = true;
     await waitFor(() => (f.db.query("PRAGMA wal_autocheckpoint").get() as any).wal_autocheckpoint === 1000, 3000);
     expect(f.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
-  } finally { if (moved) renameSync(f.path + ".moved", f.path); stop(); f.close(); }
+  } finally { if (moved) renameSync(f.path + ".moved", f.path); stopSecond(); stop(); second.close(); f.close(); }
 });
 test("non-ZFS policy leaves built-in checkpoint unchanged", () => {
   const f = fixture(); try { expect(registerSqliteCheckpoint(f.db, f.path, false)).toBeUndefined();
     expect(f.db.query("PRAGMA wal_autocheckpoint").get()).toEqual({ wal_autocheckpoint: 1000 });
   } finally { f.close(); }
+});
+
+test("non-WAL databases never start a checkpoint reader", () => {
+  const f = fixture();
+  try {
+    f.db.exec("PRAGMA journal_mode=DELETE");
+    expect(registerSqliteCheckpoint(f.db, f.path, true)).toBeUndefined();
+    expect(f.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    expect(f.db.query("PRAGMA wal_autocheckpoint").get()).toEqual({ wal_autocheckpoint: 1000 });
+    expect(f.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+  } finally { f.close(); }
+});
+
+test("unregistering a closed writer is safe and repeatable", async () => {
+  const f = fixture(), stop = registerSqliteCheckpoint(f.db, f.path, true)!;
+  try {
+    await waitFor(() => (f.db.query("PRAGMA wal_autocheckpoint").get() as any).wal_autocheckpoint === 0, 3000);
+    f.db.close();
+    expect(stop).not.toThrow();
+    expect(stop).not.toThrow();
+  } finally { stop(); f.close(); }
 });

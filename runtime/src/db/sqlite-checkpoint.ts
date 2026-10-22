@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, debugSuppressedError } from "../utils/logger.js";
 const log = createLogger("db.checkpoint");
 
 /** SQLite's default WAL checkpoint runs inside COMMIT on the HTTP thread. On
@@ -25,6 +25,10 @@ interface CheckpointGroup { worker: Worker; handles: Set<Database>; ready: boole
 const groups = new Map<string, CheckpointGroup>();
 export function registerSqliteCheckpoint(database: Database, path: string, enabled = isZfsFilesystem(path)): (() => void) | undefined {
   if (!enabled || path === ":memory:") return;
+  const journal = database.query("PRAGMA journal_mode").get() as { journal_mode: string };
+  // A checkpoint worker is a second reader. On a rollback-journal database it
+  // serves no purpose and can prevent the writer's COMMIT from taking its lock.
+  if (journal.journal_mode.toLowerCase() !== "wal") return;
   const file = resolve(path), identity = statSync(file), key = `${file}:${identity.dev}:${identity.ino}`;
   let group = groups.get(key);
   if (!group) {
@@ -38,7 +42,9 @@ export function registerSqliteCheckpoint(database: Database, path: string, enabl
       if (groups.get(key) !== current) return;
       current.ready = false;
       for (const handle of current.handles) {
-        try { handle.exec("PRAGMA wal_autocheckpoint=1000"); } catch { /* A closed connection has no commit path. */ }
+        try { handle.exec("PRAGMA wal_autocheckpoint=1000"); } catch (error) {
+          debugSuppressedError(log, "Could not restore automatic checkpoints on an unavailable SQLite handle.", error, { operation: "sqlite_checkpoint.restore_unavailable_handle" });
+        }
       }
     };
     worker.addEventListener("message", event => {
@@ -59,7 +65,9 @@ export function registerSqliteCheckpoint(database: Database, path: string, enabl
   const current = group;
   return () => {
     if (current.handles.delete(database)) {
-      try { database.exec("PRAGMA wal_autocheckpoint=1000"); } catch { /* Already closed. */ }
+      try { database.exec("PRAGMA wal_autocheckpoint=1000"); } catch (error) {
+        debugSuppressedError(log, "Could not restore automatic checkpoints while unregistering a SQLite handle.", error, { operation: "sqlite_checkpoint.unregister_unavailable_handle" });
+      }
     }
     if (!current.handles.size && groups.get(key) === current) {
       groups.delete(key);

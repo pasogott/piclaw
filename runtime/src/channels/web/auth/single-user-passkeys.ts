@@ -40,7 +40,9 @@ function originInfo(req: Request) {
 }
 function requireActor(req: Request, now: number, recent: boolean) {
   let singleUser = false;
-  try { singleUser = readAccessConfig().mode === 'single-user'; } catch { /* Unsupported configuration has no management surface. */ }
+  try { singleUser = readAccessConfig().mode === 'single-user'; } catch {
+    log.warn('Passkey management disabled by invalid access configuration.', { operation: 'passkey_settings.invalid_access_config' });
+  }
   if (!singleUser) throw new PasskeyError('Not found.', 404);
   if (req.headers.get('sec-fetch-site') === 'cross-site') throw new PasskeyError('Origin not allowed.', 403);
   const supplied = req.headers.get('origin');

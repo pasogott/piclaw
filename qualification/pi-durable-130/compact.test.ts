@@ -320,7 +320,13 @@ test("controller explicitly adopts one checkpointed manual compaction without re
     expect(f.host.modelCalls).toBe(0);
     expect(() => controller!.runtime.recoverMaintenance({ ...binding, incarnation: "wrong-domain" }, taskId)).toThrow("Host binding conflict");
     expect(() => controller!.runtime.recoverMaintenance({ ...binding, incarnation: "recovered-manual", conversationId: id + 1 }, taskId)).toThrow("Host binding conflict");
-    await expect(controller.reconcileRecovered()).rejects.toThrow("Unknown recovered candidate authority");
+    await controller.reconcileRecovered();
+    const paused = await controller.runtime.inspectAuthority();
+    expect(paused.inspection.scheduling).toBe("paused");
+    expect(paused.inspection.tasks.map(task => task.record.id)).toEqual([taskId]);
+    expect(paused.inspection.submissions).toEqual([]);
+    expect(controller.recoveredMaintenanceChat).toBe(binding.chatJid);
+    expect(f.host.modelCalls).toBe(0);
     const resumed = controller.resumeRecoveredMaintenance();
     expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
     await recoveredEntered.promise;

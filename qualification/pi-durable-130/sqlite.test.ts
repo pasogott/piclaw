@@ -24,14 +24,21 @@ registerStorageConformance({ describe, expect, it: (name, run) => test(name, run
 }));
 
 describe("Bun asynchronous database facade", () => {
-  test("guarded writer admission yields while another connection commits", () => disk(async path => {
+  for (const guarded of [false, true]) test(`${guarded ? "guarded" : "unguarded"} writer admission yields before the callback while another connection commits`, () => disk(async path => {
     const root = new Database(path);
     root.exec("PRAGMA journal_mode=WAL; CREATE TABLE sample (n INTEGER)");
-    const db = new BunSqliteDatabase(path, { root, assertOwner() {}, fenceTransactions: true });
+    const db = new BunSqliteDatabase(path, guarded ? { root, assertOwner() {}, fenceTransactions: true } : undefined);
     root.exec("BEGIN IMMEDIATE; INSERT INTO sample VALUES (1)");
     const release = setTimeout(() => root.exec("COMMIT"), 50);
+    let callbacks = 0;
     try {
-      await db.transaction(async tx => { await tx.run("INSERT INTO sample VALUES (2)"); });
+      await db.transaction(async tx => {
+        callbacks++;
+        expect(root.inTransaction).toBe(false);
+        expect(await tx.all("SELECT n FROM sample")).toEqual([{ n: 1 }]);
+        await tx.run("INSERT INTO sample VALUES (2)");
+      });
+      expect(callbacks).toBe(1);
       expect(await db.all("SELECT n FROM sample ORDER BY n")).toEqual([{ n: 1 }, { n: 2 }]);
     } finally {
       clearTimeout(release);

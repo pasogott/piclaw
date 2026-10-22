@@ -23,7 +23,7 @@ import type { RuntimeSenders } from "../../src/runtime/wiring.js";
 import { AgentPool } from "../../src/agent-pool.js";
 import { AgentQueue } from "../../src/queue.js";
 import { WebChannel } from "../../src/channels/web.js";
-import { initDatabase, getDb } from "../../src/db/connection.js";
+import { initDatabase, getDb, closeDatabase } from "../../src/db/connection.js";
 import { createAgentPoolModelOptions } from "../model-services-fixture.js";
 import type { RuntimeBootstrapContext } from "../../src/runtime/bootstrap.js";
 import { getChatTransport, registerChatTransport, setLocalChatTransport } from "../../src/extensions/chat-transport-registry.js";
@@ -77,6 +77,9 @@ describe("runtime bootstrap", () => {
   });
 
   for (const scenario of ["drain", "stale-owner", "unread", "nonterminal", "pending"] as const) test(`actual bootstrap migration ${scenario}: installed handles and retained lifetime`, async () => {
+    // Capture inventories every persisted chat; unrelated suite fixtures must
+    // not become additional migration authorities for this isolated case.
+    closeDatabase();
     initDatabase();
     getDb().exec("DELETE FROM messages; DELETE FROM chat_cursors; DELETE FROM service_effect_s01_operations; DELETE FROM service_effect_s01_sources; DELETE FROM service_effect_s01_chats;");
     const dir = mkdtempSync(join(tmpdir(), "migration-runtime-"));
@@ -161,6 +164,7 @@ describe("runtime bootstrap", () => {
       producer.resolve(); task.resolve(); complete(); await running;
       captureSpy.mockRestore();
       await pool.shutdown(); await web.stop(); owner.release(); rmSync(dir, { recursive: true, force: true });
+      closeDatabase();
     }
   });
   for (const phase of ["producer-await", "prepared"] as const) test(`late unsupported local transport rejects at ${phase}`, async () => {

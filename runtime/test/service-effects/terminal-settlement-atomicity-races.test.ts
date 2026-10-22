@@ -136,7 +136,6 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
         "outbox_insert",
         "outbox_decision_insert",
         "insert_commit",
-        "insert_message_snapshot",
         "link_commit_outbox",
         "link_commit_outbox",
       ],
@@ -162,7 +161,6 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
         "terminalise_operation",
         "advance_frontier_release_owner",
         "insert_commit",
-        "insert_message_snapshot",
       ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
@@ -184,7 +182,6 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
         "terminalise_operation",
         "advance_frontier_release_owner",
         "insert_commit",
-        "insert_message_snapshot",
       ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(
@@ -238,7 +235,6 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
         "outbox_insert",
         "outbox_decision_insert",
         "insert_commit",
-        "insert_message_snapshot",
         "link_commit_outbox",
       ],
       setup(subject: TerminalSettlementContractSubject) {
@@ -271,7 +267,6 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
         "terminalise_operation",
         "advance_frontier_release_owner",
         "insert_commit",
-        "insert_message_snapshot",
       ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());

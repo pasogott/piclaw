@@ -723,8 +723,9 @@ export class HostConversationRuntime {
         const task = await tx.task(scope.taskId as TaskId);
         const live = await tx.doc(LiveDoc, scope.conversationId as ConversationId);
         const reason = (task?.input as { reason?: string } | undefined)?.reason;
+        const checkpoint = task?.state.status === "running" ? task.state.checkpoint : null;
         if (!task || task.kind !== "pi.compaction" || task.conversationId !== copy.conversationId || task.abortRequested ||
-          task.state.status !== "running" || !task.state.checkpoint || typeof task.state.checkpoint !== "object" || Array.isArray(task.state.checkpoint) || task.state.checkpoint.phase !== "summarize" ||
+          task.state.status !== "running" || !checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint) || checkpoint.phase !== "summarize" ||
           !["threshold", "overflow"].includes(reason ?? "") ||
           !live.compactions?.some(status => status.taskId === scope.taskId && status.reason === reason && status.blocking === (task.owner !== undefined)))
           throw Error("Exact automatic compaction task required");

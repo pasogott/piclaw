@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
-import { Harness, LiveDoc, AssistantEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
+import { Harness, LiveDoc, AssistantEntry, type Tx, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
 import type { TerminalCommit, TerminalDatabaseEffect } from "../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import type { AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "../../runtime/durable-engine/src/index.js";
@@ -65,7 +65,7 @@ async function setup(busy = false) {
   const assert = () => { if (!acquired) throw new Error("Host owner lost"); };
   initializeHostDurableBindings(db, assert);
   let loseCancellationAck = false;
-  const hooks = { resolveConversation: undefined as (() => number) | undefined,
+  const hooks = { resolveConversation: undefined as (() => ConversationId) | undefined,
     authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined,
     prepareTerminal: undefined as ((input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>) | undefined,
@@ -194,10 +194,14 @@ test("runtime: terminal model error settles once and releases the host lane", ()
   const notice = f.db.query("SELECT rowid,content,thread_id FROM messages WHERE is_bot_message=1").get() as { rowid: number; content: string; thread_id: number | null };
   expect(notice.content).toBe("**Turn failed**\n\nThe model could not complete this turn. Accepted inputs were consumed; they will not be replayed automatically.");
   expect(notice.rowid).toBe(committed!.messageRowId!);
+  // Display rows are mutable. Their edits cannot invalidate committed execution
+  // authority or cause the failed operation to be replayed or republished.
   for (const [column, forged] of [["content", "forged notice"], ["thread_id", 987654]] as const) {
     try {
       f.db.query(`UPDATE messages SET ${column}=? WHERE rowid=?`).run(forged, notice.rowid);
-      expect(await f.terminal.getTerminal(input.operationId)).toMatchObject({ ok: false, error: { _tag: "corrupt_state" } });
+      expect(value(await f.terminal.getTerminal(input.operationId))).toEqual(committed);
+      expect(await f.runtime.settle(input)).toEqual(committed);
+      expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
     } finally { f.db.query(`UPDATE messages SET ${column}=? WHERE rowid=?`).run(notice[column], notice.rowid); }
   }
   await f.runtime.close(); f.runtime = await f.drain();
@@ -502,7 +506,7 @@ test("runtime: read-only session report uses committed native context and usage 
   await expect(f.runtime.readSessionReport({ ...binding, chatJid: "web:foreign" })).rejects.toThrow();
   await expect(f.runtime.readSessionReport({ ...binding, incarnation: "foreign" })).rejects.toThrow("Host binding conflict");
   let checks = 0;
-  f.hooks.resolveConversation = () => ++checks >= 3 ? -1 : binding.conversationId;
+  f.hooks.resolveConversation = () => ++checks >= 3 ? (-1 as ConversationId) : binding.conversationId;
   try { await expect(f.runtime.readSessionReport(binding)).rejects.toThrow("Host binding conflict"); }
   finally { f.hooks.resolveConversation = undefined; }
   expect(checks).toBe(3); expect(f.base.host.modelCalls).toBe(calls);

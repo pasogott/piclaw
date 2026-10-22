@@ -13,6 +13,7 @@ import { handleWebauthnRegisterStart, handleWebauthnRegisterFinish } from '../..
 import { handlePasskey } from '../../../../src/agent-control/handlers/passkey';
 import { handleAgentRoutes } from '../../../../src/channels/web/http/dispatch-agent';
 import { WEB_RUNTIME_CONFIG } from '../../../../src/core/config-web';
+import { addLogSink, removeLogSink, type LogRecord } from '../../../../src/utils/logger';
 const savedConfig = { passkeyMode: WEB_RUNTIME_CONFIG.passkeyMode, totpSecret: WEB_RUNTIME_CONFIG.totpSecret, trustProxy: WEB_RUNTIME_CONFIG.trustProxy };
 
 let restore: () => void, ws: ReturnType<typeof createTempWorkspace>;
@@ -165,6 +166,23 @@ test('missing Origin, auth-disabled access, oversized bodies and family mode fai
   mkdirSync(dirname(getConfigPath()), { recursive: true });
   writeFileSync(getConfigPath(), JSON.stringify({ domains: { access: { mode: 'family-shared' } } }));
   expect((await handler(request())).status).toBe(404);
+});
+
+test('invalid access configuration fails closed without exposing configuration contents', async () => {
+  key('laptop');
+  const records: LogRecord[] = [], sink = (record: LogRecord) => { records.push(record); };
+  mkdirSync(dirname(getConfigPath()), { recursive: true });
+  writeFileSync(getConfigPath(), '{"private-config-marker":');
+  addLogSink(sink);
+  try {
+    const response = await handler(request());
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('private-config-marker');
+    const record = records.find(record => record.operation === 'passkey_settings.invalid_access_config');
+    expect(record).toBeDefined();
+    expect(JSON.stringify(record)).not.toContain('private-config-marker');
+    expect(getDb().query('SELECT credential_id FROM webauthn_credentials').all()).toEqual([{ credential_id: 'laptop' }]);
+  } finally { removeLogSink(sink); }
 });
 
 test('legacy links and slash commands cannot enrol or remove credentials outside Settings', async () => {

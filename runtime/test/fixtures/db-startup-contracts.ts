@@ -31,7 +31,7 @@ Database.prototype.exec = function (sql: string) {
       throw new Error("Injected base-schema failure");
     }
   }
-  if (injectFailure && ["late-rollback", "existing-rollback"].includes(mode) && sql.includes('CREATE TABLE IF NOT EXISTS family_scheduled_publications (')) {
+  if (injectFailure && ["late-rollback", "existing-rollback"].includes(mode) && sql.includes('CREATE TABLE IF NOT EXISTS owned_fork_operations (')) {
     assert(this.inTransaction);exec.call(this, "CREATE TABLE fixture_partial (id INTEGER)");
     throw new Error('Injected late-schema failure');
   }

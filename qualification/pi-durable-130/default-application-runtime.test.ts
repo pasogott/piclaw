@@ -2371,7 +2371,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     const timelineBefore = root.query("SELECT id,chat_jid,content FROM messages ORDER BY id").all();
     const pending = await createDefaultApplicationRuntime(owner, async () => services);
     expect(JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all())).toBe(agentBytes);
-    assert.equal(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='pending-tool-upgrade'").get().state, "pending");
+    assert.deepEqual(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='pending-tool-upgrade'").get(), { state: "pending" });
     assert.deepEqual(root.query("SELECT id,chat_jid,content FROM messages ORDER BY id").all(), timelineBefore);
     assert.equal(calls, callsBefore);
     for (const spy of sdkSpies) spy.mockRestore();

@@ -125,7 +125,10 @@ export class BunSqliteDatabase implements SqliteDatabase {
       const deadline = Date.now() + 10_000;
       for (;;) {
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
-        try { this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN"); break; }
+        // Match the public Node adapter: reserve the writer before invoking SDK
+        // code, including unguarded stores. A deferred read-to-write upgrade can
+        // lose to a checkpoint and cannot safely replay its callback.
+        try { this.db.exec("BEGIN IMMEDIATE"); break; }
         catch (error) {
           if ((error as { code?: string }).code !== "SQLITE_BUSY" || Date.now() >= deadline) throw error;
           await new Promise(resolve => setTimeout(resolve, 25));
