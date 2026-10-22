@@ -1415,7 +1415,7 @@ for (const fails of [false, true]) test(`durable model command protects its capt
     acquireCommandProtection(chat) { expect(chat).toBe('web:model-protected'); events.push('protect'); return () => { events.push('release'); }; },
   });
   const result = facade.applyControlCommand('web:model-protected', { type: 'model', provider: 'synthetic', modelId: 'approved' });
-  if (fails) await expect(result).rejects.toBe(fault);
+  if (fails) expect(await result).toMatchObject({ status: 'error', message: 'model switch denied' });
   else expect(await result).toMatchObject({ status: 'success', message: 'Model set to synthetic/approved.' });
   expect(events).toEqual(['protect', 'set', 'release']);
   expect(lookups).toBe(1);
@@ -1493,4 +1493,15 @@ test("durable reset publishes its new zero context and never a pre-reset count",
     async reset() { tokens = 0; }, async readContextUsage() { return { tokens, contextWindow: 1000 }; } };
   const { facade } = createFacade({ getDurableSession: () => port });
   expect(await facade.applyControlCommand("web:reset", { type: "new_session", raw: "/new-session" })).toMatchObject({ status: "success", contextUsage: { tokens: 0, contextWindow: 1000, percent: 0, sessionGeneration: "reset-generation", tokensAreAuthoritative: true } });
+});
+
+
+test('durable thinking mutation returns a user-facing error and releases protection rather than escaping as HTTP 500', async () => {
+  const events: string[] = [];
+  const model = {provider:'synthetic',id:'reasoner',reasoning:true};
+  const {facade}=createFacade({getDurableSession:()=>({sessionId:'failure',branchId:'main',readPosition:async()=>null,
+    readModel:async()=> 'synthetic/reasoner',readThinkingLevel:async()=> 'off',setThinkingLevel:async()=>{events.push('set');throw Error('maintenance in progress');}}),
+    modelRegistry:{getAvailable:()=>[model]} as any,acquireCommandProtection(){events.push('protect');return ()=>{events.push('release');};}});
+  expect(await facade.applyControlCommand('web:thinking-failure',{type:'thinking',level:'high',raw:'/thinking high'})).toMatchObject({status:'error',message:'maintenance in progress'});
+  expect(events).toEqual(['protect','set','release']);
 });

@@ -505,42 +505,40 @@ export class HostConversationRuntime {
   }
   private async setSessionChoice(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<void> {
     this.fence();
-    const o = this.options;
-    const id = o.existingConversationIds.find(id => id === binding.conversationId);
-    if (binding.incarnation !== o.incarnation || id === undefined || o.conversationFor(binding.chatJid, binding.branchId) !== id) throw new Error("Host binding conflict");
-    if (!o.withIdleModelGuard) throw new Error("Idle model guard unavailable");
-    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    const o = this.options, copy = Object.freeze({ ...binding });
+    const id = o.existingConversationIds.find(id => id === copy.conversationId);
+    const check = () => {
+      this.fence();
+      if (copy.incarnation !== o.incarnation || id === undefined || o.conversationFor(copy.chatJid, copy.branchId) !== id) throw new Error("Host binding conflict");
+      if (this.changingModel) throw new Error("Runtime is not idle");
+    };
+    check();
     const choice = Object.freeze({ provider: model.provider, modelId: model.modelId });
     const target = o.harnessOptions.models.getModel(choice.provider, choice.modelId);
     if (!target || !Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
       !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw new Error("Model context unavailable");
     if (thinkingLevel !== undefined && !getSupportedThinkingLevels(target).includes(thinkingLevel as ModelThinkingLevel)) throw new Error("Unsupported thinking level");
-    this.changingModel = true;
-    const operation = (async () => {
-      const inspection = await this.harness.inspect(this.context); this.fence();
-      if (inspection.tasks.length || inspection.submissions.length) throw new Error("Runtime is not idle");
-      const conversation = await this.harness.conversation(id, this.context); this.fence();
+    // SDK configure changes the persisted conversation choice for the next
+    // request. A prepared/in-flight request retains its captured model/thinking.
+    // Do not require global idleness or stop/replay accepted work to select it.
+    // Tracking the observation still excludes destructive host maintenance.
+    await this.observe(async () => {
+      const conversation = await this.harness.conversation(id!, this.context); check();
       if (!conversation) throw new Error("Missing existing conversation");
-      const view = await conversation.context(this.context); this.fence();
-      const promptSectionBytes = await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel); this.fence();
-      await o.withIdleModelGuard!(() => conversation.commit(async tx => {
-        this.fence();
-        for (const conversationId of o.existingConversationIds) {
-          if ((await tx.doc(InboxDoc, conversationId)).items.length || (await tx.doc(LiveDoc, conversationId)).run) throw new Error("Runtime is not idle");
-        }
-        // Candidate-only admission bound, including read-only prompt preparation.
-        // The SDK still prepares the actual next request at its normal boundary.
-        const agent = await tx.doc(AgentDoc, id);
+      const view = await conversation.context(this.context); check();
+      const promptSectionBytes = await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel); check();
+      await conversation.commit(async tx => {
+        check();
+        const agent = await tx.doc(AgentDoc, id!);
         this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
         if (thinkingLevel !== undefined) {
           if (agent.model?.provider !== choice.provider || agent.model.modelId !== choice.modelId) throw new Error("Thinking model changed");
-          await configure(tx, id, { thinkingLevel: thinkingLevel as ModelThinkingLevel });
-        } else await configure(tx, id, { model: choice });
-        this.fence();
-      }, this.context));
-    })();
-    this.active.add(operation);
-    try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
+          await configure(tx, id!, { thinkingLevel: thinkingLevel as ModelThinkingLevel });
+        } else await configure(tx, id!, { model: choice });
+        check();
+      }, this.context);
+      check();
+    });
   }
   private async measurePromptSections(conversation: import("@earendil-works/pi-durable").Conversation, messages: readonly import("@earendil-works/pi-ai").Message[], model?: { provider: string; modelId: string }, thinkingLevel?: string): Promise<number> {
     const current = await conversation.agent(this.context); this.fence();
@@ -553,13 +551,13 @@ export class HostConversationRuntime {
   private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }, promptSectionBytes?: number): void {
     assertModelContextFits(messages, agent, target, this.options.harnessOptions.registry.snapshot(), promptSectionBytes);
   }
-  /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
+  /** Persist next-request selection without mutating the prepared request. */
   async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
     await this.setSessionChoice(binding, model);
   }
   async setSessionThinkingLevel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void> {
     this.fence();
-    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    if (this.changingModel) throw new Error("Runtime is not idle");
     const current = await this.readSessionModel(binding);
     const slash = current?.indexOf("/") ?? -1;
     if (!current || slash < 1) throw new Error("No model selected");
@@ -805,6 +803,23 @@ export class HostConversationRuntime {
    * input. Busy-chat lookup alone is never source authority. No new ledger. */
   captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
     return this.captureSource(conversationId, taskId, callId);
+  }
+  /** Tools receive an invocation-bound control handle, not a public observer.
+   * Open the read-only watch through the host, scoped to the exact live tool's
+   * task-owned child. No arbitrary child/history access or execution authority.
+   */
+  async watchOwnedDelegateChild(conversationId: ConversationId, taskId: TaskId, callId: string, childId: ConversationId, context: Context) {
+    const captured = await this.captureToolSource(conversationId, taskId, callId);
+    const record = await this.harness.commit(tx => tx.conversation(childId), context);
+    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    if (record?.owner?.conversationId !== conversationId || record.owner.taskId !== taskId) throw Error("Exact Delegate child ownership required");
+    const child = await this.harness.conversation(childId, context);
+    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    if (!child) throw Error("Missing owned Delegate child");
+    const watch = await child.watch(context);
+    try { this.fence(); this.assertCapturedSourceCurrent(captured.inputs); }
+    catch (error) { await watch.stop(); throw error; }
+    return watch;
   }
   /** Read-only beforeTool provenance: the SDK has not recorded execution intent yet. */
   async capturePendingToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {

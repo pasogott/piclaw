@@ -516,6 +516,8 @@ export class AgentRuntimeFacade {
         try {
           await port.setModel({ provider: selected.provider, modelId: selected.id });
           return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
+        } catch (error) {
+          return { status: "error", message: error instanceof Error ? error.message : "Model selection failed." };
         } finally { release?.(); }
       }
       if (command.type === "thinking") {
@@ -536,6 +538,8 @@ export class AgentRuntimeFacade {
             await port.setThinkingLevel!(level);
             const display = formatThinkingLevelForDisplay(level, model);
             return { status: "success", message: `Thinking level set to ${display}.`, thinking_level: level, thinking_level_label: display };
+          } catch (error) {
+            return { status: "error", message: error instanceof Error ? error.message : "Thinking selection failed." };
           } finally { release?.(); }
         }
         const level = await port.readThinkingLevel();
