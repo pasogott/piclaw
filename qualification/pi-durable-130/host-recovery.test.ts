@@ -125,7 +125,8 @@ for (const boundary of ["before-submit", "committed-ack-lost"] as const) {
       const cancelled = await reconstituteAcceptedWork(options);
       expect(cancelled.map(entry => entry.role)).toEqual(["primary", "intent"]);
       const cancellation = value(await f.ports.work.getOperation(f.incarnation))!.cancellation!;
-      for (const bad of [null, { kind: "message" }, { targetOperationId: "other" }, { state: "consumed" }]) {
+      const corruptions: readonly (Partial<AcceptedSourceSnapshot> | null)[] = [null, { kind: "message" }, { targetOperationId: "other" }, { state: "consumed" }];
+      for (const bad of corruptions) {
         await expect(reconstituteAcceptedWork({ ...options, work: {
           listOpenOperations: options.work.listOpenOperations.bind(options.work),
           getOperation: options.work.getOperation.bind(options.work),

@@ -38,11 +38,11 @@ describe("EF-S02 composition schema and construction hardening", () => {
       (
         database
           .query(
-            "SELECT count(*) n FROM sqlite_master WHERE type='table' AND name LIKE 'service_effect_s02_%'",
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'service_effect_s02_%' ORDER BY name",
           )
-          .get() as { n: number }
-      ).n,
-    ).toBe(3);
+          .all() as { name: string }[]
+      ),
+    ).toEqual([{ name: "service_effect_s02_commit_outbox" }, { name: "service_effect_s02_commits" }]);
     database.close();
   });
 

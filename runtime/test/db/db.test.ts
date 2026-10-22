@@ -676,7 +676,7 @@ test("initDatabase migrates legacy chat branch uniqueness so pruned handles can 
         chat_jid: "web:default:branch:new",
         agent_name: "reusable",
       });
-      console.log(JSON.stringify({
+      console.log("CHAT_BRANCH_MIGRATION_RESULT=" + JSON.stringify({
         agent_name: renamed.agent_name,
         resolved_chat_jid: db.getChatBranchByAgentName("reusable")?.chat_jid || null,
       }));
@@ -694,7 +694,10 @@ test("initDatabase migrates legacy chat branch uniqueness so pruned handles can 
     });
 
     expect(result.status).toBe(0);
-    const output = JSON.parse(result.stdout.trim().split("\n").filter(Boolean).pop() || "{}");
+    const prefix = "CHAT_BRANCH_MIGRATION_RESULT=";
+    const line = result.stdout.split("\n").find(line => line.startsWith(prefix));
+    expect(line).toBeDefined();
+    const output = JSON.parse(line!.slice(prefix.length));
     expect(output.agent_name).toBe("reusable");
     expect(output.resolved_chat_jid).toBe("web:default:branch:new");
   } finally {

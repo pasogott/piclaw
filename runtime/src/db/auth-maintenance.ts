@@ -1,6 +1,7 @@
 import type Database from "bun:sqlite";
 
-/** Delete expired or orphaned transient auth state. No factor, account or audit deletion. */
+/** Delete expired single-user sessions and legacy WebAuthn enrolments.
+ * Preserve factors, accounts, audits and retired per-account registration tables. */
 export function pruneExpiredAuthState(database: Database, now = Date.now()): Record<string, number> {
   if (!Number.isFinite(now)) throw new Error("Invalid authentication cleanup clock.");
   return database.transaction(() => {

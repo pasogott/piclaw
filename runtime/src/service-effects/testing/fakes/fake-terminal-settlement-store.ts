@@ -171,7 +171,6 @@ type FakeSettlementStatement =
   | "outbox_insert"
   | "outbox_decision_insert"
   | "insert_commit"
-  | "insert_message_snapshot"
   | "link_commit_outbox";
 
 class FakeAbort extends Error {
@@ -856,7 +855,6 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       commit,
     });
     this.afterStatement("insert_commit");
-    if (messageRowId !== null) this.afterStatement("insert_message_snapshot");
     for (const _intent of request.outboxIntents) {
       void _intent;
       this.afterStatement("link_commit_outbox");

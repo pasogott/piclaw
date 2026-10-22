@@ -44,7 +44,7 @@ try {
   const result = await handlePickerPins(request("POST", { action: "set", kind: "model", key: "test/model", pinned: true }), channel);
   assert.equal(result.status, 200); assert.equal(events.length, 1);
   assert.equal((db.query("PRAGMA busy_timeout").get() as {timeout:number}).timeout,5000);
-  const actor: AuthenticatedPrincipal = { kind: "user", mode: "family-shared", userId: "missing", username: "missing", displayName: "Missing", role: "member", homeChatJid: null, authentication: { method: "passkey", sessionId: "missing-login", expiresAt: null } };
+  const actor: AuthenticatedPrincipal = { kind: "user", mode: "single-user", userId: "missing", username: "missing", displayName: "Missing", role: "admin", homeChatJid: null, authentication: { method: "passkey", sessionId: "missing-login", expiresAt: null } };
   assert.equal((await handlePickerPins(request(), channel, actor)).status, 409);
   assert.equal((await handlePickerPins(request("GET", undefined, { "x-piclaw-account-id": actor.userId, "x-piclaw-login-id": actor.authentication.sessionId! }), channel, actor)).status, 403);
   assert.equal((await handlePickerPins(request("POST", { action: "set", kind: "model", key: "test/model", pinned: false }, { Origin: "https://evil.invalid" }), channel)).status, 403);
@@ -78,12 +78,11 @@ try {
     finally { db.query = originalQuery; }
   }
   // A valid account must be rechecked after reading the asynchronous POST body.
-  const { createUser, updateUser } = await import("../../src/db/users.js");
+  const { getUser } = await import("../../src/db/users.js");
   const { createWebSession } = await import("../../src/db/web-sessions.js");
-  const user = createUser(db, { username: "contention-user", displayName: "Contention", role: "member" });
-  updateUser(db, user.id, { enabled: true });
+  const user = getUser(db, "default")!;
   const login = createWebSession("synthetic-contention-login", user.id, 3600, "passkey");
-  const bound: AuthenticatedPrincipal = { ...actor, userId: user.id, username: user.username, displayName: user.display_name, authentication: { method: "passkey", sessionId: login.session_id!, expiresAt: login.expires_at } };
+  const bound: AuthenticatedPrincipal = { ...actor, userId: user.id, username: user.username, displayName: user.display_name, role: user.role, homeChatJid: user.home_chat_jid, authentication: { method: "passkey", sessionId: login.session_id!, expiresAt: login.expires_at } };
   const headers = { "x-piclaw-account-id": user.id, "x-piclaw-login-id": login.session_id! };
   assert.equal((await handlePickerPins(request("GET", undefined, headers), channel, bound)).status, 200);
   const beforePost = readPickerPins(db, "user:" + user.id), broadcastCount = events.length;
