@@ -61,6 +61,11 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
         bindings: f.ports.bindings,
         harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
         existingConversationIds: [f.base.root.id], conversationFor: () => f.base.root.id,
+        authorizeScheduling(inspection) {
+          f.owner.assert();
+          if (!f.permit || inspection.submissions.some(s => s.conversationId !== f.base.root.id ||
+            ![f.primaryRequestId, requestId].includes(s.requestId!))) throw Error('Unknown recovered authority');
+        },
         putAnswer: f.putAnswer, sessionId: f.incarnation, lane: 'main', generation: f.generation, now: () => at },
       recovery: { manifest: [{ chatJid: f.chatJid, branchId: 'main', conversationId: f.base.root.id }],
         work: f.ports.work,
@@ -100,9 +105,13 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     const entered = barrier(); f.entryObserved = entered;
     queue.enqueue(async () => { await processChat(channel, f.chatJid, 'default'); finished.release(); }, 'recovered-primary', lane);
     queue.enqueue(async () => { next++; }, 'behind-primary', lane);
+    // The native worker can join the exact committed SDK intent even before
+    // its lost host ACK is repaired. It must not fabricate a legacy inflight run.
+    await entered.promise;
+    const pending = dispatch.waitForPending({ chatJid: f.chatJid, messageId: row.id, rowId: row.rowId });
     await observing.promise;
     expect(queue.isLaneBusy(lane)).toBe(true); expect(next).toBe(0); expect(releases).toBe(0);
-    expect(getInflightRuns().find(x => x.chatJid === f.chatJid)?.messageId).toBe(row.id);
+    expect(getInflightRuns().find(x => x.chatJid === f.chatJid)).toBeUndefined();
     expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(0);
     await entered.promise; // The worker's explicit wait grants progress; observe its entry before repair.
     const workerEntries = f.providerEntries;
@@ -117,6 +126,7 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     for (let n = 0; n < 500 && !(await controller.runtime.settle(primary)); n++) await Bun.sleep(2);
     expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(1);
     recovery.onReconcile(); await finished.promise;
+    expect(await pending).toBe('settled');
     for (let n = 0; n < 100 && !next; n++) await Bun.sleep(1);
     expect(next).toBe(1); expect(releases).toBe(1); expect(legacy).toBe(0);
     expect(getInflightRuns().filter(x => x.chatJid === f.chatJid)).toEqual([]);

@@ -2,7 +2,8 @@ import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
 import { expect } from "bun:test";
 const applicationTest = isolatedApplicationTest(import.meta.url);
-import { cpSync, symlinkSync } from "node:fs";
+import { cpSync, symlinkSync, mkdirSync, readdirSync, existsSync, realpathSync } from "node:fs";
+import { repoRoot } from "./src/repo-root.js";
 import { DATA_DIR } from "../../runtime/src/core/config.js";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -22,11 +23,24 @@ applicationTest("Remote Peer actual factory uses network-free transport, execute
   const source = process.env.DURABLE_ADDONS_ROOT!;
   const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-remote-peer");
   cpSync(join(source, "addons/remote-peer"), pkg, { recursive: true, filter: p => !p.split("/").includes("node_modules") });
-  symlinkSync(join(source, "node_modules"), join(pkg, "node_modules"));
+  const dependencies = join(pkg, "node_modules"); mkdirSync(dependencies, { recursive: true });
+  const catalogModules = realpathSync(process.env.DURABLE_CATALOG_DEPENDENCIES ?? join(source, "node_modules"));
+  for (const modules of [realpathSync(join(repoRoot("CORE"), "node_modules")), catalogModules]) {
+    for (const entry of readdirSync(modules)) {
+      if (entry.startsWith(".")) continue;
+      if (entry.startsWith("@")) {
+        mkdirSync(join(dependencies, entry), { recursive: true });
+        for (const child of readdirSync(join(modules, entry))) {
+          const target = join(dependencies, entry, child);
+          if (!existsSync(target)) symlinkSync(join(modules, entry, child), target);
+        }
+      } else if (!existsSync(join(dependencies, entry))) symlinkSync(join(modules, entry), join(dependencies, entry));
+    }
+  }
   process.env.PICLAW_DB_IN_MEMORY = "0"; initDatabase();
   const owner = acquireRuntimeLock({ lockPath: join(workspace, "peer-owner.lock"), strictOwnership: true, disabled: false });
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 100000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  const iroh = await import(join(source, "node_modules/@number0/iroh/index.js"));
+  const iroh = await import(join(catalogModules, "@number0/iroh/index.js"));
   const remoteId = iroh.SecretKey.fromBytes(Array(32).fill(7)).public();
   const remoteTicket = iroh.EndpointTicket.fromAddr(new iroh.EndpointAddr(remoteId)).toString();
   let ingress: any;
@@ -60,7 +74,7 @@ applicationTest("Remote Peer actual factory uses network-free transport, execute
   state.saveConfig({ ...state.config(), enabled: true, mdnsEnabled: false }); state.close();
   let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>> | undefined;
   try {
-    backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, peerOptions);
+    backend = await createDefaultApplicationRuntime(owner, async () => services, peerOptions);
     expect(calls).toBe(0);
     const base = createRuntimeBaseServices({ dataDir: workspace });
     const pool = new AgentPool({ credentialStore: createTestCredentialStore({}), modelRuntime: services.modelRuntime, modelRegistry: services.modelRegistry, ...backend.sessionOptions } as any);
@@ -123,7 +137,7 @@ applicationTest("Remote Peer actual factory uses network-free transport, execute
     await expect(ingress(remoteId.toString(), { op: "message", body: { ...body, epoch: "stale" } }, new Uint8Array())).rejects.toThrow();
     await backend.close(); backend = undefined;
     expect(closes).toBe(1);
-    backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, peerOptions);
+    backend = await createDefaultApplicationRuntime(owner, async () => services, peerOptions);
     expect(calls).toBeGreaterThanOrEqual(6);
     expect(getDeferredQueuedFollowups("web:default")[0]!.source_id).toBe(queued[0]!.source_id);
     await backend.close(); backend = undefined;

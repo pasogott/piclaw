@@ -56,6 +56,11 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
     const lock = acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true, disabled: false });
     initDatabase(); const db = getDb(); db.exec("PRAGMA foreign_keys=ON");
     const path = (db.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(r => r.name === "main")!.file;
+    // Historical account data must remain part of the captured frontier when present.
+    if (scenario.startsWith("host-preferences")) db.exec(`CREATE TABLE user_preferences (
+      user_id TEXT PRIMARY KEY REFERENCES users(id), revision INTEGER NOT NULL CHECK(revision>=1),
+      theme TEXT NOT NULL CHECK(theme IN ('system','light','dark')), response_guidance TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;`);
     installTerminalSettlementCompositionSchema(db);
     const policy = await openFixture({ acquired: true }); await policy.close();
     const model = { id: "synthetic", name: "Synthetic", provider: "qualification", api: "openai-completions" as const, baseUrl: "https://invalid.invalid", reasoning: false, input: ["text" as const], contextWindow: 100000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };

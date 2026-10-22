@@ -64,6 +64,11 @@ async function setup(sharedDatabase = false, mainOnly = false, historicalBaselin
       .run(chatJid, "2026-01-01", JSON.stringify([{ id: "original-queued", content: "untouched queue" }]));
     db.query("INSERT INTO users(id,username,display_name,role,enabled,created_at,updated_at) VALUES (?,?,?,'member',1,?,?)")
       .run(chatJid, chatJid, "Existing host user", "2026-01-01", "2026-01-01");
+    // Reproduce a pre-retirement store; fresh production schemas no longer create this table.
+    db.exec(`CREATE TABLE user_preferences (
+      user_id TEXT PRIMARY KEY REFERENCES users(id), revision INTEGER NOT NULL CHECK(revision>=1),
+      theme TEXT NOT NULL CHECK(theme IN ('system','light','dark')), response_guidance TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;`);
     db.query("INSERT INTO user_preferences VALUES (?,?,?,?,?)").run(chatJid, 1, "dark", "original guidance", "2026-01-01");
     const message = db.query("SELECT rowid FROM messages WHERE id=? AND chat_jid=?").get(user, chatJid) as { rowid: number };
     const media = db.query("INSERT INTO media(filename,content_type,data,metadata) VALUES (?,?,?,?) RETURNING id")

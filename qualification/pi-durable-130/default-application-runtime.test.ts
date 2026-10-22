@@ -139,6 +139,29 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
   const owner = acquireRuntimeLock({ lockPath: join(workspace, "default-owner.lock"), strictOwnership: true, disabled: false });
   initDatabase();
   let root = getDb(); root.exec("PRAGMA foreign_keys=ON");
+  // These fixtures revoke request/tool authority, not a canonical operator cancellation.
+  // A committed SDK model_error now terminates once with a private-data-free notice.
+  // Genuine lost harness authority and live/reopened work must remain pending.
+  const expectedFailedTurn = new Set<string>([
+    "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown",
+    "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-codemode-cancel", "native-codemode-plan-cancel", "native-codemode-cancel",
+    "native-codemode-drawio-cancel", "native-drawio-cancel", "native-codemode-office-viewer-cancel", "native-office-viewer-cancel",
+    "native-codemode-editable-table-cancel", "native-editable-table-revoked", "native-codemode-code-review-cancel",
+    "native-delegate-standard-revoke", "native-delegate-revoke-cap",
+  ]).has(scenario);
+  const assertFailedTurn = () => {
+    const source = root.query("SELECT chat_jid,source_seq,state FROM service_effect_s01_sources WHERE source_id='factory-input'").get() as {chat_jid:string;source_seq:number;state:string};
+    expect(source.state).toBe("consumed");
+    const operation = root.query("SELECT operation_id,phase,terminal_disposition,terminal_error_code FROM service_effect_s01_operations WHERE chat_jid=? AND primary_source_seq=?").get(source.chat_jid,source.source_seq) as {operation_id:string};
+    expect(operation).toMatchObject({phase:"terminal",terminal_disposition:"failed",terminal_error_code:"model_error"});
+    expect(root.query("SELECT disposition FROM service_effect_s02_commits WHERE operation_id=?").all(operation.operation_id)).toEqual([{disposition:"failed"}]);
+    expect(root.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?").get(source.chat_jid)).toEqual({active_operation_id:null});
+    const notices = root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(source.chat_jid) as {content:string}[];
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.content).toStartWith("**Turn failed**");
+    expect(notices[0]!.content).toContain("will not be retried automatically");
+  };
+
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
@@ -747,7 +770,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     expectedToolSource = item.source_id!;
     const dispatchResult = await bound.dispatchAcceptedInput!("web:default", item.source_id!, stored!.id)!();
     expect(dispatchResult).toBe("settled");
-    expect(wakes).toEqual(["web:default", "web:default"]);
+    expect(wakes).toEqual(["web:default", "web:default", "web:default"]);
     expect(calls).toBeGreaterThan(0);
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(1);
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "active", no_progress_turns: 1 });
@@ -1082,7 +1105,8 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
         ? `try { await tools.code_review(${JSON.stringify(reply)}); } catch {} store("revoked-review", {secret:"MUST_NOT_PERSIST"}); console.log("done");`
         : `const thread = await tools.code_review(${ownRead}); const reply = await tools.code_review(${JSON.stringify(reply)}); let denied = false; try { await tools.code_review(${otherRead}); } catch { denied = true; } console.log({thread:JSON.parse(thread).messages.map(m=>m.body),reply:JSON.parse(reply),denied});` } }];
       try {
-        expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row)!()).toBe(codemodeReviewCancelled ? "pending" : "settled");
+        expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row)!()).toBe("settled");
+        if (codemodeReviewCancelled) assertFailedTurn();
         expect(calls).toBe(codemodeReviewCancelled ? 1 : 2);
         expect(toolSequence).toEqual([]);
         expect(codemodeNestedCaptures).toBe(codemodeReviewCancelled ? 1 : 3);
@@ -1094,10 +1118,10 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
           expect(service.getThread(who, thread.threadId)).toEqual(beforeThread);
           expect(service.getThread(who, thread.threadId).messages).toHaveLength(1);
           expect(service.inspectDispatch(who, submitted.dispatchId)).toEqual(beforeDispatch);
-          expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
-          expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-          expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
-          expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+          expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+          expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "consumed" });
+          assertFailedTurn();
+          expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
           expect(observedResults.size).toBe(0);
         } else {
           const result = observedResults.get("factory-tool-1");
@@ -1335,6 +1359,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   const dispatchOutcome = await dispatch!();
+  if (expectedFailedTurn) { expect(dispatchOutcome).toBe("settled"); assertFailedTurn(); }
   if (scenario === "native-events") {
     expect(dispatchOutcome).toBe("settled");
     expect(nativeEvents).toHaveLength(1);
@@ -1386,22 +1411,22 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     closeDatabase(); owner.release(); return;
   }
   if (parentAccounting && (accountingAuthDenied || accountingUnknown || accountingRotate || accountingStorageFailure)) {
-    expect(dispatchOutcome).toBe("pending");
+    expect(dispatchOutcome).toBe(expectedFailedTurn ? "settled" : "pending");
     expect(calls).toBe(accountingUnknown || accountingStorageFailure ? 1 : 0);
     // Cleanup classifies the original reservation; never rebind to rotated auth
     // or replace a held expense with a free fallback request.
     expect(root.query("SELECT id,work_id,account_ref,binding_sha256,amount_microusd FROM budget_request_reservations").all()).toEqual([originalParentReservation]);
     if (accountingUnknown || accountingStorageFailure) expect((originalParentReservation as { amount_microusd: number }).amount_microusd).toBeGreaterThan(0);
     expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: accountingUnknown || accountingStorageFailure ? "unresolved" : "released" }]);
-    expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: "active" }]);
-    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
-    expect(root.query("SELECT source_id FROM service_effect_s01_sources WHERE state='claimed'").all()).toHaveLength(1);
+    expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: accountingUnknown || accountingStorageFailure ? "active" : "completed" }]);
+    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
+    expect(root.query("SELECT source_id FROM service_effect_s01_sources WHERE state='claimed'").all()).toHaveLength(expectedFailedTurn ? 0 : 1);
     if (accountingStorageFailure) expect(root.query("SELECT invocation_id FROM token_usage WHERE invocation_id IS NOT NULL").all()).toHaveLength(0);
     backend.stop(); await backend.close();
     if (accountingStorageFailure) {
       closeDatabase(); initDatabase(); root = getDb();
       expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: "unresolved" }]);
-      expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: "active" }]);
+      expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: accountingUnknown || accountingStorageFailure ? "active" : "completed" }]);
       expect(root.query("SELECT invocation_id FROM token_usage WHERE invocation_id IS NOT NULL").all()).toHaveLength(0);
     }
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
@@ -1433,9 +1458,9 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     closeDatabase(); owner.release(); return;
   }
   if (scenario === "native-parent-budget-cap" || scenario === "native-parent-budget-auth-cap") {
-    expect(dispatchOutcome).toBe("pending");
-    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    expect(dispatchOutcome).toBe(expectedFailedTurn ? "settled" : "pending");
+    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
+    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
     expect(calls).toBe(0);
     expect(observedResults.size).toBe(0);
     expect(root.query("SELECT 1 FROM budget_caps WHERE enabled=1").get()).not.toBeNull();
@@ -1446,7 +1471,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
   }
   if (codemodePlanCancelled || mcpCancelled || mcpConfigChanged || mcpCatalogChanged || mcpDisconnected || scenario === "native-codemode-cancel" || scenario === "native-codemode-harness") {
     if (mcpCancelled || mcpConfigChanged) expect(existsSync(mcpMarker)).toBe(false);
-    expect(dispatchOutcome).toBe(mcpConfigChanged || mcpCatalogChanged || mcpDisconnected ? "settled" : "pending");
+    expect(dispatchOutcome).toBe(expectedFailedTurn || mcpConfigChanged || mcpCatalogChanged || mcpDisconnected ? "settled" : "pending");
     expect(codemodeNestedCaptures).toBe(mcpCatalogChanged || mcpDisconnected ? 0 : 1);
     if (mcpCatalogChanged || mcpDisconnected) expect(readFileSync(mcpMarker, "utf8")).toBe("call\n");
     if (codemodePlanCancelled) {
@@ -1454,7 +1479,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
       expect(realToolCaptures).toBe(2);
       expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [ ] NATIVE_PLAN_OLD" });
       expect(root.query("SELECT scope_key FROM extension_kv WHERE extension_id='plan-sidebar'").all()).toEqual([{ scope_key: "web:default" }]);
-      expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+      expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     }
     expect(existsSync(join(workspace, "codemode-forbidden.txt"))).toBe(false);
@@ -1467,9 +1492,9 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
       expect(JSON.stringify([...observedResults.values()])).not.toContain("OWNED_MCP_SENTINEL");
       if (mcpCatalogChanged) expect(JSON.stringify([...observedResults.values()])).not.toContain("MCP_CATALOG_CHANGED");
     } else {
-      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-      expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: scenario === "native-codemode-harness" ? "executing" : "cancelling" });
-      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
+      if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: scenario === "native-codemode-harness" ? "executing" : "cancelling" });
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
       expect(observedResults.size).toBe(0);
     }
     backend.stop(); await backend.close();
@@ -1520,7 +1545,7 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     closeDatabase(); owner.release(); return;
   }
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
-  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled || scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-standard-revoke" ? "pending" : "settled");
+  expect(dispatchOutcome).toBe(!expectedFailedTurn && (tableCancelled || officeCancelled || drawioCancelled || scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-standard-revoke") ? "pending" : "settled");
   if (nativeDrawio) {
     expect(realToolCaptures).toBe(codemodeDrawio ? drawioCancelled ? 2 : 3 : drawioCancelled ? 1 : 2);
     if (codemodeDrawio) {
@@ -1535,15 +1560,15 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     if (drawioCancelled) {
       expect(existsSync(join(workspace, drawioPath))).toBe(false);
       if (codemodeDrawio) {
-        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
-        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
         const stores = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
         expect(JSON.stringify(stores)).not.toContain("revoked-drawio");
         expect(JSON.stringify(stores)).not.toContain("MUST_NOT_PERSIST");
       }
       expect(observedResults.size).toBe(0);
-      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
     } else {
       expect(readFileSync(join(workspace, drawioPath), "utf8")).toContain("<mxfile");
       expect(observedResults.get("factory-tool-1")?.isError).not.toBe(true);
@@ -1596,11 +1621,11 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     if (officeCancelled) {
       expect(observedResults.size).toBe(0);
       expect(records).not.toContain("Office viewer URL:");
-      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
       if (codemodeOffice) {
-        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
-        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
+        if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
         const stores = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
         expect(JSON.stringify(stores)).not.toContain("revoked-office");
         expect(JSON.stringify(stores)).not.toContain("MUST_NOT_PERSIST");
@@ -1644,8 +1669,8 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
       expect(childRequests).toBe(revokeDelegate ? 1 : 4);
       if (revokeDelegate) {
         expect(calls).toBe(2);
-        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
-        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
       }
       const writes = [...observedResults.values()].filter(result => result.toolName === "write");
       expect(writes).toHaveLength(revokeDelegate ? 0 : 2);
@@ -1675,8 +1700,8 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
       expect(planRequests.join("\n")).not.toContain(sentinel);
       if (capped) {
         expect(observedResults.size).toBe(0);
-        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
-        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
         captureSpies.forEach(spy => spy.mockRestore());
         await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
         sdkSpies.forEach(spy => spy.mockRestore()); return;
@@ -1736,15 +1761,15 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     if (tableCancelled) {
       expect(observedResults.size).toBe(0);
       if (codemodeTableCancelled) {
-        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
-        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
-        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
+        if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
         const stores = JSON.stringify(root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all());
         expect(stores).not.toContain("revoked-table");
         expect(stores).not.toContain("MUST_NOT_PERSIST");
       }
       expect(root.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=? AND terminal_disposition='completed'").all(tableChat)).toHaveLength(0);
-      expect(root.query("SELECT id FROM messages WHERE chat_jid=? AND is_bot_message=1").all(tableChat)).toHaveLength(0);
+      expect(root.query("SELECT id FROM messages WHERE chat_jid=? AND is_bot_message=1").all(tableChat)).toHaveLength(expectedFailedTurn ? 1 : 0);
     } else expect(!!observedResults.get("factory-tool-1")?.isError).toBe(denied);
     if (!denied) {
       if (codemodeTable) {

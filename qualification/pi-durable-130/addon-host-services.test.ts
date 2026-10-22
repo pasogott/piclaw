@@ -41,7 +41,7 @@ for (const [addon, pin] of Object.entries(sources)) for (const file of pin.files
 }
 const path = (addon: string, file: string) => resolve(copy, "addons", addon, file + ".ts");
 expect(existsSync(join(copy, "node_modules"))).toBe(false);
-expect(createRequire(path("remote-peer", "transport")).resolve("@number0/iroh/index.js")).toStartWith(resolve(import.meta.dir, "node_modules"));
+expect(createRequire(path("remote-peer", "transport")).resolve("@number0/iroh/index.js")).toStartWith(realpathSync(resolve(import.meta.dir, "node_modules")) + "/");
 expect(import.meta.resolve("@earendil-works/pi-coding-agent", path("code-review", "index"))).toStartWith(pathToFileURL(realpathSync(resolve(import.meta.dir, "../../node_modules"))).href + "/");
 
 // Raw denial checks and public durable graph; no authentication/network proof.

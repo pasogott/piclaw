@@ -1,4 +1,6 @@
-# #1650 acceptance — 19 October 2026
+# Historical #1650 acceptance — 19 October 2026
+
+The [22 October assessment](pi-durable-130-acceptance-current-20261022.md) supersedes this page's current-state claims. Source revisions, counts and gaps below retain their dated scope; no current operational state follows from them.
 
 The implementation is incomplete. Native Goal and soft token-budget wrap-up are
 adopted in source. Legacy deadline checkpoints, general exact running cancellation,

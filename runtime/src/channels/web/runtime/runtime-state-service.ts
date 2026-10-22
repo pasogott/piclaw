@@ -210,7 +210,7 @@ export class WebChannelRuntimeStateService {
     const laneBusy = this.callbacks.isChatLaneBusy?.(chatJid) === true;
     // Worker cleanup can outlive terminal publication. A busy lane alone is
     // not an active durable model turn and must not resurrect Stop/Working.
-    const nativeTaskRunning = laneBusy && saved?.type === "intent" && saved.intent_key === "native_task";
+    const nativeTaskRunning = laneBusy && saved?.type === "intent" && ["native_task", "compaction", "session_rotation"].includes(String(saved.intent_key));
     if (operation || queued || nativeTaskRunning) {
       const active = saved && saved.type !== "done" && saved.type !== "error" ? saved : {};
       return { ...active, chat_jid: chatJid, type: active.type ?? "thinking", state: "active", source: "durable_runtime",

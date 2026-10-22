@@ -1,4 +1,4 @@
-> Superseded on 17 October 2026 by [#1650 acceptance at 7315c221e](pi-durable-130-acceptance-current-20261017.md), which contains the single current 45-row assessment. The body below preserves the historical `87efd0342` assessment and subsequent dated follow-ups. Its missing-registration/default-selection/controller statements do not describe current source.
+> Current assessment: [#1650 acceptance — 22 October 2026](pi-durable-130-acceptance-current-20261022.md), including current native controls, family retirement, preservation and remaining acceptance. The body below preserves the historical `87efd0342` assessment and subsequent dated follow-ups; its earlier missing-controller/default-selection claims and CI totals do not describe current source.
 
 # Historical #1650 acceptance gaps at 87efd0342
 

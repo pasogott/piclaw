@@ -81,20 +81,23 @@ test("owner check inside facade transaction rolls back token change AND candidat
   } finally { await db.close(); owner.releaseAfterClose(); owner.closeConnection(); }
 }));
 
-test("diagnostic: contender reserved lock overlaps acquired owner's deferred storage migration", () => fixture(async path => {
+test("contender reservation yields before owned storage migration without changing ownership", () => fixture(async path => {
   const owner = TestOwner.acquire(path);
   const contender = new Database(path, { strict: true });
   const db = new OwnedSqlite(owner);
+  let release: ReturnType<typeof setTimeout> | undefined;
   try {
     contender.exec("BEGIN IMMEDIATE");
     contender.query("SELECT * FROM qualification_process_owner").get();
-    let failure: unknown;
-    try { await SqliteStorage.open(db); } catch (error) { failure = error; }
-    console.log(JSON.stringify({ diagnostic: "contender-held-BEGIN-IMMEDIATE", error: String(failure),
-      stack: failure instanceof Error ? failure.stack : undefined }));
-    expect(String(failure)).toContain("database is locked");
+    release = setTimeout(() => contender.exec("ROLLBACK"), 50);
+    const storage = await SqliteStorage.open(db);
+    expect(contender.inTransaction).toBe(false);
+    expect(() => owner.assert()).not.toThrow();
+    await storage.close(context);
   } finally {
-    contender.exec("ROLLBACK"); contender.close(); await db.close(); owner.releaseAfterClose(); owner.closeConnection();
+    clearTimeout(release);
+    if (contender.inTransaction) contender.exec("ROLLBACK");
+    contender.close(); await db.close(); owner.releaseAfterClose(); owner.closeConnection();
   }
 }));
 

@@ -728,7 +728,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
            check();
            const projection = inputProjection;
            if (!projection) throw Error("Application input projection unavailable");
-           const steering = getAcceptedQueuedSteering(receipt.chatJid, check);
+           const checkProjection = () => { check(); if (inputProjection !== projection) throw Error("Application input projection detached"); };
+           const steering = getAcceptedQueuedSteering(receipt.chatJid, checkProjection);
            if (!steering) return { ...receipt, mode: "new_input" as const };
            const accepted = await steering.accept(receipt.rowId);
            // Native timeline surface, after the materialization transaction committed.
