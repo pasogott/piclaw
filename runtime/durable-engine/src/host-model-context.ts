@@ -37,5 +37,9 @@ export function assertModelContextFits(messages: readonly Message[], agent: unkn
   const usage = messages.reduce((max, message) => message.role === "assistant"
     ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
   if (messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image"))) throw Error("Non-text context overhead unavailable");
-  if (!Number.isFinite(usage) || Math.max(bytes, usage) + overhead + 8192 + target.maxTokens > target.contextWindow) throw Error("Candidate context bound exceeded; compact first");
+  if (!Number.isFinite(usage) || Math.max(bytes, usage) + overhead + 8192 + target.maxTokens > target.contextWindow) {
+    // Numeric-only diagnostics explain conservative admission without exposing
+    // prompts, tool arguments, credentials or opaque reasoning signatures.
+    throw Error(`Candidate context bound exceeded; compact first (serialized input bytes=${bytes}, reported tokens=${usage}, dynamic prompt bytes=${overhead}, reserve=8192, output budget=${target.maxTokens}, context window=${target.contextWindow})`);
+  }
 }
