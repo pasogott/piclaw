@@ -4558,6 +4558,7 @@ test("processChat broadcasts context usage after deferred compact command materi
     contextWindow: 1000,
     percent: 22.2,
     sessionGeneration: "session-compact",
+    contextUpdate: "replace",
   });
   expect(broadcasts).toContainEqual(expect.objectContaining({
     event: "agent_status",
@@ -4628,6 +4629,7 @@ test("processChat replaces a null-token compact result with live pool usage", as
     contextWindow: 200000,
     percent: 10.8515,
     sessionGeneration: "session-compact-live",
+    contextUpdate: "replace",
   });
   expect(broadcasts).toContainEqual(expect.objectContaining({
     event: "agent_status",

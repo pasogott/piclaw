@@ -71,7 +71,7 @@ export async function finalizeSuccessfulProcessChatRun(options: ProcessChatFinal
   const generationChanged = Boolean(sessionGeneration && storedGeneration && storedGeneration !== sessionGeneration);
   const contextReset = Boolean(sessionGeneration && (staleUsage || generationChanged));
   const boundaryUsage = sessionGeneration
-    ? { tokens: null, contextWindow: null, percent: null, sessionGeneration }
+    ? { tokens: null, contextWindow: null, percent: null, sessionGeneration, contextUpdate: "replace" }
     : null;
 
   if (contextReset && boundaryUsage) {
@@ -83,6 +83,7 @@ export async function finalizeSuccessfulProcessChatRun(options: ProcessChatFinal
       contextWindow: contextUsage?.contextWindow ?? null,
       percent: contextUsage?.percent ?? null,
       sessionGeneration,
+      contextUpdate: "replace",
     });
   }
   options.emitter.status({
@@ -100,6 +101,7 @@ export async function finalizeSuccessfulProcessChatRun(options: ProcessChatFinal
           contextWindow: contextUsage?.contextWindow ?? null,
           percent: contextUsage?.percent ?? null,
           sessionGeneration,
+          contextUpdate: "replace",
         }
         : null,
     recovery: options.recovery,

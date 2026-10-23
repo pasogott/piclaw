@@ -288,6 +288,7 @@ describe("process chat control runtime", () => {
       contextWindow: null,
       percent: null,
       sessionGeneration: "session-new",
+      contextUpdate: "replace",
       reset: true,
     }]);
     expect(statusUpdates).toHaveLength(3);

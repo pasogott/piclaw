@@ -20,7 +20,8 @@ import {
   getIdentityConfig,
   getRoutingConfig,
 } from "../../../core/config.js";
-import { parseControlCommand } from "../../../agent-control/index.js";
+import { parseControlCommand, type AgentControlResult } from "../../../agent-control/index.js";
+import { publicContextUsage } from "../context-usage.js";
 import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
 import {
   RECOVERY_CONTINUATION_PROMPT,
@@ -1305,11 +1306,11 @@ async function handleAgentMessageInScope(
   };
 
   const publishCommandContextUsage = async (
-    result: { contextUsage?: { tokens: number | null; contextWindow: number | null; percent: number | null; estimated?: boolean; source?: string; phase?: string } },
+    result: Pick<AgentControlResult, "contextUsage">,
     payload: { threadId: string | number | null; turnId: string },
   ): Promise<void> => {
     let contextUsage = result.contextUsage;
-    if (contextUsage?.tokens === null || contextUsage?.tokens === undefined) {
+    if (!contextUsage?.tokensAreAuthoritative && (contextUsage?.tokens === null || contextUsage?.tokens === undefined)) {
       const current = typeof channel.agentPool.getContextUsageForChat === "function"
         ? await channel.agentPool.getContextUsageForChat(chatJid).catch(() => null)
         : null;
@@ -1318,12 +1319,13 @@ async function handleAgentMessageInScope(
           tokens: current.tokens,
           contextWindow: current.contextWindow,
           percent: current.percent,
+          ...(typeof current.sessionGeneration === "string" ? { sessionGeneration: current.sessionGeneration } : {}),
           source: "agent_pool",
           phase: "after_command",
         };
       }
     }
-    if (!contextUsage || contextUsage.tokens === null) return;
+    if (!contextUsage || contextUsage.tokens === null && !contextUsage.tokensAreAuthoritative) return;
     const contextUsageRecord = contextUsage as unknown as { sessionGeneration?: unknown };
     const usageGeneration = typeof contextUsageRecord.sessionGeneration === "string"
       ? contextUsageRecord.sessionGeneration
@@ -1338,6 +1340,7 @@ async function handleAgentMessageInScope(
       contextWindow: contextUsage.contextWindow,
       percent: contextUsage.percent,
       ...(sessionGeneration ? { sessionGeneration } : {}),
+      contextUpdate: "replace",
     };
     const statusUsage = {
       ...persistedUsage,
@@ -1450,7 +1453,7 @@ async function handleAgentMessageInScope(
     const commandTurnId = createUuid("turn");
     const commandTitle = content.trim().split(/\s+/, 1)[0] || "command";
     const isCompactCommand = command.type === "compact";
-    const isSessionRotateCommand = command.type === "session_rotate";
+    const isSessionRotateCommand = command.type === "session_rotate" || command.type === "new_session";
     if (isCompactCommand || isSessionRotateCommand) {
       // Claim before model lookup can yield; later metadata must retain ownership
       // and the original timer rather than claiming over a newer command.
@@ -1497,6 +1500,7 @@ async function handleAgentMessageInScope(
         contextWindow: null,
         percent: null,
         sessionGeneration: result.sessionGeneration,
+        contextUpdate: "replace",
       };
       channel.setContextUsage(chatJid, { ...boundaryUsage, reset: true });
       emitCommandStatus({
@@ -1618,12 +1622,18 @@ async function handleAgentMessageInScope(
         : summarizeCommandStatusTitle(result.message, "Command failed"),
     });
 
+    const commandResult = result.contextUsage ? { ...result, contextUsage: {
+      ...publicContextUsage(result.contextUsage),
+      estimated: result.contextUsage.estimated,
+      source: result.contextUsage.source,
+      phase: result.contextUsage.phase,
+    } } : result;
     if (isSteerCommand && (result as { queued_steer?: boolean }).queued_steer) {
-      return channel.json({ user_message: interaction, thread_id: threadId, command: result, queued: "steer" }, 201);
+      return channel.json({ user_message: interaction, thread_id: threadId, command: commandResult, queued: "steer" }, 201);
     }
 
     return channel.json(
-      { user_message: interaction, thread_id: threadId, command: result, ...(prepareInputText ? { response_delivery: responseDelivery } : {}) },
+      { user_message: interaction, thread_id: threadId, command: commandResult, ...(prepareInputText ? { response_delivery: responseDelivery } : {}) },
       201
     );
   }
