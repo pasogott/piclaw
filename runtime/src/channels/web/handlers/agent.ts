@@ -753,6 +753,13 @@ async function handleAgentMessageInScope(
   cancelScheduledIdleAutoCompaction(chatJid);
 
   let command = parseControlCommand(content, getRoutingConfig().triggerPattern);
+  // Operator process controls precede session/queue/Goal inspection. A wedged
+  // harness or missing conversation must not prevent the host from stopping.
+  if ((command?.type === "exit" || command?.type === "restart") && !hasAttachments) {
+    revalidateInputAuthority();
+    const result = await channel.agentPool.applyControlCommand(chatJid, command);
+    return channel.json({ thread_id: null, command: result, ui_only: true, immediate: true }, 200);
+  }
   if (prepareInputText && command?.type === "queue_all") return channel.json({ error: "Native inputs use FIFO operation settlement. Batch /queue-all is unavailable; use /queue." }, 400);
   // Native queued commands are accepted input, not display-only controls or
   // legacy session.prompt calls. Use the same preparation/admission as modes.

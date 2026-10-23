@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
 import { spawn } from 'child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { acquireRuntimeLock, createDefaultRuntimeProcessInspector, type RuntimeProcessInspector } from '../src/runtime/single-instance.js';
 import { addLogSink, removeLogSink, type LogRecord } from '../src/utils/logger.js';
 
 function fixture() {
-  const dir = mkdtempSync('/tmp/piclaw-lock-ownership-');
+  const dir = mkdtempSync(join(process.env.PICLAW_WORKSPACE!, 'lock-ownership-'));
   const lockPath = join(dir, 'runtime.lock');
   const inspector: RuntimeProcessInspector = {
     pid: 9999, now: () => new Date('2026-05-18T16:00:00Z'),
@@ -237,7 +237,7 @@ test('multiprocess O_EXCL publication: ordinary legacy acquirer never deletes pa
   }
 }, 5000);
 
-test('real strict child owner remains excluded while SIGSTOPped, and stale strict lock is never stolen', async () => {
+test('SIGSTOP remains owned; only managed recovery archives the exact dead owner after SIGKILL', async () => {
   const f = fixture();
   const modulePath = new URL('../src/runtime/single-instance.ts', import.meta.url).pathname;
   const child = spawn(process.execPath, ['-e', `import { acquireRuntimeLock } from ${JSON.stringify(modulePath)}; const h = acquireRuntimeLock({ lockPath: ${JSON.stringify(f.lockPath)}, disabled: false, strictOwnership: true }); h.assertCurrentOwner(); console.log('ready'); setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -258,6 +258,7 @@ test('real strict child owner remains excluded while SIGSTOPped, and stale stric
     expect(readFileSync(`/proc/${child.pid}/status`, 'utf8')).toMatch(/^State:\s+T/m);
     const inspector = createDefaultRuntimeProcessInspector();
     expect(inspector.isAlive(child.pid!)).toBe(true);
+    expect(() => acquireRuntimeLock({ lockPath: f.lockPath, disabled: false, strictOwnership: true, recoverStaleOwnership: true })).toThrow(/refuses existing/);
     expect(() => acquireRuntimeLock({ lockPath: f.lockPath, disabled: false, strictOwnership: true })).toThrow(/refuses existing/);
     expect(() => acquireRuntimeLock({ lockPath: f.lockPath, disabled: false })).toThrow(/already running/);
     expect(readFileSync(f.lockPath, 'utf8')).toBe(raw);
@@ -266,9 +267,45 @@ test('real strict child owner remains excluded while SIGSTOPped, and stale stric
     expect(() => acquireRuntimeLock({ lockPath: f.lockPath, disabled: false, strictOwnership: true })).toThrow(/refuses existing/);
     expect(() => acquireRuntimeLock({ lockPath: f.lockPath, disabled: false })).toThrow(/Offline operator cleanup required/);
     expect(readFileSync(f.lockPath, 'utf8')).toBe(raw);
+    const managed = acquireRuntimeLock({lockPath:f.lockPath, disabled:false, strictOwnership:true, recoverStaleOwnership:true});
+    try {
+      managed.assertCurrentOwner();
+      expect(managed.record.pid).toBe(process.pid);
+      const archives = readdirSync(f.dir).filter(name => name.startsWith('runtime.lock.stale-'));
+      expect(archives).toHaveLength(1);
+      expect(readFileSync(join(f.dir,archives[0]!), 'utf8')).toBe(raw);
+    } finally { managed.release(); }
   } finally {
     child.kill('SIGKILL');
     await exited;
     f.cleanup();
   }
 }, 5000);
+
+test('two managed crash-recovery publishers cannot both acquire kernel ownership', async () => {
+  const f=fixture(), modulePath=new URL('../src/runtime/single-instance.ts',import.meta.url).pathname;
+  const seed=acquireRuntimeLock({lockPath:f.lockPath,disabled:false,strictOwnership:true});
+  const stale={...seed.record,pid:999999999};seed.release();writeFileSync(f.lockPath,JSON.stringify(stale));
+  const children=Array.from({length:2},()=>{
+    const child=spawn(process.execPath,['-e',`import {acquireRuntimeLock} from ${JSON.stringify(modulePath)};try{const h=acquireRuntimeLock({lockPath:${JSON.stringify(f.lockPath)},disabled:false,strictOwnership:true,recoverStaleOwnership:true});h.assertCurrentOwner();console.log('READY');setInterval(()=>{},1000);}catch{console.log('REFUSED');process.exit(2);}`],{stdio:['ignore','pipe','pipe']});
+    const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
+    const outcome=new Promise<string>((resolve,reject)=>{
+      let text='';const timer=setTimeout(()=>reject(Error('publisher deadline')),3000);
+      child.stdout.on('data',data=>{text+=data.toString();for(const value of ['READY','REFUSED'])if(text.includes(value)){clearTimeout(timer);resolve(value);}});
+      child.once('error',error=>{clearTimeout(timer);reject(error);});
+    });return {child,exited,outcome};
+  });
+  try{
+    expect((await Promise.all(children.map(c=>c.outcome))).sort()).toEqual(['READY','REFUSED']);
+    expect(()=>acquireRuntimeLock({lockPath:f.lockPath,disabled:false,strictOwnership:true,recoverStaleOwnership:true})).toThrow(/kernel ownership/);
+    for(const c of children)c.child.kill('SIGKILL');await Promise.all(children.map(c=>c.exited));
+    const recovered=acquireRuntimeLock({lockPath:f.lockPath,disabled:false,strictOwnership:true,recoverStaleOwnership:true});
+    try{recovered.assertCurrentOwner();expect(readdirSync(f.dir).filter(p=>p.startsWith('runtime.lock.stale-'))).toHaveLength(2);}finally{recovered.release();}
+  }finally{for(const c of children)c.child.kill('SIGKILL');await Promise.all(children.map(c=>c.exited));f.cleanup();}
+},5000);
+
+for(const raw of ['', 'broken', '{}', JSON.stringify({pid:999999999})])test(`managed crash recovery preserves unverifiable owner: ${raw}`,()=>withFixture(f=>{
+  writeFileSync(f.lockPath,raw);
+  expect(()=>acquireRuntimeLock({...f,disabled:false,strictOwnership:true,recoverStaleOwnership:true})).toThrow();
+  expect(readFileSync(f.lockPath,'utf8')).toBe(raw);
+}));

@@ -11,7 +11,7 @@ export function getNativeControlCapabilities(port: DurableSessionPositionPort): 
   const auth = port.assertCurrent && port.runOwnedControl && port.lifetimeSignal && !port.lifetimeSignal.aborted;
   return {
     model: available(port.readModel && port.setModel), thinking: available(port.readThinkingLevel && port.setThinkingLevel),
-    commands: "native", restart: available(port.restart), exit: available(port.requestExit && port.assertCurrent && port.lifetimeSignal && !port.lifetimeSignal.aborted), shell: "native", bash: available(port.runBash),
+    commands: "native", restart: "native", exit: "native", shell: "native", bash: available(port.runBash),
     queue: "web input", queue_all: "unavailable", steer: "web input", state: "native",
     stats: available(port.readReport), context: available(port.readReport), quota: "native", last: available(port.readReport),
     compact: available(port.compact), auto_compact: available(port.readExecutionPolicy && port.setExecutionPolicy), auto_retry: available(port.readExecutionPolicy && port.setExecutionPolicy), abort: available(port.abort),

@@ -5,11 +5,13 @@
  * and running startup recovery while the managed service is still active.
  */
 
-import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "fs";
+import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "fs";
 import { randomUUID } from "crypto";
 import { dirname, resolve } from "path";
 import { STORE_DIR, WORKSPACE_DIR } from "../core/config.js";
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
+
+import { acquireRuntimeLockGuard } from "./runtime-lock-guard.js";
 
 const log = createLogger('single-instance');
 
@@ -50,8 +52,11 @@ export interface AcquireRuntimeLockOptions {
   disabled?: boolean;
   /** Mark an offline maintenance owner; all acquirers refuse every existing path. */
   maintenance?: boolean;
-  /** Never remove an existing lock, even if stale. Operator cleanup is offline only. */
+  /** Require full process and file identity, including every ownership assertion. */
   strictOwnership?: boolean;
+  /** Managed runtime only: archive a provably dead strict owner while holding
+   * kernel exclusion. Maintenance never opts into crash recovery. */
+  recoverStaleOwnership?: boolean;
 }
 
 const DEFAULT_LOCK_FILE = "runtime.lock";
@@ -149,12 +154,44 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
     });
   }
 
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const guard = acquireRuntimeLockGuard(lockPath);
   try {
-    const identity = writeNewLockFile(lockPath, raw);
+    let identity: ReturnType<typeof writeNewLockFile>;
+    try { identity = writeNewLockFile(lockPath, raw); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST' || !strictOwnership || !options.recoverStaleOwnership || !guard) throw error;
+      guard.assertCurrent();
+      const fd = openSync(lockPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.size > 16384) throw Error('Cannot verify stale runtime owner');
+        const previous = JSON.parse(readFileSync(fd, 'utf8')) as RuntimeLockRecord;
+        if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0 || previous.workspace !== record.workspace ||
+          !previous.bootId || !previous.processStart || !previous.nonce || !/^[a-f0-9-]{36}$/.test(previous.nonce))
+          throw Error('Cannot verify stale runtime owner');
+        let dead = previous.bootId !== record.bootId || !inspector.isAlive(previous.pid);
+        if (!dead) {
+          const start = inspector.processStart?.(previous.pid);
+          if (!start || !/^\d+$/.test(start)) throw Error('Cannot verify existing runtime process identity');
+          dead = start !== previous.processStart;
+        }
+        if (!dead) throw Error('Existing runtime process is still alive');
+        guard.assertCurrent();
+        const current = lstatSync(lockPath);
+        if (!current.isFile() || current.dev !== stat.dev || current.ino !== stat.ino) throw Error('Runtime lock changed during recovery');
+        // Preserve the exact old record. Kernel exclusion serialises all new
+        // publishers, and the old process identity is proven dead above.
+        renameSync(lockPath, `${lockPath}.stale-${previous.nonce}-${randomUUID()}`);
+        identity = writeNewLockFile(lockPath, raw);
+        log.info('Recovered dead runtime ownership after unclean exit', { operation: 'runtime_lock.recovered', pid: previous.pid });
+      } finally { closeSync(fd); }
+    }
     let released = false;
     let safeToReleaseOnExit = false;
     const releaseOnExit = (): void => { if (safeToReleaseOnExit) release(); };
     const matches = (): boolean => {
+      guard?.assertCurrent();
       const fd = openSync(lockPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const stat = fstatSync(fd);
@@ -186,7 +223,7 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
       } catch (error) {
         debugSuppressedError(log, 'Failed to release runtime lock; leaving unverified path untouched.', error, { lockPath });
       } finally {
-        closeSync(identity.fd);
+        try { closeSync(identity.fd); } finally { guard?.release(); }
       }
     };
     // Normal exit and the shutdown backstop are not proof of quiescence.
@@ -195,6 +232,7 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
     const markSafeReleaseOnExit = (): void => { safeToReleaseOnExit = true; };
     return Object.freeze({ path: lockPath, record, enabled: true, strictOwnership, assertCurrentOwner, markSafeReleaseOnExit, release });
   } catch (error) {
+    guard?.release();
     if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
     // O_EXCL publishes the path before its record is written. Never read or
     // remove an existing path, even if apparently stale: it may belong to a

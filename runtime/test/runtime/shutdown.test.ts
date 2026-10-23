@@ -1,9 +1,24 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createShutdownHandler } from "../../src/runtime/shutdown.js";
 import { SchedulerStoreReleaseError } from "../../src/task-scheduler.js";
 import { addLogSink, removeLogSink, type LogRecord } from "../../src/utils/logger.js";
 import { registerRuntimeShutdownSignals } from "../../src/runtime/composition.js";
 import { registerShutdownHandler, requestGracefulShutdown } from "../../src/runtime/shutdown-registry.js";
+
+const realSetTimeout = globalThis.setTimeout;
+const backstops: {handle: ReturnType<typeof setTimeout>; run: () => void}[] = [];
+let timerStub: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  timerStub = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== 15000) return realSetTimeout(run, ms, ...args);
+    const handle = realSetTimeout(() => {}, 86400000); handle.unref();
+    backstops.push({ handle, run }); return handle;
+  }) as typeof setTimeout);
+});
+afterEach(() => {
+  for (const timer of backstops.splice(0)) clearTimeout(timer.handle);
+  timerStub.mockRestore();
+});
 
 test("web admission seals synchronously and joins before pollers or queue disposal", async () => {
   const calls: string[] = [];
@@ -182,7 +197,9 @@ test("registered shutdown handler arms its deadline before extensible hooks", as
     import { createShutdownHandler } from './src/runtime/shutdown.js';
     import { registerPreShutdownHook, registerShutdownHandler, requestGracefulShutdown } from './src/runtime/shutdown-registry.js';
     const calls = [];
-    process.exit = (code) => { console.log(JSON.stringify({ code, calls, elapsed: Date.now() - started })); };
+    const realExit = process.exit, realTimer = globalThis.setTimeout;
+    globalThis.setTimeout = (run, ms, ...args) => realTimer(run, ms === 15000 ? 7000 : ms, ...args);
+    process.exit = (code) => { console.log(JSON.stringify({ code, calls, elapsed: Date.now() - started })); realExit(code); };
     registerPreShutdownHook(() => new Promise(() => {}));
     registerPreShutdownHook(() => { calls.push('later-hook-started'); });
     const shutdown = createShutdownHandler({
@@ -210,9 +227,27 @@ test("registered shutdown handler arms its deadline before extensible hooks", as
   const line = stdout.trim().split("\n").find((value) => value.startsWith('{"calls"'));
   expect(line).toBeDefined();
   const result = JSON.parse(line!);
-  // Timed-out cleanup is not successful lifetime completion or a clean exit.
-  expect(stdout).not.toContain('{"code"');
+  // Cleanup failure keeps the host backstop armed. It exits without claiming
+  // successful disposal; only the test accelerates the requested 15s deadline.
+  const forced = JSON.parse(stdout.trim().split("\n").find(value => value.startsWith('{"code"'))!);
+  expect(forced.code).toBe(0);
+  expect(forced.elapsed).toBeGreaterThanOrEqual(6900);
+  expect(forced.elapsed).toBeLessThan(9000);
   expect(result.elapsed).toBeGreaterThanOrEqual(6100);
   expect(result.elapsed).toBeLessThan(7500);
   expect(result.calls).toEqual(["later-hook-started", "ipc", "scheduler", "providers", "queue", "agents", "web"]);
 }, 10_000);
+
+test('failed or hung cleanup cannot disarm the operator process deadline', async () => {
+  const clear=spyOn(globalThis,'clearTimeout'), exit=spyOn(process,'exit').mockImplementation((()=>{}) as any);
+  try{
+    const shutdown=createShutdownHandler({web:{sealAdmissions:async()=>{throw Error('wedged harness join');},stop:async()=>{}},
+      stopIpcWatcher:()=>{},stopSchedulerLoop:()=>{},stopOptionalProviders:()=>{},queue:{shutdown:async()=>{}},agentPool:{shutdown:async()=>{}}});
+    await expect(shutdown('operator restart')).rejects.toThrow('wedged harness join');
+    expect(backstops).toHaveLength(1);
+    expect(clear).not.toHaveBeenCalledWith(backstops[0]!.handle);
+    await shutdown('duplicate operator restart');
+    expect(backstops).toHaveLength(1);
+    backstops[0]!.run();expect(exit).toHaveBeenCalledWith(0);
+  }finally{clear.mockRestore();exit.mockRestore();}
+});

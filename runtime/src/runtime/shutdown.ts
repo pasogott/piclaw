@@ -73,6 +73,7 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => P
         log.error("Shutdown step failed", { operation: "cleanup", label, err: error });
       }
     };
+    let completed = false;
     try {
       // Seal synchronously before any producer can yield or queue disposal can
       // begin. Join only request/control admission, not queue-owned agent runs.
@@ -102,9 +103,12 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => P
       if (errors.length) throw new AggregateError(errors, "Runtime shutdown cleanup failed");
       await deps.closeApplicationBackend?.();
       deps.onShutdownComplete?.();
+      completed = true;
       process.exit(0);
     } finally {
-      clearTimeout(forceExit);
+      // A rejected cleanup is not permission to disarm the host deadline.
+      // The kernel releases process-owned resources if cleanup cannot finish.
+      if (completed) clearTimeout(forceExit);
     }
   };
 }

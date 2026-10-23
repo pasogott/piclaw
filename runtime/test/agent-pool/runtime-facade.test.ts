@@ -1506,25 +1506,20 @@ test('durable thinking mutation returns a user-facing error and releases protect
   expect(events).toEqual(['protect','set','release']);
 });
 
-test("native /exit uses current user control ownership without a legacy session", async () => {
-  let exits = 0, legacy = 0, revoked = false, busy = false;
-  const lifetime = new AbortController();
-  const port = { sessionId: "native-exit", branchId: "main", readPosition: async () => null,
-    lifetimeSignal: lifetime.signal, assertCurrent() { if (revoked) throw Error("binding changed"); },
-    async requestExit(reason: string) { if (busy) throw Error("Other host operations are active"); expect(reason).toContain("/exit"); exits++; } };
-  const { facade } = createFacade({ getDurableSession: () => port,
-    getOrCreateRuntime: async () => { legacy++; throw Error("legacy forbidden"); } });
-  const command = parseControlCommand("/exit")!;
-  expect(getNativeCommandCatalogue(port).find(c => c.name === "/exit")?.status).toBe("native");
-  expect((await facade.applyControlCommand("web:native-exit", command)).status).toBe("success");
-  busy = true;
-  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("active");
-  revoked = true;
-  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("binding changed");
-  lifetime.abort();
-  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("unavailable");
-  expect(getNativeCommandCatalogue(port).find(c => c.name === "/exit")?.status).toBe("unavailable");
-  expect(exits).toBe(1); expect(legacy).toBe(0);
+for (const name of ["exit", "restart"] as const) test(`native /${name} bypasses absent, revoked and wedged session authority`, async () => {
+  let exits = 0, lookups = 0, legacy = 0;
+  (globalThis as any).__PICLAW_EXIT_SCHEDULER__ = () => { exits++; };
+  try {
+    const { facade } = createFacade({ getDurableSession: () => { lookups++; throw Error("Harness permanently stuck"); },
+      getOrCreateRuntime: async () => { legacy++; throw Error("legacy forbidden"); } });
+    expect(await facade.applyControlCommand("web:unbound", parseControlCommand(`/${name}`)!)).toMatchObject({status:"success"});
+    expect(exits).toBe(1); expect(lookups).toBe(0); expect(legacy).toBe(0);
+    const lifetime = new AbortController(); lifetime.abort();
+    const { facade: revoked } = createFacade({ getDurableSession: () => ({sessionId:"revoked",branchId:"main",readPosition:async()=>null,
+      lifetimeSignal:lifetime.signal,assertCurrent(){throw Error("revoked");}}) });
+    expect((await revoked.applyControlCommand("web:revoked",parseControlCommand(`/${name}`)!)).status).toBe("success");
+    expect(exits).toBe(2);
+  } finally { delete (globalThis as any).__PICLAW_EXIT_SCHEDULER__; }
 });
 
 test("native critical controls preserve scope, report failures and never fall back to legacy", async()=>{
@@ -1537,7 +1532,6 @@ test("native critical controls preserve scope, report failures and never fall ba
   readExecutionPolicy:async()=>({...policy}),setExecutionPolicy:async(key:'autoCompact'|'autoRetry',enabled:boolean)=>{policy[key]=enabled;}};
  const {facade}=createFacade({getDurableSession:()=>port,getOrCreateRuntime:async()=>{legacy++;throw Error('legacy');}});
  const run=(raw:string)=>facade.applyControlCommand('web:native-critical',parseControlCommand(raw)!);
- expect((await run('/restart')).status).toBe('success');expect(restarts).toBe(1);
  expect((await run('/bash printf TEST')).message).toContain('saved to native context');expect(bashes).toBe(1);
  expect((await run('/bash')).status).toBe('error');expect(bashes).toBe(1);
  expect((await run('/abort-bash')).message).toContain('requested');expect(abortBash).toBe(1);
@@ -1546,7 +1540,7 @@ test("native critical controls preserve scope, report failures and never fall ba
  expect((await run('/auto-retry off')).message).toContain('disabled');expect(policy.autoRetry).toBe(false);
  expect((await run('/auto-compact off')).message).toContain('disabled');expect(policy.autoCompact).toBe(false);
  expect((await run('/auto-compact invalid')).status).toBe('error');expect(policy.autoCompact).toBe(false);
- revoked=true;expect((await run('/restart')).message).toContain('binding lost');expect(restarts).toBe(1);
+ revoked=true;expect((await run('/bash printf NO')).message).toContain('binding lost');expect(restarts).toBe(0);
  lifetime.abort();expect((await run('/bash printf NO')).status).toBe('error');expect(bashes).toBe(1);expect(legacy).toBe(0);
 });
 
