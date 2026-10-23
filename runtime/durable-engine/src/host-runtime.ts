@@ -1223,15 +1223,22 @@ export class HostConversationRuntime {
         if (entry.kind !== "pi.assistant") continue;
         if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "assistant") throw Error("Invalid committed usage entry");
         const task = await tx.task(entry.byTaskId);
-        const outcome = task?.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result as { entryId?: number } : undefined;
-        if (task?.kind !== "pi.generation" || task.conversationId !== conversationId || outcome?.entryId !== entry.id)
+        if (task?.kind !== "pi.generation" || task.conversationId !== conversationId)
           throw Error("Invalid committed usage task");
-        const usage = entry.model[0].usage;
+        const message = entry.model[0], usage = message.usage;
         const parts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
         if (!parts.every(value => Number.isSafeInteger(value) && value >= 0) || !Number.isSafeInteger(usage.totalTokens) || usage.totalTokens < 0)
           throw Error("Invalid committed usage tokens");
         const tokens = usage.totalTokens > 0 ? usage.totalTokens : parts.reduce((sum, value) => sum + value, 0);
         if (!Number.isSafeInteger(tokens)) throw Error("Invalid committed usage total");
+        // The SDK also commits error/aborted attempt entries before retrying or
+        // failing a generation. A zero-usage attempt is not a completed receipt.
+        // Omit it rather than poisoning later recovery/control reads. This does
+        // NOT release an uncertain request hold or establish a free provider call.
+        if ((message.stopReason === "error" || message.stopReason === "aborted") && tokens === 0 &&
+          parts.every(value => value === 0) && usage.cost && Object.values(usage.cost).every(value => value === 0)) continue;
+        const outcome = task.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result as { entryId?: number } : undefined;
+        if (outcome?.entryId !== entry.id) throw Error("Invalid committed usage task");
         result.push({ conversationId, entryId: entry.id, tokens });
       }
       return result;
