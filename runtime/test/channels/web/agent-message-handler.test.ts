@@ -457,7 +457,7 @@ describe("web agent message handler", () => {
     expect(applyCalls).toBe(1);
     expect(storeMessageCalls).toBe(1);
     expect(sentMessages[0]?.content).toBe("Compaction requested immediately.");
-    expect(contextUsages).toEqual([{ chatJid: "web:default", usage: { tokens: 321, contextWindow: 1000, percent: 32.1 } }]);
+    expect(contextUsages).toEqual([{ chatJid: "web:default", usage: { tokens: 321, contextWindow: 1000, percent: 32.1, contextUpdate: "replace" } }]);
     expect(statusUpdates.map(entry => entry.status.type)).toEqual(["intent", "done"]);
     expect(broadcasts).toContainEqual(expect.objectContaining({
       event: "agent_status",
@@ -886,6 +886,7 @@ describe("web agent message handler", () => {
         contextWindow: null,
         percent: null,
         sessionGeneration: "session-after-rotate",
+        contextUpdate: "replace",
       },
     }));
     expect(contextUsages).toContainEqual({
@@ -893,6 +894,7 @@ describe("web agent message handler", () => {
       contextWindow: null,
       percent: null,
       sessionGeneration: "session-after-rotate",
+      contextUpdate: "replace",
       reset: true,
     });
     expect(broadcasts).toContainEqual(expect.objectContaining({

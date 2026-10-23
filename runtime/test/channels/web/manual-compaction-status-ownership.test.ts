@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-type Result = { status: string; message: string; contextUsage?: { tokens: number; contextWindow: number; percent: number }; sessionGenerationChanged?: boolean; sessionGeneration?: string };
+type Result = { status: string; message: string; contextUsage?: { tokens: number | null; contextWindow: number | null; percent: number | null; sessionGeneration?: string; tokensAreAuthoritative?: true }; sessionGenerationChanged?: boolean; sessionGeneration?: string };
 
 function fixture(terminalTtlMs = 15_000) {
   const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) }, { getInflightRuns: () => [] }, terminalTtlMs);
@@ -24,7 +24,7 @@ function fixture(terminalTtlMs = 15_000) {
   const usageStatusSnapshots: unknown[] = [];
   let row = 0;
   const dispatch = (_jid: string, command: any) => {
-    if (command.type === "compact" || command.type === "session_rotate") { compactStarted.resolve(); return compact.promise; }
+    if (command.type === "compact" || command.type === "session_rotate" || command.type === "new_session") { compactStarted.resolve(); return compact.promise; }
     statsStarted.resolve();
     return stats.promise;
   };
@@ -179,6 +179,26 @@ describe("manual command status ownership in the production handler", () => {
     expect(f.events.slice(eventCount).filter(e => e.event === "agent_status")).toEqual([]);
   });
 
+  for (const command of ['/compact', '/new-session']) {
+    test(`native ${command} publishes authoritative unknown counts without replacing its owning status`, async () => {
+      const f = fixture();
+      const pending = f.send(command);
+      await f.compactStarted.promise;
+      const owner = f.statuses.get('web:test');
+      f.compact.resolve({ ...success, sessionGeneration: 'generation-2', sessionGenerationChanged: false,
+        contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: 'generation-2', tokensAreAuthoritative: true } });
+      const response = await pending;
+      expect(response.status).toBe(201);
+      expect(f.usages).toEqual([{ tokens: null, contextWindow: null, percent: null, sessionGeneration: 'generation-2', contextUpdate: 'replace' }]);
+      expect(f.usageStatusSnapshots).toEqual([owner]);
+      expect(f.statuses.get('web:test')?.type).toBe('done');
+      const body = await response.json();
+      expect(body.command.contextUsage).toMatchObject({ tokens: null, percent: null, contextUpdate: 'replace' });
+      expect(JSON.stringify(body)).not.toContain('tokensAreAuthoritative');
+      expect(JSON.stringify(f.events)).not.toContain('tokensAreAuthoritative');
+    });
+  }
+
   test("context usage publication leaves the owning intent pollable", async () => {
     const f = fixture();
     const pending = f.send("/compact");
@@ -197,7 +217,7 @@ describe("manual command status ownership in the production handler", () => {
     const owner = f.statuses.get("web:test");
     f.compact.resolve({ ...success, sessionGenerationChanged: true, sessionGeneration: "generation-2" });
     await pending;
-    expect(f.usages).toEqual([{ tokens: null, contextWindow: null, percent: null, sessionGeneration: "generation-2", reset: true }]);
+    expect(f.usages).toEqual([{ tokens: null, contextWindow: null, percent: null, sessionGeneration: "generation-2", contextUpdate: "replace", reset: true }]);
     expect(f.events.some(e => e.payload.type === "context_usage" && e.payload.context_reset)).toBe(true);
     expect(f.statuses.get("web:test")?.turn_id).toBe(owner?.turn_id);
     expect(f.statuses.get("web:test")?.type).toBe("done");

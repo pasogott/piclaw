@@ -32,7 +32,7 @@ function createContext(overrides: Partial<AgentStatusContext> = {}): AgentStatus
 }
 
 describe("web agent status helpers", () => {
-  test("context awaits tree summary without changing a newer active status", async () => {
+  test("explicit context tree request awaits summary without changing a newer active status", async () => {
     let release!: (value: { leafId: string; total: number }) => void;
     const pendingTree = new Promise<{ leafId: string; total: number }>(resolve => { release = resolve; });
     let status = { turn_id: "older", title: "Working" };
@@ -42,7 +42,7 @@ describe("web agent status helpers", () => {
       recoverStaleInflightRun: () => { recoveries++; return false; },
       getSessionTreeSummaryForChat: async chat => { expect(chat).toBe("web:default"); return pendingTree; },
     });
-    const response = handleAgentContextRequest(new Request("https://example.com/agent/context"), ctx);
+    const response = handleAgentContextRequest(new Request("https://example.com/agent/context?include_tree=1"), ctx);
     status = { turn_id: "newer", title: "Compacting context" };
     release({ leafId: "exact-hidden-head", total: 2 });
     expect((await (await response).json()).sessionTree).toEqual({ leafId: "exact-hidden-head", total: 2 });
@@ -209,7 +209,7 @@ describe("web agent status helpers", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Server-Timing")).toContain("agent_context;dur=");
-    expect(await res.json()).toEqual({ tokens: null, contextWindow: null, percent: null, sessionGeneration: null, cacheUsage: null });
+    expect(await res.json()).toEqual({ tokens: null, contextWindow: null, percent: null, sessionGeneration: null, contextUpdate: "replace", cacheUsage: null });
   });
 
   test("handleAgentContextRequest includes prompt cache-hit telemetry", async () => {
@@ -255,6 +255,7 @@ describe("web agent status helpers", () => {
       contextWindow: 100000,
       percent: 5,
       sessionGeneration: "session-current",
+      contextUpdate: "replace",
       cacheUsage: {
         latest: {
           inputTokens: 1000,

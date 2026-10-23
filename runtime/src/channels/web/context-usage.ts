@@ -7,5 +7,7 @@ export function publicContextUsage(value: unknown): Record<string, unknown> | nu
     contextWindow: context.contextWindow,
     percent: context.percent,
     sessionGeneration: context.sessionGeneration,
+    ...(context.tokensAreAuthoritative === true || context.contextUpdate === "replace"
+      ? { contextUpdate: "replace" } : {}),
   };
 }

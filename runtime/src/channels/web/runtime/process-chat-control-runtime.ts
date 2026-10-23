@@ -296,6 +296,7 @@ export async function executeDeferredControlCommand(
       contextWindow: null,
       percent: null,
       sessionGeneration: result.sessionGeneration,
+      contextUpdate: "replace",
     };
     const statusPayload = {
       chat_jid: chatJid,
@@ -314,7 +315,7 @@ export async function executeDeferredControlCommand(
 
   if (result.status === "success" && !result.sessionGenerationChanged && command.type === "compact") {
     let contextUsage = result.contextUsage;
-    if (contextUsage?.tokens === null || contextUsage?.tokens === undefined) {
+    if (!contextUsage?.tokensAreAuthoritative && (contextUsage?.tokens === null || contextUsage?.tokens === undefined)) {
       const current = typeof channel.agentPool.getContextUsageForChat === "function"
         ? await channel.agentPool.getContextUsageForChat(chatJid).catch(() => null)
         : null;
@@ -329,7 +330,7 @@ export async function executeDeferredControlCommand(
         };
       }
     }
-    if (contextUsage?.tokens !== null && contextUsage?.tokens !== undefined) {
+    if (contextUsage && (contextUsage.tokensAreAuthoritative || contextUsage.tokens !== null && contextUsage.tokens !== undefined)) {
       const activeGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
         ? channel.agentPool.getSessionGenerationForChat(chatJid)
         : null;
@@ -346,6 +347,7 @@ export async function executeDeferredControlCommand(
           contextWindow: contextUsage.contextWindow,
           percent: contextUsage.percent,
           sessionGeneration,
+          contextUpdate: "replace",
         };
         const statusPayload = {
           chat_jid: chatJid,
