@@ -1267,6 +1267,7 @@
             "docs/development/tool-output-retention-performance.md",
             "docs/development/web-session-query-performance.md",
             "docs/finops/2026-10-06/README.md",
+            "docs/native-slash-controls.md",
             "package.json"
           ],
           "readerFiles": []

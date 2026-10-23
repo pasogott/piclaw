@@ -324,6 +324,10 @@ erDiagram
 
 ## Backups
 
+`createVerifiedSqliteBackup` captures committed WAL data with `VACUUM INTO` in a private, exclusively owned staging file beside the requested destination. It verifies and syncs the snapshot, then publishes it with a hard link that fails if any destination already exists. Failure cleanup removes only staging; it never deletes or overwrites the destination. A failure after publication can leave a valid snapshot at that name, which callers can inspect with `verifySqliteBackup`.
+
+The source must match the connection's file-backed main database. File identity is checked before and after capture and again before publication. Manifest application/schema values and migration-ledger row counts and SHA-256 fingerprints come from the verified snapshot. The recognised ledgers are `durable_schema`, `durable_metadata`, `piclaw_schema_migrations` and `core_schema_migrations`; absent tables are omitted. `sourceBytes` describes the source main file at admission and excludes WAL bytes. These fields describe the SQLite snapshot; they do not verify external payloads, credentials or a complete recovery unit. Publication requires a filesystem that supports hard links and directory sync; failures do not fall back to an overwriting copy or rename.
+
 Back up configuration, SQLite (including all auth/access tables), session files and bootstrap key together. Use a verified SQLite backup or stop writers before copying; do not copy only an active `messages.db` while omitting WAL changes. Restore key material through a protected path, not a timeline or log. Do not remove `access_state` to make a newer store boot in an older mode/binary. See [activation and recovery constraints](access-modes.md).
 
 Restic snapshots are stored in the configured repository. The backup script lives at:
