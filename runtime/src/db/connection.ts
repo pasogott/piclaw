@@ -32,7 +32,8 @@ import path from "path";
 
 import { STORE_DIR, WORKSPACE_DIR, getRuntimeBootstrapPathOverrides } from "../core/config.js";
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
-import { recompressExistingMedia } from "./media-recompress.js";
+import { migrateMediaCompression } from "./media-recompress.js";
+import { ensureLegacyColumns } from "./legacy-columns.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
 import { enableSqliteWal } from "./sqlite-journal.js";
 import { isZfsFilesystem, registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
@@ -591,27 +592,15 @@ function createSchema(database: Database): void {
  * added for the web channel's rich-message support.
  */
 function ensureMessageColumns(database: Database): void {
-  const columns = database.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
-  const existing = new Set(columns.map((col) => col.name));
-  const ensureColumn = (name: string, type = "TEXT") => {
-    if (existing.has(name)) return;
-    try {
-      database.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
-    } catch (err) {
-      debugSuppressedError(log, "Message-column migration raced an already-updated schema state.", err, {
-        operation: "db.ensure_message_columns.add_column",
-        name,
-        type,
-      });
-    }
-  };
-  ensureColumn("content_blocks");
-  ensureColumn("link_previews");
-  ensureColumn("screen_hint");
-  ensureColumn("thread_id", "INTEGER");
-  ensureColumn("is_terminal_agent_reply", "INTEGER DEFAULT 0");
-  ensureColumn("is_steering_message", "INTEGER DEFAULT 0");
-  ensureColumn("annotations");
+  ensureLegacyColumns(database, "messages", [
+    { name: "content_blocks", type: "TEXT" },
+    { name: "link_previews", type: "TEXT" },
+    { name: "screen_hint", type: "TEXT" },
+    { name: "thread_id", type: "INTEGER" },
+    { name: "is_terminal_agent_reply", type: "INTEGER", defaultSql: "0" },
+    { name: "is_steering_message", type: "INTEGER", defaultSql: "0" },
+    { name: "annotations", type: "TEXT" },
+  ]);
 }
 
 /**
@@ -631,21 +620,10 @@ function ensureFts(database: Database): void {
  * version to allow per-task model overrides).
  */
 function ensureKeychainNoteColumns(database: Database): void {
-  const columns = database.prepare("PRAGMA table_info(keychain_entries)").all() as Array<{ name: string }>;
-  const existing = new Set(columns.map((col) => col.name));
-  const ensureColumn = (name: string) => {
-    if (existing.has(name)) return;
-    try {
-      database.exec(`ALTER TABLE keychain_entries ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
-    } catch (err) {
-      debugSuppressedError(log, "Keychain-note column migration raced an already-updated schema state.", err, {
-        operation: "db.ensure_keychain_note_columns.add_column",
-        name,
-      });
-    }
-  };
-  ensureColumn("user_note");
-  ensureColumn("agent_note");
+  ensureLegacyColumns(database, "keychain_entries", [
+    { name: "user_note", type: "TEXT", notNull: true, defaultSql: "''" },
+    { name: "agent_note", type: "TEXT", notNull: true, defaultSql: "''" },
+  ]);
 }
 
 function ensureTokenUsageColumns(database: Database): void {
@@ -957,12 +935,12 @@ export function initDatabase(): void {
   // prevents competing initializers starving behind separately committed DDL
   // and keeps the ordered schema/owned-ledger updates atomic. Nested migration
   // transactions become savepoints; file-header pragmas and VACUUM stay outside.
-  database.transaction(() => initializeSchema(database)).immediate();
-  // The legacy live store historically runs without global FK enforcement.
-  // EF-S07 uses a dedicated FK-enabled scheduler connection in production;
-  // restore the caller's prior setting so unrelated legacy write paths retain
-  // their established behaviour.
-  if (!foreignKeysBeforeInitialization) db.exec("PRAGMA foreign_keys = OFF;");
+  try { database.transaction(() => initializeSchema(database)).immediate(); }
+  finally {
+    // Preserve the caller's FK policy on failed schema checks as well as success.
+    // EF-S07 has its own FK-enabled scheduler connection in production.
+    if (!foreignKeysBeforeInitialization) db.exec("PRAGMA foreign_keys = OFF;");
+  }
   if (!useMemory) {
     ensureIncrementalAutoVacuum(db);
     if (!stopCheckpoint) stopCheckpoint = registerSqliteCheckpoint(db, nextPath);
@@ -1092,29 +1070,12 @@ export function dropObsoleteRemoteInteropSchema(database: Database): void {
  * Uses PRAGMA user_version >= 2 as a migration marker.
  */
 function ensureMediaCompression(database: Database): void {
-  const row = database.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-  const version = typeof row?.user_version === "number" ? row.user_version : 0;
-  if (version >= 2) return;
-
-  try {
-    const result = recompressExistingMedia(database);
-    if (result.compressed > 0) {
-      log.info("Media compression migration completed", {
-        operation: "migration.media_compression",
-        scanned: result.scanned,
-        compressed: result.compressed,
-        savedBytes: result.savedBytes,
-        skipped: result.skipped,
-        errors: result.errors,
-      });
-    }
-  } catch (err) {
-    debugSuppressedError(log, "Media compression migration failed (non-fatal).", err, {
-      operation: "migration.media_compression",
-    });
-  }
-
-  database.exec("PRAGMA user_version = 2;");
+  const result = migrateMediaCompression(database);
+  if (result.status === "already_complete") return;
+  const fields = { operation: "migration.media_compression", ...result };
+  if (result.status === "complete") {
+    if (result.compressed > 0) log.info("Media compression migration completed", fields);
+  } else log.warn("Media compression migration incomplete; retained marker permits retry", fields);
 }
 
 /**
