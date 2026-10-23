@@ -4,6 +4,9 @@ import { withoutAbortSignal, type Context } from "@earendil-works/chord/context"
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions } from "./host-runtime.js";
 import { reconstituteAcceptedWork } from "./host-recovery.js";
 import type { HostCutoverController } from "./host-cutover.js";
+import { AcceptedReplyThreadUnavailableError } from "./host-message-thread.js";
+import { createLogger } from "../../src/utils/logger.js";
+const log = createLogger("durable.controller");
 
 type Recovery = Parameters<typeof reconstituteAcceptedWork>[0];
 export interface HostOwnership {
@@ -76,10 +79,19 @@ export async function createHostController(config: HostControllerOptions, contex
         } else known.add(state.submissionId);
       }
     }
-    // Includes submissions in conversations absent from the host manifest, and submissions
-    // with no corresponding host operation. A caller-supplied approval cannot bypass this.
-    if (inspection.submissions.some(s => !known.has(s.id))) return deny();
-    const roots = new Set<number>();
+    // Foreground Delegate children have SDK inputs, not independent host sources.
+    // Qualify their exact task/request ownership back to ALREADY known host inputs;
+    // neither a conversation ancestor nor a child-supplied request grants authority.
+    const hostInputs = new Set(known), delegateRoots = new Set<number>();
+    for (const submission of inspection.submissions) {
+      if (known.has(submission.id)) continue;
+      if (await runtime.ownsMaintenanceSubmission(submission, maintenance?.taskId, maintenance?.binding.conversationId)) { assert(); known.add(submission.id); continue; }
+      const child = await runtime.inspectOwnedDelegateAuthority(submission); assert();
+      if (!child || !child.inputs.length || child.inputs.some(input => input.submissionId === null || !hostInputs.has(input.submissionId))) return deny();
+      known.add(submission.id);
+      if (child.taskId !== undefined) delegateRoots.add(child.taskId);
+    }
+    const roots = new Set<number>(delegateRoots);
     if (maintenance) {
       if (!bootstrapApproval && inspection.tasks.some(t => t.record.id === maintenance!.taskId) && !runtime.ownsMaintenance(maintenance.taskId) && inspection.scheduling !== "paused") return deny();
       const task = inspection.tasks.find(t => t.record.id === maintenance!.taskId)?.record;
@@ -90,6 +102,10 @@ export async function createHostController(config: HostControllerOptions, contex
     const { runs, compactions } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
     const backgroundCompactions = new Set<number>();
     for (const { record } of inspection.tasks) {
+      if (record.kind === "pi.compaction" && record.owner === undefined && !record.background &&
+          (record.input as { reason?: string }).reason === "manual" && runtime.ownsMaintenance(record.id)) {
+        roots.add(record.id); continue;
+      }
       if (record.kind !== "pi.compaction" || !record.background || record.owner !== undefined ||
         (record.input as { reason?: string }).reason !== "threshold" || !manifest.some(binding => binding.conversationId === record.conversationId)) continue;
       if (!compactions.some(status => status.conversationId === record.conversationId && status.taskId === record.id && status.reason === "threshold" && !status.blocking)) continue;
@@ -108,7 +124,6 @@ export async function createHostController(config: HostControllerOptions, contex
       // Only a persisted terminal receipt removes it from the live authority domain.
       if (await runtime.isTaskTerminal(record.id)) { assert(); continue; }
       assert();
-      if (maintenance && record.id !== maintenance.taskId) return deny();
       let current = record;
       const seen = new Set<number>();
       while (!roots.has(current.id)) {
@@ -168,10 +183,11 @@ export async function createHostController(config: HostControllerOptions, contex
     // Public Harness inspection covers the entire store, including unknown conversations.
     const { inspection } = await runtime.inspectAuthority();
     if (inspection.scheduling !== "paused") throw Error("Expected paused bootstrap");
-    // Independent maintenance has no accepted-input operation. Admit only one
-    // paused manual task with an exact manifest conversation and no other work.
-    if (!recovered.length && !inspection.submissions.length && inspection.tasks.length === 1) {
-      const task = inspection.tasks[0]!.record;
+    // Manual maintenance has no accepted-input operation. Admit one exact
+    // manifest task, including its terminal summary write, alongside proven work.
+    const manualTasks = await runtime.inspectRecoverableMaintenance(inspection); assert();
+    if (manualTasks.length === 1) {
+      const task = manualTasks[0]!;
       const binding = manifest.find(b => b.conversationId === task.conversationId);
       if (binding && task.kind === "pi.compaction" && task.owner === undefined && !task.background &&
         (task.input as { reason?: string }).reason === "manual") maintenance = { taskId: task.id as import("@earendil-works/pi-durable").TaskId<import("@earendil-works/pi-durable").CompactionResult>, binding };
@@ -179,12 +195,17 @@ export async function createHostController(config: HostControllerOptions, contex
     await authorizeRecoveredWork(inspection);
     bootstrapApproval = false;
     let retry: Promise<void> | undefined;
+    const unavailableReplyThreads = new Set<string>();
     const activeRuntime = runtime;
     // Explicit same-ID intent repair only. Never resume/wait or replay a primary model turn.
     // Rescan SQL on every call: the bootstrap snapshot is not continuing source authority.
     function reconcileRecovered(): Promise<void> {
       if (retry) return retry;
       retry = (async () => {
+        // Restore manual-compaction provider authority before another accepted
+        // input can resume this same SDK scheduler. Do not block startup on a
+        // summary write waiting for an independently recovered run to finish.
+        if (r.withCompactionGuard && maintenance) void resumeRecoveredMaintenance().catch(error => log.error("Recovered maintenance remains pending", { err: error }));
         let current = await scan();
         recovered = current;
         // Complete an already accepted cancellation, never resume it as model work.
@@ -204,11 +225,22 @@ export async function createHostController(config: HostControllerOptions, contex
         // only for cold-start operations: their previous dispatcher no longer exists.
         for (const entry of current) {
           assert();
-          if (entry.role !== "primary" || entry.binding?.submissionId == null) continue;
+          if (entry.role !== "primary" || entry.binding?.submissionId == null || unavailableReplyThreads.has(entry.input.operationId)) continue;
           const state = await activeRuntime.reconcile(entry.input);
           if ((state.status?.status === "unanswered" && state.status.reason === "model_error") ||
               (startupAnswers.has(entry.input.operationId) && state.status?.status === "done")) {
-            if (await activeRuntime.settle(entry.input)) startupAnswers.delete(entry.input.operationId);
+            try {
+              if (await activeRuntime.settle(entry.input)) startupAnswers.delete(entry.input.operationId);
+            } catch (error) {
+              assert();
+              if (!(error instanceof AcceptedReplyThreadUnavailableError)) throw error;
+              // Retain the accepted source and committed answer. Never fabricate
+              // a replacement thread or let one unavailable root crash all chats.
+              unavailableReplyThreads.add(entry.input.operationId);
+              log.warn("Recovered reply thread unavailable; accepted input retained", {
+                operation: "durable_recovery.reply_thread_unavailable", operationId: entry.input.operationId, chatJid: entry.input.chatJid,
+              });
+            }
           }
         }
         assert();

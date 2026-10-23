@@ -9,9 +9,10 @@ import { createHostController, type HostControllerOptions } from "../../runtime/
 import { barrier, context } from "./src/fixture.js";
 import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/durable-recovery-dispatch.js";
 import { at, effect, sealed, value } from "./src/host-handoff.js";
+import { AcceptedReplyThreadUnavailableError } from "../../runtime/durable-engine/src/host-message-thread.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
-for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
+for (const modes of [["committed-answer"], ["unavailable-reply-thread"], ["unrelated-settlement-error"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
   ["bootstrap-close-failure", "shutdown-close-failure"],
   ["rollback", "rollback-host-changed", "rollback-close-failure", "rollback-pending"],
   ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"],
@@ -20,7 +21,8 @@ for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-
     for (const mode of modes) {
     const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-controller-"));
     const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
-    const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" || mode === "committed-answer" || mode === "operator-abort-recovered" ? "committed-ack-lost" : "before-submit");
+    const committed = ["committed-answer", "unavailable-reply-thread", "unrelated-settlement-error"].includes(mode);
+    const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" || committed || mode === "operator-abort-recovered" ? "committed-ack-lost" : "before-submit");
     let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
     let actualClose: (() => Promise<void>) | undefined;
     let candidate: Awaited<ReturnType<typeof SqliteStorage.open>> | undefined;
@@ -33,7 +35,7 @@ for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-
     const closeFailure = mode === "bootstrap-close-failure" || mode === "shutdown-close-failure" || mode === "rollback-close-failure";
     try {
       const { primary, primaryId } = await f.prepare();
-      if (mode === "committed-answer") {
+      if (committed) {
         const intent = (await f.ports.bindings.intents!.list(primary))[0]!;
         f.base.host.modelHold!.release();
         await f.runtime!.resume(primary, primaryId);
@@ -124,7 +126,12 @@ for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-
           bindHarness: f.ports.work.bindHarness.bind(f.ports.work), finishHarness: f.ports.work.finishHarness!.bind(f.ports.work) },
           harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
           existingConversationIds: [mode === "failed-open" ? 999999 as typeof f.base.root.id : f.base.root.id],
-          conversationFor: () => f.base.root.id, putAnswer(ref, text) { if (mode === "committed-answer") f.putAnswer(ref, text); }, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
+          conversationFor: () => f.base.root.id, putAnswer(ref, text) { if (committed) f.putAnswer(ref, text); },
+          replyThreadFor() {
+            if (mode === "unavailable-reply-thread") throw new AcceptedReplyThreadUnavailableError();
+            if (mode === "unrelated-settlement-error") throw Error("fixture settlement failed");
+            return null;
+          }, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
         recovery: { manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }],
           work: f.ports.work, bindings: f.ports.bindings,
           async readAcceptedInput(source) {
@@ -147,6 +154,25 @@ for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-
         await expect(closing).rejects.toThrow("injected storage close failure");
         expect(controller.close()).toBe(closing);
         await expect(controller.close()).rejects.toThrow("injected storage close failure");
+      } else if (mode === "unavailable-reply-thread" || mode === "unrelated-settlement-error") {
+        controller = await pending;
+        if (mode === "unrelated-settlement-error") {
+          await expect(controller.reconcileRecovered()).rejects.toThrow("fixture settlement failed");
+        } else {
+          const beforeMessages = f.db.query("SELECT * FROM messages WHERE chat_jid=?").all(f.chatJid);
+          await controller.reconcileRecovered();
+          const snapshot = () => ["messages", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits"]
+            .map(table => f.db.query(`SELECT * FROM ${table}`).all());
+          const retained = snapshot();
+          await controller.reconcileRecovered();
+          expect(snapshot()).toEqual(retained);
+          expect((await controller.runtime.reconcile(primary)).operation.terminal).toBeNull();
+          expect(f.ports.work.getAcceptedSource(f.chatJid, primary.sourceId)?.state).toBe("claimed");
+          expect(f.db.query("SELECT * FROM messages WHERE chat_jid=?").all(f.chatJid)).toEqual(beforeMessages);
+          expect(f.providerEntries).toBe(entries);
+          expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
+        }
+        await controller.close();
       } else if (mode === "committed-answer") {
         controller = await pending;
         expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");

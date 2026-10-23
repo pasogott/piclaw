@@ -598,3 +598,119 @@ describe("EF-S07 SQLite hardening", () => {
     expect(computeNextRun("cron", "30 1 * * *", { currentDate: "2024-10-27T00:30:00.000Z", timezone: "Europe/Lisbon" })).toBe("2024-10-28T01:30:00.000Z");
   });
 });
+
+// Synthetic historical state: the scheduler lost its lease after source binding,
+// while the host interrupted and disposed the never-harness-bound source.
+async function interruptedScheduledFixture() {
+  const root=mkdtempSync(join(tmpdir(),"piclaw-s07-reconcile-"));
+  const f=openSqliteSubject(join(root,"store.sqlite"),root);
+  await f.authority.create(authorityTask('task:interrupted',{kind:'agent',executionRepeatability:'agent_source',scheduleType:'cron',scheduleValue:'0 1 * * *'}));
+  const lease=(await f.store.claimDue(dueClaim('interrupted'))).value![0]!;
+  const operationId='operation:interrupted';
+  f.acceptAgentSource({runId:lease.record.runId,chatJid:lease.task.chatJid,sourceSeq:1,operationId});
+  const bind={effect:{idempotencyKey:'bind:interrupted',requestHash:'',operationId,sourceSeq:1,provenanceRef:lease.record.runId,redactionClass:'private' as const},runId:lease.record.runId,workerId:lease.record.workerId,expectedAttempt:lease.record.attempt,expectedTaskRevision:lease.record.taskRevision,leaseToken:lease.leaseToken,now:'2026-08-16T01:00:01.000Z',boundAt:'2026-08-16T01:00:01.000Z',sourceSeq:1,operationId};
+  bind.effect.requestHash=hashCanonicalRequest(bind as unknown as CanonicalJsonValue);
+  expect((await f.store.bindAcceptedSource(bind)).ok).toBe(true);
+  f.database.transaction(()=>{
+    f.database.query("UPDATE service_effect_s01_operations SET version=2,phase='terminal',terminal_disposition='failed',terminal_error_code='scheduled_run_interrupted',terminal_committed_at='2026-08-16T01:02:00.000Z' WHERE operation_id=?").run(operationId);
+    f.database.query("UPDATE service_effect_s01_sources SET state='disposed',disposition_reason='scheduled_run_interrupted' WHERE source_id=?").run(lease.record.runId);
+    f.database.query('UPDATE service_effect_s01_chats SET active_operation_id=NULL,consumed_through_source_seq=1 WHERE chat_jid=?').run(lease.task.chatJid);
+  }).immediate();
+  const built=createCurrentPiclawScheduledRunStore(f.database,f.runtime);if(!built.ok)throw Error(built.error._tag);
+  const request={effect:{idempotencyKey:'reconcile:interrupted',requestHash:'',operationId,sourceSeq:1,provenanceRef:lease.record.runId,redactionClass:'private' as const},runId:lease.record.runId,expectedAttempt:1,expectedTaskRevision:1,expectedOperationVersion:2,expectedLeaseExpiresAt:lease.record.leaseExpiresAt,now:'2026-08-20T12:00:00.000Z'};
+  const seal=()=>{request.effect.requestHash=hashCanonicalRequest(request as unknown as CanonicalJsonValue);return request;};
+  const rows=(table:string)=>f.database.query(`SELECT * FROM ${table} ORDER BY rowid`).all();
+  const immutable=()=>['service_effect_s01_sources','service_effect_s01_operations','service_effect_s01_operation_sources','service_effect_s07_leases','service_effect_s07_source_bindings'].map(rows);
+  const snapshot=()=>['service_effect_s07_occurrences','service_effect_s07_tasks','service_effect_s07_next_decisions','service_effect_s07_run_logs','service_effect_s07_decisions','service_effect_s05_outbox'].map(rows);
+  return {...f,native:built.value,lease,request,seal,immutable,snapshot};
+}
+
+describe('expired interrupted agent terminal reconciliation',()=>{
+  test('retains original identities and lease history, skips missed cron runs, and replays completion exactly once',async()=>{
+    const f=await interruptedScheduledFixture();try{
+      const before=f.immutable();
+      const oldComplete=completion(f.lease,'expired-complete',f.request.now);
+      expect((await f.store.complete(oldComplete)).ok).toBe(false);
+      const result=await f.native.reconcileInterruptedAgentSource(f.seal());expect(result.ok).toBe(true);
+      expect(result.value).toMatchObject({state:'completed',status:'error',errorCode:'scheduled_run_interrupted',attempt:1,operationId:f.request.effect.operationId,acceptedSourceSeq:1,headDisposition:'advanced',nextRunAt:'2026-08-21T01:00:00.000Z'});
+      expect(f.immutable()).toEqual(before);
+      const after=f.snapshot();expect((await f.native.reconcileInterruptedAgentSource(f.seal())).value).toEqual(result.value);expect(f.snapshot()).toEqual(after);
+      expect(f.inspect()).toMatchObject({occurrences:1,runLogs:1,nextDecisions:1,outboxRows:0});
+      expect((await f.store.claimDue(dueClaim('after-reconcile',f.request.now))).value).toEqual([]);
+      expect((await f.store.get(f.request.runId)).value).toEqual(result.value);
+    }finally{f.dispose();}
+  });
+
+  for(const fault of ['before_effect','effect_then_lost_acknowledgement'] as const)test(`reconciliation ${fault} preserves exact-once receipts`,async()=>{
+    const f=await interruptedScheduledFixture();try{
+      const before=f.immutable();f.runtime.plan('complete',fault,1);
+      expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(false);
+      expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(true);
+      expect(f.inspect()).toMatchObject({occurrences:1,runLogs:1,nextDecisions:1,outboxRows:0});expect(f.immutable()).toEqual(before);
+    }finally{f.dispose();}
+  });
+
+  for(const statement of ['next_decision_insert','run_log_insert','task_head_update','occurrence_terminal_update','decision_insert'] as const)test(`reconciliation rolls back ${statement}`,async()=>{
+    const f=await interruptedScheduledFixture();try{
+      const before=f.snapshot(),immutable=f.immutable();f.runtime.failAfterStatement(statement);
+      expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(false);expect(f.snapshot()).toEqual(before);expect(f.immutable()).toEqual(immutable);
+      expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(true);expect(f.inspect().runLogs).toBe(1);
+    }finally{f.dispose();}
+  });
+
+  for(const malformed of ['attempt','revision','operation-version','expiry','unexpired','source-seq','source-state','operation-state','harness','error-code','active-link','source-kind'] as const)test(`reconciliation refuses ${malformed} without mutation`,async()=>{
+    const f=await interruptedScheduledFixture();try{
+      if(malformed==='attempt')f.request.expectedAttempt=2;
+      if(malformed==='revision')f.request.expectedTaskRevision=2;
+      if(malformed==='operation-version')f.request.expectedOperationVersion=3;
+      if(malformed==='expiry')f.request.expectedLeaseExpiresAt='2026-08-16T01:02:00.000Z';
+      if(malformed==='unexpired')f.request.now='2026-08-16T01:00:10.000Z';
+      if(malformed==='source-seq')f.request.effect.sourceSeq=2;
+      if(malformed==='source-state')f.database.exec("UPDATE service_effect_s01_sources SET state='claimed',disposition_reason=NULL");
+      if(malformed==='operation-state')f.database.exec("UPDATE service_effect_s01_operations SET phase='claimed',terminal_disposition=NULL,terminal_error_code=NULL,terminal_committed_at=NULL");
+      if(malformed==='harness')f.database.exec("UPDATE service_effect_s01_operations SET harness_session_id='old',harness_lane='main',harness_operation_id='old',harness_state='finished',harness_watch_generation=1");
+      if(malformed==='error-code')f.database.exec("UPDATE service_effect_s01_operations SET terminal_error_code='other_failure'");
+      if(malformed==='active-link')f.database.query('UPDATE service_effect_s01_chats SET active_operation_id=?').run(f.request.effect.operationId);
+      if(malformed==='source-kind')f.database.exec("UPDATE service_effect_s01_sources SET kind='message'");
+      const before=f.snapshot(),immutable=f.immutable();expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(false);expect(f.snapshot()).toEqual(before);expect(f.immutable()).toEqual(immutable);
+    }finally{f.dispose();}
+  });
+
+  test('paused head is preserved and no notification is invented',async()=>{
+    const f=await interruptedScheduledFixture();try{
+      f.authority.pause(f.lease.task.taskId);
+      const head=f.database.query('SELECT * FROM service_effect_s07_tasks').all();
+      const result=await f.native.reconcileInterruptedAgentSource(f.seal());expect(result.ok).toBe(true);expect(result.value?.headDisposition).toBe('paused');
+      expect(f.database.query('SELECT * FROM service_effect_s07_tasks').all()).toEqual(head);expect(f.inspect().outboxRows).toBe(0);
+    }finally{f.dispose();}
+  });
+});
+
+
+test('terminal reconciliation preserves a newer task revision',async()=>{
+  const f=await interruptedScheduledFixture();try{
+    f.authority.update({...authorityTask(f.lease.task.taskId,{kind:'agent',executionRepeatability:'agent_source',scheduleType:'cron',scheduleValue:'30 3 * * *',nextRunAt:'2026-08-22T03:30:00.000Z',authoredAt:'2026-08-20T11:59:00.000Z'}),expectedRevision:1});
+    const head=f.database.query('SELECT * FROM service_effect_s07_tasks').all();
+    const result=await f.native.reconcileInterruptedAgentSource(f.seal());expect(result.ok).toBe(true);expect(result.value?.headDisposition).toBe('superseded');expect(result.value?.nextRunAt).toBeNull();
+    expect(f.database.query('SELECT * FROM service_effect_s07_tasks').all()).toEqual(head);
+  }finally{f.dispose();}
+});
+
+test('terminal reconciliation remains idempotent after native retention',async()=>{
+  const f=await interruptedScheduledFixture();try{
+    expect((await f.native.reconcileInterruptedAgentSource(f.seal())).ok).toBe(true);
+    expect((await f.store.cleanupTerminal({settledBefore:'2026-08-21T00:00:00.000Z',limit:1})).value?.removed).toBe(1);
+    const before=f.snapshot(),immutable=f.immutable();
+    const replay=await f.native.reconcileInterruptedAgentSource(f.seal());expect(replay.ok).toBe(true);expect(replay.value).toMatchObject({state:'completed',status:'error',retained:true,attempt:1});
+    expect(f.snapshot()).toEqual(before);expect(f.immutable()).toEqual(immutable);
+  }finally{f.dispose();}
+});
+
+test('terminal reconciliation rejects altered request bytes before any mutation',async()=>{
+  const f=await interruptedScheduledFixture();try{
+    const request=f.seal(),before=f.snapshot();
+    expect((await f.native.reconcileInterruptedAgentSource({...request,expectedOperationVersion:3})).ok).toBe(false);
+    expect((await f.native.reconcileInterruptedAgentSource({...request,unqualified:true} as any)).ok).toBe(false);
+    expect(f.snapshot()).toEqual(before);
+  }finally{f.dispose();}
+});

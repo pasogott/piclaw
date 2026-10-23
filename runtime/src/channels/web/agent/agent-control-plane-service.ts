@@ -19,6 +19,7 @@ import {
   type InteractionRow,
 } from "../../../db.js";
 import { createLogger } from "../../../utils/logger.js";
+import { queuedSteeringRejectionReason } from "./queued-steering-diagnostics.js";
 import type { AgentControlCommand, AgentControlResult } from "../../../agent-control/agent-control-types.js";
 import type { QueuedFollowupItem } from "../runtime/followup-placeholders.js";
 import { parseJsonObjectRequest } from "../json-body.js";
@@ -331,6 +332,7 @@ export class WebAgentControlPlaneService {
   async handleAgentQueueSteer(req: Request): Promise<Response> {
     const selectSteering = this.options.getAcceptedQueuedSteering;
     let acceptedSteering = false;
+    let acceptedSteeringStage = "resolve_host";
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -347,9 +349,14 @@ export class WebAgentControlPlaneService {
       if (queued?.source_accepted) {
         acceptedSteering = true;
         const host = selectSteering?.(chatJid);
-        if (!host) return this.options.json({ error: 'Accepted input requires host cancellation' }, 500);
+        if (!host) {
+          log.warn('Accepted queued steering rejected', { stage: acceptedSteeringStage, reason: 'host_unavailable' });
+          return this.options.json({ error: 'Accepted input requires host cancellation' }, 500);
+        }
         const accept = host.accept.bind(host);
+        acceptedSteeringStage = 'accept';
         const { interaction, dispatch } = await accept(rowId);
+        acceptedSteeringStage = 'publish';
         void dispatch().catch((error) => {
           log.warn("Accepted steering dispatch remains pending", { err: error, chatJid });
         });
@@ -452,6 +459,9 @@ export class WebAgentControlPlaneService {
         count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid),
       }, 201);
     } catch (error) {
+      if (acceptedSteering) {
+        log.warn('Accepted queued steering rejected', { stage: acceptedSteeringStage, reason: queuedSteeringRejectionReason(error) });
+      }
       const message = acceptedSteering ? 'Accepted steering is unavailable.' : error instanceof Error ? error.message : String(error);
       return this.options.json({ error: message }, 500);
     }

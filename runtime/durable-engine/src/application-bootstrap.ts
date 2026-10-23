@@ -239,6 +239,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         withPromptContextGuard: (check, body) => candidateDatabase.withAdmissionGuard(check, body),
         withIdleModelGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
           () => candidateDatabase.withIdleModelGuard(body)),
+        withCompactionGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
+          () => candidateDatabase.withCompactionGuard(body)),
         existingConversationIds: manifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
@@ -762,7 +764,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         materialize: (item, accept) => storeWebMessage(projection,
           { chatJid: chat, content: item.queuedContent, isBot: false, mediaIds: item.mediaIds ?? [], agentId: "default", agentName: "User" },
           { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true,
-            contentBlocks: item.contentBlocks, linkPreviews: item.linkPreviews }),
+            contentBlocks: item.contentBlocks, linkPreviews: item.linkPreviews, threadId: item.threadId, screenHint: item.screenHint }),
         onPendingIntent: recovery.onPendingIntent });
     };
     const applicationInput = createApplicationHostInput({ root, domain: r.incarnation, assertCurrent: assertLive,

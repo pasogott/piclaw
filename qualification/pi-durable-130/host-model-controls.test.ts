@@ -3,7 +3,7 @@ import { test, expect } from "bun:test";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "../../runtime/durable-engine/src/host-model-controls.js";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
 
-function fixture(sections: any[] = [], messages: any[] = []) {
+function fixture(sections: any[] = [], messages: any[] = [], prepareContext?: Parameters<typeof createHostModelTools>[0]["prepareContext"]) {
   const model = (provider: string, id: string, contextWindow = 200000) => ({ provider, id, name: id, api: "openai-responses", reasoning: true,
     input: ["text"], contextWindow, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   const catalog = [model("first", "one"), model("second", "two"), model("second", "tiny", 100)];
@@ -12,6 +12,7 @@ function fixture(sections: any[] = [], messages: any[] = []) {
   const tools = createHostModelTools({ assertCurrent() { if (!valid) throw Error("revoked"); }, available: () => catalog as any,
     assertModel(choice) { if (!available || !catalog.some(m => m.provider === choice.provider && m.id === choice.modelId)) throw Error("unavailable"); },
     async readContext(call) { expect(call.conversationId).toBe(7); reads++; return messages; },
+    prepareContext,
     async captureSourceGuard(call) { expect(call).toEqual({ conversationId: 7, taskId: 9, toolCallId: "owned" }); return () => { guards++; if (!valid) throw Error("revoked"); }; },
   });
   const api: any = { conversationId: 7, taskId: 9, callId: "owned", registry: { tools: () => [], sections: () => sections },
@@ -98,4 +99,24 @@ test("same-model optimisation fails closed if the persisted model changes during
   f.duringDoc(current=>{current.model={provider:"second",modelId:"two"};});
   await expect(f.run("set_model",{model:"first/one",thinking_level:"high"})).rejects.toThrow("Model selection changed");
   expect(f.state()).toEqual(before);
+});
+
+for (const reject of [false, true]) test(`owned model selection uses prepared selected schemas and final commit fence; reject=${reject}`, async () => {
+  let preparations = 0, checks = 0;
+  const f = fixture([{ key: "phase-must-not-render", render() { throw Error("stale phase prompt must not render"); } }], [], async (call, model) => {
+    preparations++; expect(call).toEqual({ conversationId: 7, taskId: 9, toolCallId: "owned" });
+    expect(model).toEqual({ provider: "second", modelId: "two" });
+    return { messages: [], tools: [], promptSectionBytes: 0, assertScopeCurrent() {}, async assertCurrent(_tx, current) {
+      checks++; expect((current as any).model).toEqual({ provider: "first", modelId: "one" });
+      if (reject) throw Error("Model context history changed; retry the command.");
+    } };
+  });
+  const before = structuredClone(f.state());
+  if (reject) {
+    await expect(f.run("set_model", { model: "second/two" })).rejects.toThrow("history changed");
+    expect(f.state()).toEqual(before);
+  } else {
+    expect((await f.run("set_model", { model: "second/two" })).model).toBe("second/two");
+  }
+  expect(preparations).toBe(1); expect(checks).toBe(1); expect(f.stats().reads).toBe(0);
 });

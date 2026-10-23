@@ -8,6 +8,7 @@ import type {
   CompleteScheduledRunRequest,
   ListScheduledRunsRequest,
   RenewScheduledRunRequest,
+  ReconcileInterruptedScheduledRunRequest,
   ScheduledRunRecord,
   ScheduledRunReclaimAuthority,
   ScheduledTaskAuthorityInput,
@@ -378,6 +379,15 @@ export function normaliseComplete(value: unknown): CompleteScheduledRunRequest |
   }
   const request = Object.freeze({ ...row, now: canonicalInstant(row.now), effect: identity, completedAt, outboxIntents: Object.freeze(intents) }) as unknown as CompleteScheduledRunRequest;
   return identity.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue) ? request : null;
+}
+
+export function normaliseInterruptedReconciliation(value: unknown): ReconcileInterruptedScheduledRunRequest | null {
+  const row = readObject(value, ['effect','runId','expectedAttempt','expectedTaskRevision','expectedOperationVersion','expectedLeaseExpiresAt','now']);
+  if (!row || !validScheduledRunId(row.runId) || !safeInteger(row.expectedAttempt,1) || !safeInteger(row.expectedTaskRevision,1) || !safeInteger(row.expectedOperationVersion,1)) return null;
+  const identity=effect(row.effect), now=canonicalInstant(row.now), expires=canonicalInstant(row.expectedLeaseExpiresAt);
+  if (!identity || !identity.operationId || !safeInteger(identity.sourceSeq,1) || !now || !expires || expires>now) return null;
+  const request=Object.freeze({...row,effect:identity,now,expectedLeaseExpiresAt:expires}) as unknown as ReconcileInterruptedScheduledRunRequest;
+  return identity.requestHash===hashCanonicalRequest(request as unknown as CanonicalJsonValue)?request:null;
 }
 
 export function normaliseAbandon(value: unknown): AbandonScheduledRunRequest | null {

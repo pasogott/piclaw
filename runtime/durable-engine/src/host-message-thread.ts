@@ -1,6 +1,11 @@
 import type { Database } from "bun:sqlite";
 import type { AcceptedInput } from "./host-runtime.js";
 
+/** The accepted source exists, but its selected reply root is unavailable. */
+export class AcceptedReplyThreadUnavailableError extends Error {
+  constructor() { super("Accepted reply thread missing"); this.name = "AcceptedReplyThreadUnavailableError"; }
+}
+
 /** Resolve only the immutable accepted message, never the latest timeline row. */
 export function resolveAcceptedMessageThread(db: Database, input: AcceptedInput): number | null {
   const source = db.query(`SELECT kind,source_id,payload_ref FROM service_effect_s01_sources
@@ -17,6 +22,6 @@ export function resolveAcceptedMessageThread(db: Database, input: AcceptedInput)
   const threadId = row.thread_id ?? row.rowid;
   if (!Number.isSafeInteger(threadId) || threadId <= 0 || !db.query(
     "SELECT 1 FROM messages WHERE chat_jid=? AND rowid=? AND (thread_id IS NULL OR thread_id=rowid)"
-  ).get(input.chatJid, threadId)) throw Error("Accepted reply thread missing");
+  ).get(input.chatJid, threadId)) throw new AcceptedReplyThreadUnavailableError();
   return threadId;
 }

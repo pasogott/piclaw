@@ -1,4 +1,4 @@
-import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
+import { assertModelContextFits, measureModelPromptSections, type ModelContextAdmission } from "./host-model-context.js";
 import { Type, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { AgentDoc, configure, defineTool, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
 
@@ -12,6 +12,7 @@ interface Options {
   assertCurrent(): void;
   available(): readonly Model<Api>[];
   readContext(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }): Promise<readonly import("@earendil-works/pi-ai").Message[]>;
+  prepareContext?(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<ModelContextAdmission>;
   assertModel(choice: { provider: string; modelId: string }): void;
   captureSourceGuard(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }): Promise<() => void>;
 }
@@ -61,13 +62,15 @@ export function createHostModelTools(options: Options) {
       const needsContextCheck = !!choice && (resolved?.model?.provider !== choice.provider || resolved?.model?.modelId !== choice.modelId);
       // Only a different model needs candidate context admission. Level-only
       // changes, including an explicit unchanged model, preserve current limits.
-      const messages = needsContextCheck ? await options.readContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) : undefined;
+      const admission = needsContextCheck && options.prepareContext ? await options.prepareContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }, choice!, requestedLevel) : undefined;
       check();
-      const promptSectionBytes = needsContextCheck ? await measureModelPromptSections(messages!, {
+      const messages = admission?.messages ?? (needsContextCheck ? await options.readContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) : undefined);
+      check();
+      const promptSectionBytes = admission?.promptSectionBytes ?? (needsContextCheck ? await measureModelPromptSections(messages!, {
         conversationId: api.conversationId,
         agent: { ...resolved!, ...(choice ? { model: choice } : {}), ...(requestedLevel !== undefined ? { thinkingLevel: requestedLevel as any } : {}) },
         env: api.env, read: api,
-      }, context) : undefined;
+      }, context) : undefined);
       check();
       const result = await api.commit(async tx => {
         check();
@@ -84,12 +87,13 @@ export function createHostModelTools(options: Options) {
           const changesModel = !!choice && (current.model?.provider !== choice.provider || current.model?.modelId !== choice.modelId);
           if (changesModel) {
             if (!needsContextCheck) throw Error("Model selection changed; retry the command.");
-            assertModelContextFits(messages!, current, model, api.registry, promptSectionBytes);
+            if (admission) { await admission.assertCurrent(tx, current); check(); }
+            assertModelContextFits(messages!, current, model, api.registry, promptSectionBytes, admission?.tools);
           }
           // Public SDK commit keeps this atomic with the owned tool result. Recheck
           // model policy and source after every await, including immediately before commit.
           await configure(tx, api.conversationId, { ...(choice ? { model: choice } : {}), ...(level !== undefined ? { thinkingLevel: level as any } : {}) });
-          check(); options.assertModel(target);
+          admission?.assertScopeCurrent(); check(); options.assertModel(target);
         }
         return { model: `${target.provider}/${target.modelId}`, thinking_level: level ?? null, thinking_levels: supported,
           changed: !!choice || requestedLevel !== undefined, applies_to: "next model request" };

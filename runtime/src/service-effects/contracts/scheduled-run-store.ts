@@ -152,6 +152,23 @@ export interface CompleteScheduledRunRequest extends ScheduledRunLeaseFence {
   readonly outboxIntents: readonly EnqueueOutboxRequest[];
 }
 
+/** Reconcile only an expired, source-bound agent occurrence whose original
+ * interrupted operation and source are already terminal. No lease is fabricated. */
+export interface ReconcileInterruptedScheduledRunRequest {
+  readonly effect: EffectIdentity;
+  readonly runId: string;
+  readonly expectedAttempt: number;
+  readonly expectedTaskRevision: number;
+  readonly expectedOperationVersion: number;
+  readonly expectedLeaseExpiresAt: string;
+  readonly now: string;
+}
+
+/** Native host capability; generic stores need not support historical repair. */
+export interface InterruptedScheduledRunReconciler {
+  reconcileInterruptedAgentSource(request: ReconcileInterruptedScheduledRunRequest): Promise<Result<ScheduledRunRecord, ScheduledRunStoreError>>;
+}
+
 export interface AbandonScheduledRunRequest extends ScheduledRunLeaseFence {
   readonly effect: EffectIdentity;
   readonly reasonTag: string;

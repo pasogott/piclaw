@@ -13,6 +13,8 @@ import type {
   CompleteScheduledRunRequest,
   ListScheduledRunsRequest,
   RenewScheduledRunRequest,
+  ReconcileInterruptedScheduledRunRequest,
+  InterruptedScheduledRunReconciler,
   ScheduledRunHeadDisposition,
   ScheduledRunLease,
   ScheduledRunRecord,
@@ -42,6 +44,7 @@ import {
   normaliseClaim,
   normaliseCleanup,
   normaliseComplete,
+  normaliseInterruptedReconciliation,
   normaliseList,
   normaliseRenew,
   validateScheduledRunId,
@@ -74,7 +77,7 @@ export interface ScheduledRunAdapterRuntime {
   recordTrace(input: NormalisedTraceInput): void;
 }
 
-export type ScheduledRunStoreConstructionResult = ResultValue<ScheduledRunStore, ScheduledRunStoreError>;
+export type ScheduledRunStoreConstructionResult = ResultValue<ScheduledRunStore & InterruptedScheduledRunReconciler, ScheduledRunStoreError>;
 
 type RunRow = {
   run_id: string; task_id: string; task_revision: number; scheduled_for: string; state: ScheduledRunRecord["state"];
@@ -184,6 +187,13 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     this.trace("complete", effectId, request?.effect.operationId ?? null, request?.expectedTaskRevision ?? null, "call", null, request?.effect.sourceSeq ?? null);
     if (!request) return this.failed("complete", effectId, null, null, errorOf("invalid_request"));
     return this.mutate("complete", effectId, request.effect.operationId, request.expectedTaskRevision, () => this.completeRun(request), request.effect.sourceSeq);
+  }
+
+  async reconcileInterruptedAgentSource(input: ReconcileInterruptedScheduledRunRequest): Promise<ResultValue<ScheduledRunRecord, ScheduledRunStoreError>> {
+    const request=normaliseInterruptedReconciliation(input), effectId=request?.effect.idempotencyKey??'invalid';
+    this.trace('complete',effectId,request?.effect.operationId??null,request?.expectedTaskRevision??null,'call',null,request?.effect.sourceSeq??null);
+    if (!request) return this.failed('complete',effectId,null,null,errorOf('invalid_request'));
+    return this.mutate('complete',effectId,request.effect.operationId,request.expectedTaskRevision,()=>this.reconcileInterruptedRun(request),request.effect.sourceSeq);
   }
 
   async abandon(input: AbandonScheduledRunRequest): Promise<ResultValue<ScheduledRunRecord, ScheduledRunStoreError>> {
@@ -433,18 +443,59 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   }
 
   private completeRun(request: CompleteScheduledRunRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
-    const key = `effect:${request.effect.idempotencyKey}`;
-    return this.database.transaction(() => {
-      const replay = this.replayRecordOrRetained(key, "complete", request.effect.requestHash, request.runId);
-      if (replay) return Result.ok(replay);
-      const run = this.requireFencedRun(request, hashScheduledLeaseToken(request.leaseToken));
-      const snapshot = this.readSnapshot(run.task_id, run.task_revision);
-      this.validateCompletionShape(request, run, snapshot);
+    const key=`effect:${request.effect.idempotencyKey}`;
+    return this.database.transaction(()=>{
+      const replay=this.replayRecordOrRetained(key,'complete',request.effect.requestHash,request.runId);
+      if(replay)return Result.ok(replay);
+      const run=this.requireFencedRun(request,hashScheduledLeaseToken(request.leaseToken));
+      const snapshot=this.readSnapshot(run.task_id,run.task_revision);
+      this.validateCompletionShape(request,run,snapshot);
+      return this.finishCompletion(request,run,snapshot);
+    }).immediate();
+  }
+
+  private reconcileInterruptedRun(request: ReconcileInterruptedScheduledRunRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
+    return this.database.transaction(()=>{
+      assertProcessAdmission();
+      const replay=this.replayRecordOrRetained(`effect:${request.effect.idempotencyKey}`,'complete',request.effect.requestHash,request.runId);
+      if(replay)return Result.ok(replay);
+      const run=this.readRunRow(request.runId);
+      if(!run)throw new AbortMutation(errorOf('not_found'));
+      this.recordFromRun(run);
+      if(run.task_revision!==request.expectedTaskRevision)throw new AbortMutation(errorOf('task_revision_mismatch'));
+      if(run.state!=='source_bound'||run.attempt!==request.expectedAttempt||run.lease_expires_at!==request.expectedLeaseExpiresAt||!run.lease_expires_at||run.lease_expires_at>request.now)throw new AbortMutation(errorOf('lease_conflict'));
+      if(run.operation_id!==request.effect.operationId||run.accepted_source_seq!==request.effect.sourceSeq)throw new AbortMutation(errorOf('invalid_request'));
+      const snapshot=this.readSnapshot(run.task_id,run.task_revision), proof=this.interruptedSourceProof(run,snapshot);
+      if(!proof||proof.version!==request.expectedOperationVersion||proof.committedAt>request.now||proof.committedAt<run.claimed_at)throw new AbortMutation(errorOf('invalid_transition'));
+      const durationMs=Date.parse(proof.committedAt)-Date.parse(run.claimed_at);
+      if(!Number.isSafeInteger(durationMs)||durationMs<0)throw new CorruptState();
+      return this.finishCompletion({effect:request.effect,status:'error',durationMs,resultRef:null,errorCode:'scheduled_run_interrupted',completedAt:request.now,outboxIntents:[]},run,snapshot,true);
+    }).immediate();
+  }
+
+  /** Immutable host evidence only; never claim, submit or replay the agent source. */
+  private interruptedSourceProof(run: RunRow,snapshot: ScheduledTaskSnapshot): {version:number;committedAt:string}|null {
+    if(snapshot.kind!=='agent'||snapshot.executionRepeatability!=='agent_source'||!run.operation_id||run.accepted_source_seq===null)return null;
+    const row=this.database.query(`SELECT o.version,o.terminal_committed_at FROM service_effect_s01_operations o
+      JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+      JOIN service_effect_s01_chats c ON c.chat_jid=o.chat_jid
+      WHERE o.operation_id=? AND o.chat_jid=? AND o.primary_source_seq=? AND s.source_id=? AND s.kind='scheduled_agent'
+      AND o.phase='terminal' AND o.terminal_disposition='failed' AND o.terminal_error_code='scheduled_run_interrupted'
+      AND s.state='disposed' AND s.disposition_reason='scheduled_run_interrupted'
+      AND o.harness_session_id IS NULL AND o.harness_lane IS NULL AND o.harness_operation_id IS NULL AND o.harness_state IS NULL AND o.harness_watch_generation IS NULL
+      AND o.cancellation_source_seq IS NULL AND o.terminal_message_row_id IS NULL
+      AND (c.active_operation_id IS NULL OR c.active_operation_id<>o.operation_id)
+      AND (SELECT COUNT(*) FROM service_effect_s01_operation_sources os WHERE os.operation_id=o.operation_id)=1`).get(run.operation_id,snapshot.chatJid,run.accepted_source_seq,run.run_id) as {version:number;terminal_committed_at:string}|null;
+    const committedAt=row&&canonicalInstant(row.terminal_committed_at);
+    return row&&Number.isSafeInteger(row.version)&&row.version>0&&committedAt?{version:row.version,committedAt}:null;
+  }
+
+  private finishCompletion(request: Pick<CompleteScheduledRunRequest,'effect'|'status'|'durationMs'|'resultRef'|'errorCode'|'completedAt'|'outboxIntents'>,run: RunRow,snapshot: ScheduledTaskSnapshot,skipMissedOccurrences=false): ResultValue<ScheduledRunRecord,ScheduledRunStoreError> {
       for (const intent of request.outboxIntents) {
         const existing = this.database.query("SELECT outbox_id FROM service_effect_s05_outbox WHERE outbox_id=? OR (kind=? AND idempotency_key=?) LIMIT 1").get(intent.outboxId, intent.kind, intent.effect.idempotencyKey);
         if (existing) throw new AbortMutation(errorOf("idempotency_conflict"));
       }
-      const decision = this.decideHead(run, snapshot, request.completedAt, null);
+      const decision = this.decideHead(run, snapshot, request.completedAt, null, skipMissedOccurrences);
       this.writeNextDecision(run, decision, request.completedAt, request.effect.requestHash);
       this.database.query(
         `INSERT INTO ${LOGS}(run_id,task_id,task_revision,scheduled_for,task_kind,completed_at,duration_ms,status,result_ref,error_code) VALUES(?,?,?,?,?,?,?,?,?,?)`,
@@ -459,13 +510,12 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       this.applyHeadDecision(run, decision, request.completedAt);
       const changed = this.database.query(
         `UPDATE ${RUNS} SET state='completed',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,result_status=?,duration_ms=?,result_ref=?,error_code=?,next_run_at=?,head_disposition=?,settled_at=? WHERE run_id=? AND worker_id=? AND attempt=? AND task_revision=? AND lease_token_hash=? AND state IN ('claimed','source_bound')`,
-      ).run(request.status, request.durationMs, request.resultRef, request.errorCode, decision.recordNext, decision.disposition, request.completedAt, run.run_id, request.workerId, request.expectedAttempt, request.expectedTaskRevision, hashScheduledLeaseToken(request.leaseToken));
+      ).run(request.status, request.durationMs, request.resultRef, request.errorCode, decision.recordNext, decision.disposition, request.completedAt, run.run_id, run.worker_id, run.attempt, run.task_revision, run.lease_token_hash);
       if (changed.changes !== 1) throw new AbortMutation(errorOf("lease_conflict"));
       this.statement("occurrence_terminal_update");
       const record = this.readRecord(run.run_id)!;
-      this.writeDecision(key, "complete", request.effect.requestHash, run.run_id, record, request.completedAt);
+      this.writeDecision(`effect:${request.effect.idempotencyKey}`, "complete", request.effect.requestHash, run.run_id, record, request.completedAt);
       return Result.ok(record);
-    }).immediate();
   }
 
   private abandonRun(request: AbandonScheduledRunRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
@@ -567,8 +617,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     }
   }
 
-  private decideHead(run: RunRow, snapshot: ScheduledTaskSnapshot, settledAt: string, retryAt: string | null) {
-    const computed = retryAt ?? computeScheduledSuccessor(snapshot, run.scheduled_for, settledAt);
+  private decideHead(run: RunRow, snapshot: ScheduledTaskSnapshot, settledAt: string, retryAt: string | null, skipMissedOccurrences=false) {
+    const computed = retryAt ?? computeScheduledSuccessor(snapshot, skipMissedOccurrences?settledAt:run.scheduled_for, settledAt);
     if (snapshot.scheduleType !== "once" && !computed) throw new CorruptState();
     const head = this.readHead(run.task_id);
     let disposition: Exclude<ScheduledRunHeadDisposition, "pending">;
@@ -744,7 +794,9 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         || abandonment.abandoned_at !== record.settledAt || (abandonment.retry_at !== null && !retryAt)) throw new CorruptState();
     }
     const computed = retryAt ?? computeScheduledSuccessor(snapshot, run.scheduled_for, record.settledAt!);
-    if ((snapshot.scheduleType !== "once" && !computed) || next.computed_next_run_at !== computed) throw new CorruptState();
+    const recoveredNext=record.state==='completed'&&record.status==='error'&&record.errorCode==='scheduled_run_interrupted'&&this.interruptedSourceProof(run,snapshot)
+      ?computeScheduledSuccessor(snapshot,record.settledAt!,record.settledAt!):undefined;
+    if ((snapshot.scheduleType !== 'once'&&!computed)||(next.computed_next_run_at!==computed&&next.computed_next_run_at!==recoveredNext))throw new CorruptState();
   }
 
   private requireActiveRecord(record: ScheduledRunRecord | null): ScheduledRunLease["record"] {

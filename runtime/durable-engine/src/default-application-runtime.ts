@@ -851,6 +851,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   tools.push(...createHostModelTools({
     assertCurrent() { assert(); lifetime.signal.throwIfAborted(); if (readAccessConfig().mode !== "single-user") throw Error("Native model controls unavailable"); },
     readContext: call => runtime().readToolModelContext(call),
+    prepareContext: (call, model, thinkingLevel) => runtime().prepareToolModelContext(call, model, thinkingLevel),
     available: () => available.filter(model => host.modelRegistry.getAvailable().some(current => current.provider === model.provider && current.id === model.id)),
     assertModel: choice => check({ provider: choice.provider, id: choice.modelId }, lifetime.signal),
     captureSourceGuard: captureSource,
@@ -1288,24 +1289,26 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle.bindInputProjection(undefined);
       resumePending = undefined;
       terminalBroadcast = undefined; pendingTerminalEvents.clear(); publishedTerminalEvents.clear();
-      widgetPublisher = undefined; workspaceFileOpener = undefined; codexServices?.dispose(); lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure();
-      // close seals routing synchronously; final close below joins owned cleanup.
-      void closeRemote().catch(() => {});
-      codexGroup?.dispose();
-      void mcp?.close().catch(() => {});
-      void drawioHost?.close().catch(() => {});
-      void closeSandbox().catch(() => {});
+      widgetPublisher = undefined; workspaceFileOpener = undefined;
+      // Stop producers/observers, not execution dependencies. Aborting the model
+      // bridge while the SDK can still commit would manufacture model_error and
+      // consume the accepted input instead of preserving its request checkpoint.
       bundle.stop();
     }, close() {
       return closing ??= (async () => {
       bundle.bindInputProjection(undefined);
       widgetPublisher = undefined; workspaceFileOpener = undefined;
+      bundle.stop();
+      // Public SDK close seals scheduling and joins invocations without writing
+      // cancellation outcomes. Keep tool/provider dependencies alive until then.
+      // If close is uncertain or held maintenance cannot join, retain them and
+      // ownership; the operator's process-wide backstop still bounds shutdown.
+      await bundle.close();
       const producerResults = await Promise.allSettled([closeRemote(), closeCodex()]);
       lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
       const results = [...producerResults, ...await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()])];
       const failures: unknown[] = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
       await closeLiveViews();
-      try { await bundle.close(); } catch (error) { failures.push(error); }
       if (failures.length) throw new AggregateError(failures, "Native tool cleanup uncertain");
       })();
     } };

@@ -1,3 +1,5 @@
+@import "../../common/css/delegate-progress.css";
+
 /*
  * agent.css - Extracted from styles.css during the layered stylesheet split.
  * Ownership: Agent status, thinking panels, request/connection states, and related orchestration UI.

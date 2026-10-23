@@ -10,8 +10,8 @@ import { openFixture, context } from "./src/fixture.js";
 import { installServiceWorkSchema } from "../../runtime/src/service-effects/current-piclaw/service-work-schema.js";
 import { createDurableConversationAdapter } from "../../runtime/src/agent-pool/durable-runtime-adapter.js";
 import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
-import { Harness, defineExtension } from "../../runtime/durable-engine/qualification/durable.ts";
-import { createProvider } from "../../runtime/durable-engine/qualification/ai.ts";
+import { Harness, defineExtension, defineTool } from "../../runtime/durable-engine/qualification/durable.ts";
+import { createProvider, Type } from "../../runtime/durable-engine/qualification/ai.ts";
 
 test("shared DB next-request model controls persist while destructive reset retains global idle/owner/transaction guards", async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "idle-model-"));
@@ -63,6 +63,12 @@ test("shared DB next-request model controls persist while destructive reset reta
     choice.modelId = "tiny";
     await allocation;
     expect(childId).toBeDefined();
+    // An installed, unselected tool must not inflate model-switch admission.
+    // Its declaration alone exceeds the candidate model window.
+    const excluded = defineTool({ name: "excluded-schema", description: "x".repeat(original.contextWindow + 10000),
+      parameters: Type.Object({}), callers: ["tools"], execute: async () => ({}) });
+    f.registry.install(defineExtension({ name: "excluded-context-schema", tools: [excluded] }));
+    expect(Buffer.byteLength(excluded.description)).toBeGreaterThan(original.contextWindow);
     expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
     const command = { type: "model" as const, modelId: "SYNTHETIC", raw: "/model SYNTHETIC" };
     const other = { ...command, provider: "alternate", modelId: "other" };

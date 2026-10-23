@@ -13,7 +13,8 @@ The pi-durable application routes core commands without constructing an `AgentSe
 | `/model`, `/cycle-model`, `/thinking` (`/effort`), `/cycle-thinking` | Use the captured model/thinking ports. Validate available models and effort levels. |
 | `/abort` | Cancel the exact current ordinary operation; preserve accepted successor inputs. |
 | `/new-session` | Reset context in the same conversation. Retain previous history and invalidate pending authentication flows. Legacy session-file parents are rejected. |
-| `/compact` | Use SDK compaction on an idle conversation. Reject a busy request before preparation or admission. |
+| `/compact` | Compact the captured current conversation through the public SDK, including while it is busy. Keep raw history and active work; place the summary at the next safe turn boundary. Preserve the running turn's status ownership. |
+| `/restart`, `/exit` | Request host shutdown before Goal, queue or harness inspection. Cleanup has a 15-second process-exit backstop. The service manager controls whether the process starts again. |
 | `/tree` | Read the public context tree. Entry navigation is unavailable. |
 | `/queue`, `/steer` | Use web input admission and the accepted-source ledger. These commands do not use legacy prompt queues. |
 | `/login`, `/logout` | Use a host-owned authentication lifetime and owned credential-operation scopes. |
@@ -37,7 +38,6 @@ These controls return errors without creating model operations or modifying the 
 | `/session-name`, `/switch-session`, `/session-rotate` | No native application contract for legacy session metadata, file switching or JSONL rotation. `/new-session` resets context without rotating identity. |
 | `/rollup`, `/fork`, `/clone`, `/forks` | No qualified application branch/route mutation ports. |
 | `/label`, `/labels`, `/export-html` | No qualified native metadata/export adapter. |
-| `/restart`, `/exit` | Legacy session reload and process-exit handlers are not invoked by the durable command path. |
 
 Tests enumerate every unavailable core command, its registered aliases and underscore forms against both the facade and an actual bootstrapped durable application. They check error results, unchanged context, no timeline/source/operation/terminal records, and no model or credential calls. The catalogue grants no execution authority.
 
@@ -50,6 +50,14 @@ The application registers entered credential operations before callback entry. S
 Authentication alone leaves the selected model unchanged. Activation requires explicit confirmation of an allowed model ID, including when only one model is available. Provider-response model suggestions do not establish selection authority.
 
 A `CredentialSynchronizationError` can occur after credentials have been saved. Recovery uses `refresh({ allowNetwork: false })`; it does not repeat login, roll back credentials or forward credential-bearing errors and causes. Warning fields and user messages remain bounded and secret-free.
+
+## Service interruption
+
+Stopping the backend seals host producers and observers without aborting execution dependencies. Closing it joins owned credential operations and closes the public SDK before disposing provider and tool dependencies. This prevents shutdown cancellation from being committed as a provider failure while the SDK scheduler is still writable.
+
+Reopening can continue the same accepted submission from its committed request checkpoint, retaining completed tool results. It may issue another provider request; it does not resume the original token stream or clear uncertain accounting holds. A tool interrupted before its result commits has no new exactly-once guarantee. Genuine committed model errors remain terminal and are not replayed.
+
+If cleanup or held maintenance cannot finish, ownership and dependencies stay retained. The operator's process-wide shutdown backstop still applies; no successful cleanup is fabricated.
 
 ## Replies and timeline data
 

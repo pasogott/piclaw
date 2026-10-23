@@ -40,6 +40,7 @@ import { probeCompactionModel, type CompactionModelProbeResult } from "./compact
 import { readAccessConfig } from "../core/config-access.js";
 import { getExecutionIdentity } from "../core/execution-context.js";
 import { createLogger } from "../utils/logger.js";
+import { requestGracefulShutdown } from "../runtime/shutdown-registry.js";
 
 const MAX_PERSISTED_MODEL_STATE_CACHE_CHATS = 512;
 const persistedModelStateCache = new Map<string, {
@@ -377,6 +378,15 @@ export class AgentRuntimeFacade {
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
+    // Operator process controls must not enter the model/session authority path.
+    // The host shutdown handler seals ingress and owns the bounded cleanup deadline.
+    if (this.options.getDurableSession && (command.type === "exit" || command.type === "restart")) {
+      requireSingleUserDirectExecution("Host process controls");
+      requestGracefulShutdown(`User /${command.type} requested`);
+      return { status: "success", message: command.type === "restart"
+        ? "Host restart requested. Cleanup is bounded; committed history and accepted inputs are preserved."
+        : "Host exit requested. Cleanup is bounded; committed history and accepted inputs are preserved." };
+    }
     const port = this.getDurableSession(chatJid);
     if (port) {
       requireSingleUserDirectExecution("Native control commands");
@@ -389,16 +399,12 @@ export class AgentRuntimeFacade {
           return independent;
         } finally { release?.(); }
       }
-      if (["restart", "bash", "abort_bash", "abort_retry", "auto_compact", "auto_retry"].includes(command.type)) {
+      if (["bash", "abort_bash", "abort_retry", "auto_compact", "auto_retry"].includes(command.type)) {
         if (!port.assertCurrent || !port.lifetimeSignal || port.lifetimeSignal.aborted)
           return {status:"error",message:"Native control lifetime unavailable. No legacy session was opened."};
         try {
           port.assertCurrent();
           switch (command.type) {
-            case "restart":
-              if (!port.restart) break;
-              await port.restart();
-              return {status:"success",message:"Native agent restarted from committed state. Conversation identity, history and accepted queues preserved."};
             case "bash": {
               if (!port.runBash) break;
               if (!command.command?.trim()) return {status:"error",message:"Usage: /bash <command>"};
@@ -423,15 +429,6 @@ export class AgentRuntimeFacade {
           }
           return {status:"error",message:"Native command '"+command.type+"' is unavailable. No legacy session was opened."};
         } catch(error) { return {status:"error",message:error instanceof Error ? error.message : String(error)}; }
-      }
-      if (command.type === "exit") {
-        if (!port.requestExit || !port.assertCurrent || !port.lifetimeSignal || port.lifetimeSignal.aborted)
-          return { status: "error", message: "Native exit control unavailable. No legacy session was opened." };
-        try {
-          port.assertCurrent();
-          await port.requestExit("Native /exit requested by user");
-          return { status: "success", message: "Graceful native exit requested. Active or uncertain work will refuse shutdown." };
-        } catch (error) { return { status: "error", message: error instanceof Error ? error.message : String(error) }; }
       }
       if (command.type === "login" || command.type === "logout") {
         if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal) return { status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." };

@@ -59,6 +59,19 @@ export class BunSqliteDatabase implements SqliteDatabase {
     if (current.dev !== this.identity!.dev || current.ino !== this.identity!.ino) throw new Error("Shared database identity changed");
   }
 
+  /** SDK compaction is conversation-scoped and can coexist with accepted work.
+   * Preserve file/owner fencing at every SQL boundary, without a global idle gate. */
+  async withCompactionGuard<T>(body: () => Promise<T>): Promise<T> {
+    if (!this.guard || !this.identity) throw new Error("Shared SQLite guard required");
+    const check = () => {
+      this.guard!.assertOwner();
+      if (this.guard!.root.inTransaction) throw new Error("Root connection transaction active");
+      const identity = statSync(this.path);
+      if (identity.dev !== this.identity!.dev || identity.ino !== this.identity!.ino) throw new Error("Shared database identity changed");
+    };
+    return this.withAdmissionGuard(check, body);
+  }
+
   /** Scope the next public storage transactions; checks run inside the candidate write lock. */
   async withIdleModelGuard<T>(body: () => Promise<T>): Promise<T> {
     if (!this.guard) return Promise.reject(new Error("Idle model guard unavailable"));

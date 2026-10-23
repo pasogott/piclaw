@@ -38,6 +38,8 @@ import type {
   ScheduledRunLease,
   ScheduledRunReclaimAuthority,
   ScheduledRunStore,
+  InterruptedScheduledRunReconciler,
+  ReconcileInterruptedScheduledRunRequest,
 } from "./service-effects/contracts/scheduled-run-store.js";
 import { hashCanonicalRequest, type CanonicalJsonValue, type EffectIdentity } from "./service-effects/contracts/common.js";
 import { createCurrentPiclawScheduledRunStore } from "./service-effects/current-piclaw/scheduled-run-store.js";
@@ -515,7 +517,7 @@ function sealScheduledEffect<T extends { effect: EffectIdentity }>(request: T): 
 
 const primaryStores = new WeakMap<Database, { users: number; foreignKeysWereEnabled: boolean }>();
 
-function productionScheduledRunStore(): { store: ScheduledRunStore; close: () => void } {
+function productionScheduledRunStore(): { store: ScheduledRunStore & InterruptedScheduledRunReconciler; close: () => void } {
   const primary = getDb();
   const databaseRow = primary.query("PRAGMA database_list").all() as Array<{ name: string; file: string }>;
   const filename = databaseRow.find((row) => row.name === "main")?.file || "";
@@ -585,6 +587,23 @@ function reconcileExpiredScheduledAgentSources(now: string): void {
       ).run(row.chat_jid, row.primary_source_seq);
     }
   }).immediate();
+}
+
+/** Settle proven interrupted sources without reclaiming them or replaying cron backlog. */
+async function reconcileInterruptedScheduledAgentRuns(store: ScheduledRunStore & Partial<InterruptedScheduledRunReconciler>,now:string):Promise<void>{
+  const reconcile=store.reconcileInterruptedAgentSource?.bind(store);
+  if(!reconcile)return;
+  const rows=getDb().query(`SELECT r.run_id,r.attempt,r.task_revision,r.lease_expires_at,r.operation_id,r.accepted_source_seq,o.version
+    FROM service_effect_s07_occurrences r JOIN service_effect_s01_operations o ON o.operation_id=r.operation_id
+    JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=r.accepted_source_seq
+    WHERE r.state='source_bound' AND r.lease_expires_at<=? AND o.phase='terminal' AND o.terminal_disposition='failed'
+    AND o.terminal_error_code='scheduled_run_interrupted' AND s.state='disposed' AND s.disposition_reason='scheduled_run_interrupted'
+    AND o.harness_session_id IS NULL ORDER BY r.scheduled_for,r.run_id LIMIT 100`).all(now) as Array<{run_id:string;attempt:number;task_revision:number;lease_expires_at:string;operation_id:string;accepted_source_seq:number;version:number}>;
+  for(const row of rows){
+    const request=sealScheduledEffect<ReconcileInterruptedScheduledRunRequest>({effect:{idempotencyKey: `scheduled-interrupted:${row.run_id}:${row.attempt}:${row.version}`,requestHash:'',operationId:row.operation_id,sourceSeq:row.accepted_source_seq,provenanceRef:row.run_id,redactionClass:'private'},runId:row.run_id,expectedAttempt:row.attempt,expectedTaskRevision:row.task_revision,expectedOperationVersion:row.version,expectedLeaseExpiresAt:row.lease_expires_at,now});
+    const result=await reconcile(request);
+    if(!result.ok)log.warn('Interrupted scheduled source reconciliation refused',{operation:'scheduler.reconcile_interrupted',runId:row.run_id,errorTag:result.error._tag});
+  }
 }
 
 function scheduledReclaimAuthorities(now: string): ScheduledRunReclaimAuthority[] {
@@ -920,11 +939,11 @@ async function runClaimedScheduledTask(
   }
 }
 
-export async function pollScheduledRunsOnce(deps: SchedulerDeps, store: ScheduledRunStore): Promise<void> {
+export async function pollScheduledRunsOnce(deps: SchedulerDeps, store: ScheduledRunStore & Partial<InterruptedScheduledRunReconciler>): Promise<void> {
   await runSchedulerPoll(deps, store, () => true);
 }
 
-async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore, isCurrent: () => boolean): Promise<void> {
+async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore & Partial<InterruptedScheduledRunReconciler>, isCurrent: () => boolean): Promise<void> {
   const mayPoll = () => isCurrent() && canRunLegacyScheduledWork();
   if (!mayPoll()) return;
   schedulerMetrics.polls += 1;
@@ -933,6 +952,7 @@ async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore, i
   const now = new Date().toISOString();
   schedulerMetrics.lastPollAt = now;
   reconcileExpiredScheduledAgentSources(now);
+  await reconcileInterruptedScheduledAgentRuns(store,now);
   claimSequence += 1;
   const claimed = await store.claimDue({
     now,
