@@ -703,3 +703,39 @@ test("startSchedulerLoop returns stop function and stop is idempotent", async ()
   await stop();
   await scheduler.stopSchedulerLoop();
 });
+
+
+test('poll reconciles an expired disposed scheduled source once without dispatching missed agent runs',async()=>{
+  const ws=getTestWorkspace();restoreEnv=setEnv({PICLAW_WORKSPACE:ws.workspace,PICLAW_STORE:ws.store,PICLAW_DATA:ws.data});
+  const db=await import('../../src/db.js');db.initDatabase();const database=db.getDb();
+  const fk=(database.query('PRAGMA foreign_keys').get() as {foreign_keys:number}).foreign_keys;database.exec('PRAGMA foreign_keys=ON');restoreForeignKeys=()=>database.exec(`PRAGMA foreign_keys=${fk?'ON':'OFF'}`);
+  const {createCurrentPiclawScheduledRunStore}=await import('../../src/service-effects/current-piclaw/scheduled-run-store.js');
+  const {createScheduledTaskAuthority}=await import('../../src/service-effects/current-piclaw/scheduled-task-authority.js');
+  const {hashCanonicalRequest}=await import('../../src/service-effects/contracts/common.js');
+  const scheduler=await import('../../src/task-scheduler.js');
+  const built=createCurrentPiclawScheduledRunStore(database,{hitFault:()=>false,recordTrace(){}});if(!built.ok)throw Error(built.error._tag);const store=built.value;
+  const taskId='task:terminal-poll:'+crypto.randomUUID(),chat='web:terminal-poll:'+crypto.randomUUID(),operation='scheduled-operation:'+crypto.randomUUID();
+  const old=Date.now()-3*86400000,claimedAt=new Date(old).toISOString(),boundAt=new Date(old+1).toISOString(),terminalAt=new Date(old+2000).toISOString();
+  createScheduledTaskAuthority(database).create({taskId,chatJid:chat,kind:'agent',payloadRef:'payload:terminal-poll',modelLabel:null,scheduleType:'cron',scheduleValue:'0 1 * * *',timezone:'UTC',notifyOnComplete:true,muted:false,cwd:null,timeoutSec:null,internalTask:null,redactionClass:'private',executionRepeatability:'agent_source',nextRunAt:claimedAt,authoredAt:claimedAt});
+  const claimed=await store.claimDue({now:claimedAt,limit:100,workerId:'worker:terminal-poll',leaseTokenPrefix:'terminal-poll',leaseDurationMs:1000,reclaimAuthorities:[]});if(!claimed.ok)throw Error(claimed.error._tag);const lease=claimed.value.find(x=>x.task.taskId===taskId)!;expect(lease).toBeDefined();
+  // Exact synthetic historical input; no model submission or fabricated SDK receipt.
+  database.transaction(()=>{
+    database.query('INSERT INTO service_effect_s01_chats(chat_jid,next_source_seq,consumed_through_source_seq,active_operation_id) VALUES(?,2,0,NULL)').run(chat);
+    database.query("INSERT INTO service_effect_s01_sources(chat_jid,source_seq,source_id,source_hash,kind,state,payload_ref,accepted_at,provenance_ref,create_wake_intent) VALUES(?,1,?,?,'scheduled_agent','claimed','payload:terminal-poll',?,?,0)").run(chat,lease.record.runId,'a'.repeat(64),boundAt,lease.record.runId);
+    database.query("INSERT INTO service_effect_s01_operations(operation_id,chat_jid,version,phase,primary_source_seq) VALUES(?,?,1,'claimed',1)").run(operation,chat);
+    database.query('INSERT INTO service_effect_s01_operation_sources(chat_jid,operation_id,source_seq) VALUES(?,?,1)').run(chat,operation);
+  }).immediate();
+  const bind={effect:{idempotencyKey:'bind:'+taskId,requestHash:'',operationId:operation,sourceSeq:1,provenanceRef:lease.record.runId,redactionClass:'private' as const},runId:lease.record.runId,workerId:lease.record.workerId,expectedAttempt:1,expectedTaskRevision:1,leaseToken:lease.leaseToken,now:boundAt,boundAt,sourceSeq:1,operationId:operation};bind.effect.requestHash=hashCanonicalRequest(bind as any);expect((await store.bindAcceptedSource(bind)).ok).toBe(true);
+  database.transaction(()=>{
+    database.query("UPDATE service_effect_s01_operations SET version=2,phase='terminal',terminal_disposition='failed',terminal_error_code='scheduled_run_interrupted',terminal_committed_at=? WHERE operation_id=?").run(terminalAt,operation);
+    database.query("UPDATE service_effect_s01_sources SET state='disposed',disposition_reason='scheduled_run_interrupted' WHERE source_id=?").run(lease.record.runId);
+    database.query('UPDATE service_effect_s01_chats SET consumed_through_source_seq=1 WHERE chat_jid=?').run(chat);
+  }).immediate();
+  const sourceBefore=database.query('SELECT * FROM service_effect_s01_sources WHERE chat_jid=?').all(chat),operationBefore=database.query('SELECT * FROM service_effect_s01_operations WHERE operation_id=?').all(operation),leasesBefore=database.query('SELECT * FROM service_effect_s07_leases WHERE run_id=?').all(lease.record.runId);
+  let dispatched=0;const deps={queue:{enqueueTask(id:string){if(id===`chat:${chat}`)dispatched++;}},agentPool:{} as any,sendMessage:async()=>{throw Error('Unexpected publication');}};
+  await scheduler.pollScheduledRunsOnce(deps as any,store);await scheduler.pollScheduledRunsOnce(deps as any,store);
+  const result=await store.get(lease.record.runId);expect(result.ok).toBe(true);expect(result.value).toMatchObject({state:'completed',status:'error',errorCode:'scheduled_run_interrupted',attempt:1,headDisposition:'advanced'});
+  expect(result.value!.nextRunAt!>new Date().toISOString()).toBe(true);expect(dispatched).toBe(0);
+  expect(database.query('SELECT * FROM service_effect_s01_sources WHERE chat_jid=?').all(chat)).toEqual(sourceBefore);expect(database.query('SELECT * FROM service_effect_s01_operations WHERE operation_id=?').all(operation)).toEqual(operationBefore);expect(database.query('SELECT * FROM service_effect_s07_leases WHERE run_id=?').all(lease.record.runId)).toEqual(leasesBefore);
+  expect(database.query('SELECT COUNT(*) n FROM service_effect_s07_run_logs WHERE run_id=?').get(lease.record.runId)).toEqual({n:1});expect(database.query('SELECT COUNT(*) n FROM service_effect_s07_next_decisions WHERE run_id=?').get(lease.record.runId)).toEqual({n:1});
+});
