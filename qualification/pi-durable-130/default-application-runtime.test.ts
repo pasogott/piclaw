@@ -1741,9 +1741,11 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
     await sseReader!.cancel(); await sseDrain;
     captureSpies.forEach(spy => spy.mockRestore());
     backend.stop();
+    // stop seals scheduling, but execution dependencies remain until SDK close.
+    expect((await channel.handleRequest(new Request("http://fixture/drawio/index.html"))).status).toBe(200);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); await backend.close();
     const sealed = await channel.handleRequest(new Request("http://fixture/drawio/index.html"));
     expect(sealed.status).toBe(503);
-    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); await backend.close();
     sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase(); return;
   }
   if (nativeOffice) {
