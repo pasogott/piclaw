@@ -11,6 +11,7 @@ import {
   sanitizeSvg,
   type ParsedTitle,
 } from "../utils/agent-status";
+import { resolveDelegateProgressRows, type DelegateProgressRow } from "../../../../../src/ui/delegate-progress";
 import { AgentRequestModal, type AgentRequest } from "./AgentRequestModal";
 import { reconcileThoughtStreamText } from "../../../../../src/ui/thought-stream-reconciliation";
 import { CollapsibleContent, MarkdownContent } from "./CollapsibleContent";
@@ -101,6 +102,7 @@ export function AgentStatusPanel() {
   const [turnColor, setTurnColor] = useState<string | null>(null);
   const [statusText, setStatusText] = useState("");
   const [tools, setTools] = useState<ToolCall[]>([]);
+  const [delegates, setDelegates] = useState<DelegateProgressRow[]>([]);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [toolsDismissed, setToolsDismissed] = useState(false);
   const [elapsed, setElapsed] = useState({ draft: 0, thought: 0, tools: 0 });
@@ -215,6 +217,9 @@ export function AgentStatusPanel() {
 
     const handleStatus = (e: Event) => {
       const detail = (e as CustomEvent).detail;
+      const delegateProgress = resolveDelegateProgressRows(detail.delegate_progress);
+      if (detail.delegate_progress !== undefined) setDelegates(delegateProgress);
+      if (detail.type === "done" || detail.type === "idle") setDelegates([]);
       if (detail.type === "tool_call") {
         if (!toolsStartRef.current) toolsStartRef.current = Date.now();
         lastProgressTimeRef.current = Date.now();
@@ -249,12 +254,16 @@ export function AgentStatusPanel() {
         const retryAt = parseRetryAt(detail as Record<string, unknown>);
         setTools((prev) => prev.map((t) => {
           if (t.id !== id) return t;
-          const newStatus = retryAt ? "running" as const : "done" as const;
+          const newStatus = retryAt || detail.status === "running" || detail.status === "pending" ? "running" as const : "done" as const;
           return { ...t, status: newStatus, retryAt: retryAt ?? null };
         }));
         // Accumulate tool output preview text
         const outputPreview = detail.output_preview ?? detail.outputPreview;
-        if (typeof outputPreview === "string" && outputPreview) {
+        if (delegateProgress.length > 0) {
+          // Structured child rows replace the metadata-only legacy Output fallback.
+          outputBufferRef.current = "";
+          flushOutput();
+        } else if (typeof outputPreview === "string" && outputPreview) {
           outputBufferRef.current = outputPreview;
           if (!outputRafRef.current) {
             outputRafRef.current = requestAnimationFrame(flushOutput);
@@ -354,6 +363,7 @@ export function AgentStatusPanel() {
       setSteerQueued(false);
       setTurnColor(null);
       setTools([]);
+      setDelegates([]);
       setToolsExpanded(false);
       setToolsDismissed(false);
       // Reset recovery and watchdog state
@@ -451,7 +461,7 @@ export function AgentStatusPanel() {
     window.dispatchEvent(new CustomEvent("piclaw:agent-status", { detail: { type: "done" } }));
   };
 
-  const hasContent = draft.text || thought.text || output.text || tools.length > 0 || (status && status !== "idle" && status !== "done") || recoveryState || watchdogState || pendingRequest || extensionPanels.size > 0;
+  const hasContent = draft.text || thought.text || output.text || tools.length > 0 || delegates.length > 0 || (status && status !== "idle" && status !== "done") || recoveryState || watchdogState || pendingRequest || extensionPanels.size > 0;
   if (!hasContent) return null;
 
   const toggleDraftExpand = () => {
@@ -585,16 +595,22 @@ export function AgentStatusPanel() {
         );
       })()}
 
-      {tools.length > 0 && !toolsDismissed && (
+      {(tools.length > 0 || delegates.length > 0) && !toolsDismissed && (
         <div className="agent-status-card agent-status-card--tools">
           <PanelHeader
-            title={`Tools (${tools.length})`}
+            title={tools.length ? `Tools (${tools.length})` : "Tools"}
             dotColor="tools"
             elapsed={elapsed.tools}
             expanded={toolsExpanded}
             onToggle={() => setToolsExpanded(prev => !prev)}
             onDismiss={(e) => { e.stopPropagation(); setToolsDismissed(true); }}
           />
+          {delegates.length > 0 && <div className="agent-delegate-progress" role="list" aria-label="Delegate progress" tabIndex={0}>
+            {delegates.map(child => <div key={child.id} className="agent-delegate-progress-item" role="listitem" data-delegate-id={child.id} data-delegate-phase={child.phase}>
+              <span className="agent-delegate-progress-label">{child.label} · {child.model}</span>
+              <span className="agent-delegate-progress-detail">{child.detail}</span>
+            </div>)}
+          </div>}
           <CollapsibleContent
             expanded={toolsExpanded}
             onToggle={() => setToolsExpanded(prev => !prev)}

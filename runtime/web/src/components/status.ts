@@ -1,3 +1,4 @@
+import { resolveDelegateProgressRows } from '../ui/delegate-progress.js';
 import { html, useCallback, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { renderToolIcon } from '../ui/tool-icon.js';
 import { useTranslation } from '../utils/i18n.js';
@@ -414,6 +415,7 @@ function formatElapsed(isoString, nowMs = Date.now()) {
 
 export function AgentStatus({ status, draft, plan, thought, pendingRequest, intent, extensionPanels = [], pendingPanelActions = new Set(), onExtensionPanelAction, turnId, steerQueued, onPanelToggle, showCorePanels = true, showExtensionPanels = true, loadWorkspaceBranch = getWorkspaceBranch }) {
     const { t } = useTranslation();
+    const delegates = resolveDelegateProgressRows(status?.delegate_progress);
     const THOUGHT_MAX_LINES = 9;
     const DRAFT_MAX_LINES = 9;
     const TOOL_OUTPUT_MAX_LINES = 6;
@@ -439,7 +441,7 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
     const planInfo = normalizePreview(plan);
     const thoughtInfo = normalizePreview(thought);
     const draftInfo = normalizePreview(draft);
-    const toolOutputInfo = normalizePreview({
+    const toolOutputInfo = normalizePreview(delegates.length ? null : {
         text: status?.output_preview || status?.outputPreview || '',
         fullText: status?.output_preview || status?.outputPreview || '',
         totalLines: status?.output_total_lines || status?.outputTotalLines,
@@ -1091,7 +1093,7 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                 panelKey: 'tool-output',
             })}
             ${showCorePanels && status && status?.type !== 'intent' && html`
-                <div class=${`agent-status${isLastActivity ? ' agent-status-last-activity' : ''}${status?.type === 'error' ? ' agent-status-error' : ''}${toolRepoLabel || statusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel ? ' agent-status-multiline' : ''}`} aria-live="polite" style=${turnColor ? `--turn-color: ${turnColor};` : ''}>
+                <div class=${`agent-status${isLastActivity ? ' agent-status-last-activity' : ''}${status?.type === 'error' ? ' agent-status-error' : ''}${toolRepoLabel || statusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel || delegates.length ? ' agent-status-multiline' : ''}`} aria-live="polite" style=${turnColor ? `--turn-color: ${turnColor};` : ''}>
                     ${turnColor && showRunningStatusDot && html`<span class=${dotClass} aria-hidden="true"></span>`}
                     ${status?.type === 'error'
                         ? html`<span class="agent-status-error-icon" aria-hidden="true">⚠</span>`
@@ -1100,6 +1102,12 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                             : (runningIndicatorMode === 'spinner' && html`<div class="agent-status-spinner"></div>`)}
                     <div class="agent-status-copy">
                         <span class="agent-status-text">${renderToolArgumentInText(content, status)}</span>
+                        ${delegates.length > 0 && html`<div class="agent-delegate-progress" role="list" aria-label="Delegate progress" tabIndex="0">
+                            ${delegates.map((child) => html`<div key=${child.id} class="agent-delegate-progress-item" role="listitem" data-delegate-id=${child.id} data-delegate-phase=${child.phase}>
+                                <span class="agent-delegate-progress-label">${child.label} · ${child.model}</span>
+                                <span class="agent-delegate-progress-detail">${child.detail}</span>
+                            </div>`)}
+                        </div>`}
                         ${(toolRepoLabel || orderedStatusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel) && html`
                             <span class="agent-status-meta-row">
                                 ${leadingStatusHints.map((hint) => html`
