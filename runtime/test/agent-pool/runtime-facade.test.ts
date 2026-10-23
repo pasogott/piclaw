@@ -1526,3 +1526,26 @@ test("native /exit uses current user control ownership without a legacy session"
   expect(getNativeCommandCatalogue(port).find(c => c.name === "/exit")?.status).toBe("unavailable");
   expect(exits).toBe(1); expect(legacy).toBe(0);
 });
+
+test("native critical controls preserve scope, report failures and never fall back to legacy", async()=>{
+ let legacy=0,restarts=0,bashes=0,abortBash=0,abortRetry=0,revoked=false;
+ const policy={autoCompact:true,autoRetry:false};const lifetime=new AbortController();
+ const port={sessionId:'native-critical',branchId:'main',readPosition:async()=>null,lifetimeSignal:lifetime.signal,
+  assertCurrent(){if(revoked)throw Error('binding lost');},restart:async()=>{restarts++;},
+  runBash:async(command:string)=>{bashes++;return {output:command,exitCode:0,cancelled:false};},
+  abortBash:async()=>{abortBash++;return true;},abortRetry:async()=>{abortRetry++;return false;},
+  readExecutionPolicy:async()=>({...policy}),setExecutionPolicy:async(key:'autoCompact'|'autoRetry',enabled:boolean)=>{policy[key]=enabled;}};
+ const {facade}=createFacade({getDurableSession:()=>port,getOrCreateRuntime:async()=>{legacy++;throw Error('legacy');}});
+ const run=(raw:string)=>facade.applyControlCommand('web:native-critical',parseControlCommand(raw)!);
+ expect((await run('/restart')).status).toBe('success');expect(restarts).toBe(1);
+ expect((await run('/bash printf TEST')).message).toContain('saved to native context');expect(bashes).toBe(1);
+ expect((await run('/bash')).status).toBe('error');expect(bashes).toBe(1);
+ expect((await run('/abort-bash')).message).toContain('requested');expect(abortBash).toBe(1);
+ expect((await run('/abort-retry')).message).toContain('No retry');expect(abortRetry).toBe(1);
+ expect((await run('/auto-retry on')).message).toContain('enabled (runtime-wide)');expect(policy.autoRetry).toBe(true);
+ expect((await run('/auto-retry off')).message).toContain('disabled');expect(policy.autoRetry).toBe(false);
+ expect((await run('/auto-compact off')).message).toContain('disabled');expect(policy.autoCompact).toBe(false);
+ expect((await run('/auto-compact invalid')).status).toBe('error');expect(policy.autoCompact).toBe(false);
+ revoked=true;expect((await run('/restart')).message).toContain('binding lost');expect(restarts).toBe(1);
+ lifetime.abort();expect((await run('/bash printf NO')).status).toBe('error');expect(bashes).toBe(1);expect(legacy).toBe(0);
+});

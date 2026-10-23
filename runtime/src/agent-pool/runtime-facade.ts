@@ -389,6 +389,41 @@ export class AgentRuntimeFacade {
           return independent;
         } finally { release?.(); }
       }
+      if (["restart", "bash", "abort_bash", "abort_retry", "auto_compact", "auto_retry"].includes(command.type)) {
+        if (!port.assertCurrent || !port.lifetimeSignal || port.lifetimeSignal.aborted)
+          return {status:"error",message:"Native control lifetime unavailable. No legacy session was opened."};
+        try {
+          port.assertCurrent();
+          switch (command.type) {
+            case "restart":
+              if (!port.restart) break;
+              await port.restart();
+              return {status:"success",message:"Native agent restarted from committed state. Conversation identity, history and accepted queues preserved."};
+            case "bash": {
+              if (!port.runBash) break;
+              if (!command.command?.trim()) return {status:"error",message:"Usage: /bash <command>"};
+              const result = await port.runBash(command.command.trim());
+              return {status: result.cancelled || result.exitCode !== 0 ? "error" : "success", message:[result.output || "(no output)", result.cancelled ? "(cancelled)" : "(exit " + result.exitCode + ")", "Command/output saved to native context; no model request started."].join("\n")};
+            }
+            case "abort_bash":
+              if (!port.abortBash) break;
+              return {status:"success",message:await port.abortBash() ? "Bash abort requested." : "No bash command is running."};
+            case "abort_retry":
+              if (!port.abortRetry) break;
+              return {status:"success",message:await port.abortRetry() ? "Retry backoff aborted." : "No retry backoff is active."};
+            case "auto_compact": case "auto_retry": {
+              if (!port.readExecutionPolicy || !port.setExecutionPolicy) break;
+              if (command.enabled === undefined && command.raw?.trim().split(/\s+/).length > 1)
+                return {status:"error",message:"Usage: /" + command.type.replaceAll("_","-") + " [on|off]"};
+              const key = command.type === "auto_compact" ? "autoCompact" : "autoRetry";
+              if (command.enabled !== undefined) await port.setExecutionPolicy(key,command.enabled);
+              const state = await port.readExecutionPolicy();
+              return {status:"success",message:"Native automatic " + (key === "autoCompact" ? "compaction" : "retry") + " is " + (state[key] ? "enabled" : "disabled") + " (runtime-wide). Existing work is not replayed or restarted."};
+            }
+          }
+          return {status:"error",message:"Native command '"+command.type+"' is unavailable. No legacy session was opened."};
+        } catch(error) { return {status:"error",message:error instanceof Error ? error.message : String(error)}; }
+      }
       if (command.type === "exit") {
         if (!port.requestExit || !port.assertCurrent || !port.lifetimeSignal || port.lifetimeSignal.aborted)
           return { status: "error", message: "Native exit control unavailable. No legacy session was opened." };

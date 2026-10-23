@@ -63,6 +63,12 @@ export interface DurableSessionPositionPort {
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
   readonly reset?: () => Promise<void>;
   readonly abort?: () => Promise<boolean>;
+  readonly abortRetry?: () => Promise<boolean>;
+  readonly restart?: () => Promise<void>;
+  readonly runBash?: (command: string) => Promise<{output: string; exitCode: number | null; cancelled: boolean}>;
+  readonly abortBash?: () => Promise<boolean>;
+  readonly readExecutionPolicy?: () => Promise<{autoCompact: boolean; autoRetry: boolean}>;
+  readonly setExecutionPolicy?: (name: "autoCompact" | "autoRetry", enabled: boolean) => Promise<void>;
   /** Direct user shutdown, guarded by current host ownership and global idle. */
   readonly requestExit?: (reason: string) => Promise<void>;
   readonly compact?: (instructions?: string) => Promise<{ compacted: boolean }>;

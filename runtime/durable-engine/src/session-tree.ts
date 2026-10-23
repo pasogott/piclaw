@@ -45,7 +45,7 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
       if (!supported.includes(String(original.type))) throw new Error(`Unsupported durable imported entry: ${original.type}`);
       // Metadata comes from immutable provenance; public ID remains navigation/position identity.
       entry = { ...original, ...base, type: String(original.type) };
-    } else if (["pi.user", "pi.assistant", "pi.tool-result", "app.legacy-message", "host.accepted"].includes(row.kind) || recentCopy) {
+    } else if (["pi.user", "pi.assistant", "pi.tool-result", "app.legacy-message", "host.accepted", "host.bash"].includes(row.kind) || recentCopy) {
       if (row.model?.length !== 1) throw new Error(`Unsupported durable message count: ${row.kind}`);
       const message = row.model[0]!;
       if (!["user", "assistant", "toolResult"].includes(message.role)) throw new Error(`Unsupported durable message role: ${message.role}`);

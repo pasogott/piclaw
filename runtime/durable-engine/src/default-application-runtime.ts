@@ -44,6 +44,7 @@ import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "./host-model-controls.js";
+import { createHostCommandPolicy } from "./host-command-policy.js";
 import { createHostProcessControls, nativeProcessToolNames, nativeProcessInstructions } from "./host-process-controls.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledAddon, bindInstalledAddon, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
@@ -923,7 +924,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error) { lifetime.abort(error); } }));
     registry.install(createHostGoalTerminalFence(goal.addon, { root, runtime, assertOwner: assertGoal }));
   }
-  const harnessOptions = { models, registry: withTaskModelRequestScope(registry), settings: { retry: { enabled: false } } };
+  const commandPolicy = createHostCommandPolicy(root, () => { assert(); if (readAccessConfig().mode !== "single-user") throw Error("Native controls require single-user policy"); });
+  const harnessOptions = { models, registry: withTaskModelRequestScope(registry), settings: commandPolicy.settings };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;
   if (!path) throw Error("Durable default requires a file-backed application database");
   const storage = new BunSqliteDatabase(path, { root, assertOwner: assert, fenceTransactions: true });
@@ -1112,6 +1114,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     onRuntime(value) { captureRuntime = value; },
         prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
+        readExecutionPolicy: commandPolicy.read,
+        setExecutionPolicy: commandPolicy.set,
         requestProcessExit: reason => processControls!.requestCommandExit(reason),
         dispatchHostCommand: (regrets || goalCommand) ? async (chat, text) => {
           if (regrets && /^\/regrets(?:\s|$)/.test(text.trim())) { await regretsCommand(chat); return { status: "success", message: "Regrets input queued" }; }

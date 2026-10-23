@@ -84,6 +84,8 @@ export interface ApplicationBootstrapOptions {
   materializeAnswer?: RuntimeOptions["materializeAnswer"];
   dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
   requestProcessExit?: (reason: string) => Promise<void>;
+  readExecutionPolicy?: () => {autoCompact: boolean; autoRetry: boolean};
+  setExecutionPolicy?: (name: "autoCompact" | "autoRetry", enabled: boolean) => void;
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   assertAdmission?: RuntimeOptions["assertAdmission"];
@@ -202,13 +204,18 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         replyThreadFor(input) { assert(); return resolveAcceptedMessageThread(root, input); },
-        cancelOperationSource(input, expectedVersion) {
+        cancelOperationSource(input, expectedVersion, retryTaskId) {
           root.transaction(() => {
             assert();
             const operation = root.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=? AND chat_jid=?")
               .get(input.operationId, input.chatJid) as { version: number; phase: string; cancellation_source_seq: number | null } | null;
             if (!operation || operation.version !== expectedVersion || operation.phase === "terminal") throw Error("Abort operation changed");
             if (operation.cancellation_source_seq !== null) return;
+            if (retryTaskId !== undefined) {
+              const row = root.query("SELECT record FROM tasks WHERE id=? AND abort_requested=0 AND status<>'terminal'").get(retryTaskId) as {record:string} | null;
+              const task = row && JSON.parse(row.record);
+              if (!task || task.kind !== "pi.generation" || task.conversationId !== input.conversationId || task.state.checkpoint?.phase !== "retry") throw Error("Retry backoff already changed; no operation was cancelled");
+            }
             const id = `operator-abort:${input.operationId}`;
             work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: input.chatJid, sourceId: id,
               kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
@@ -352,8 +359,23 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assertLive();
         if (routeIndex.get(chat) !== binding || lookup(chat, binding.branchId)?.conversationId !== binding.conversationId) throw Error("Host control binding changed");
       };
+      const abort = async (retryOnly = false) => {
+          assertCurrent();
+          const frontier = value(await work.getChatFrontier(chat)); assertLive();
+          if (!frontier.activeOperationId) return false;
+          const operation = value(await work.getOperation(frontier.activeOperationId)); assertLive();
+          if (!operation || operation.terminal) return false;
+          const input = await bindings.findSource(chat, operation.primarySourceSeq); assertLive();
+          if (!input || input.operationId !== operation.operationId || input.conversationId !== binding.conversationId)
+            throw Error("Exact ordinary abort binding required");
+          return runtime.abortOperation(input, retryOnly);
+      };
       return Object.freeze({ ...adapter.sessionPosition(chat, binding.branchId, binding.sessionId),
         assertCurrent, lifetimeSignal: shutdown.signal,
+        ...(config.readExecutionPolicy && config.setExecutionPolicy ? {
+          readExecutionPolicy: async () => { assertCurrent(); return config.readExecutionPolicy!(); },
+          setExecutionPolicy: async (name: "autoCompact" | "autoRetry", enabled: boolean) => { assertCurrent(); config.assertAdmission?.(); config.setExecutionPolicy!(name, enabled); },
+        } : {}),
         ...(config.requestProcessExit ? { requestExit: async (reason: string) => {
           assertCurrent(); config.assertAdmission?.();
           await config.requestProcessExit!(reason);
@@ -366,16 +388,20 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           void running.finally(() => hostControls.delete(running)).catch(() => {});
           return running;
         },
-        async abort() {
-          assertLive();
-          const frontier = value(await work.getChatFrontier(chat)); assertLive();
-          if (!frontier.activeOperationId) return false;
-          const operation = value(await work.getOperation(frontier.activeOperationId)); assertLive();
-          if (!operation || operation.terminal) return false;
-          const input = await bindings.findSource(chat, operation.primarySourceSeq); assertLive();
-          if (!input || input.operationId !== operation.operationId || input.conversationId !== binding.conversationId)
-            throw Error("Exact ordinary abort binding required");
-          return runtime.abortOperation(input);
+        abort: () => abort(), abortRetry: () => abort(true),
+        runBash: (command: string) => { assertCurrent(); return runtime.runSessionBash({incarnation:r.incarnation,...binding}, command); },
+        abortBash: () => { assertCurrent(); return runtime.abortSessionBash({incarnation:r.incarnation,...binding}); },
+        async restart() {
+          assertCurrent(); config.assertAdmission?.();
+          await runtime.abortSessionBash({incarnation:r.incarnation,...binding}, true);
+          await abort();
+          const deadline = Date.now() + 5000;
+          while (root.query("SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND phase<>'terminal'").get(chat)) {
+            assertCurrent();
+            if (Date.now() >= deadline) throw Error("Native abort is still settling; restart refused without replay. Try /restart after Idle.");
+            await new Promise(resolve => setTimeout(resolve,100));
+          }
+          assertCurrent(); await runtime.reloadSession({incarnation:r.incarnation,...binding});
         } });
     };
     const preparing = new Map<string, Promise<void>>();

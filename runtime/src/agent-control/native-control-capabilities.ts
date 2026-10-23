@@ -11,11 +11,11 @@ export function getNativeControlCapabilities(port: DurableSessionPositionPort): 
   const auth = port.assertCurrent && port.runOwnedControl && port.lifetimeSignal && !port.lifetimeSignal.aborted;
   return {
     model: available(port.readModel && port.setModel), thinking: available(port.readThinkingLevel && port.setThinkingLevel),
-    commands: "native", restart: "unavailable", exit: available(port.requestExit && port.assertCurrent && port.lifetimeSignal && !port.lifetimeSignal.aborted), shell: "native", bash: "unavailable",
+    commands: "native", restart: available(port.restart), exit: available(port.requestExit && port.assertCurrent && port.lifetimeSignal && !port.lifetimeSignal.aborted), shell: "native", bash: available(port.runBash),
     queue: "web input", queue_all: "unavailable", steer: "web input", state: "native",
     stats: available(port.readReport), context: available(port.readReport), quota: "native", last: available(port.readReport),
-    compact: available(port.compact), auto_compact: "unavailable", auto_retry: "unavailable", abort: available(port.abort),
-    abort_retry: "unavailable", abort_bash: "unavailable",
+    compact: available(port.compact), auto_compact: available(port.readExecutionPolicy && port.setExecutionPolicy), auto_retry: available(port.readExecutionPolicy && port.setExecutionPolicy), abort: available(port.abort),
+    abort_retry: available(port.abortRetry), abort_bash: available(port.abortBash),
     cycle_model: available(port.readModel && port.setModel), cycle_thinking: available(port.readThinkingLevel && port.setThinkingLevel),
     steering_mode: "unavailable", followup_mode: "unavailable", session_name: "unavailable", new_session: available(port.reset),
     switch_session: "unavailable", session_rotate: "unavailable", rollup: "unavailable", fork: "unavailable", clone: "unavailable",
