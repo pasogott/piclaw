@@ -15,6 +15,13 @@ export class BunSqliteDatabase implements SqliteDatabase {
   private failure?: Error;
 
   private idleGuard?: () => void;
+  private readonly admissionScope = new AsyncLocalStorage<() => void>();
+
+  /** Recheck asynchronous host admission at the actual SQL write boundaries. */
+  async withAdmissionGuard<T>(check: () => void, body: () => Promise<T>): Promise<T> {
+    check();
+    return this.admissionScope.run(check, body);
+  }
   private readonly sourceScope = new AsyncLocalStorage<{ check(): void; persist(tx: SqliteExecutor): Promise<void> }>();
   private allocatingSource = false;
 
@@ -118,7 +125,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
   }
 
   transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
-    const idle = this.idleGuard, source = this.sourceScope.getStore();
+    const idle = this.idleGuard, source = this.sourceScope.getStore(), admission = this.admissionScope.getStore();
     return this.enqueue(async () => {
       // Yield while another host connection owns the writer lock, allowing an
       // in-process asynchronous transaction to finish without a blocking wait.
@@ -140,12 +147,12 @@ export class BunSqliteDatabase implements SqliteDatabase {
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
       });
       try {
-        idle?.(); source?.check();
+        admission?.(); idle?.(); source?.check();
         const value = await this.callback.run(true, () => callback(tx));
         await source?.persist(tx);
         source?.check();
         active = false;
-        idle?.();
+        admission?.(); idle?.();
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
         this.db.exec("COMMIT");
         committed = true;

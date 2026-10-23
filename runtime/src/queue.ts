@@ -17,6 +17,7 @@
 
 import { DEFAULT_BASE_RETRY_MS, DEFAULT_MAX_RETRIES, getRetryDelay, shouldRetry } from "./queue/retry-policy.js";
 import { createLogger } from "./utils/logger.js";
+import { assertProcessAdmission } from "./runtime/process-admission.js";
 
 const log = createLogger("queue");
 const DEFAULT_LANE_KEY = "__default__";
@@ -145,6 +146,7 @@ export class AgentQueue {
    * concurrently. Items with the same `id` are deduplicated globally.
    */
   enqueue(fn: () => Promise<void>, id?: string, laneKey?: string): void {
+    assertProcessAdmission();
     if (this.migration) throw new MigrationAdmissionClosedError();
     if (this.shuttingDown) return;
 
@@ -170,6 +172,20 @@ export class AgentQueue {
   isLaneBusy(laneKey: string): boolean {
     const lane = this.lanes.get(laneKey);
     return Boolean(lane?.running || lane?.pending.length);
+  }
+
+  /** Inventory only: permits at most one exactly identified process-control item. */
+  assertProcessControlIdle(allowedCurrent?: { lane: string; ids: readonly string[] }): void {
+    if (this.migration || this.shuttingDown) throw new Error("Queue migration or shutdown has started");
+    if (this.retryingIds.size || this.retryTimers.size) throw new Error("Queue retains retries");
+    for (const [key, lane] of this.lanes) {
+      if (lane.pending.length) throw new Error("Queue retains pending work");
+      if (lane.running || lane.current || lane.runningPromise) {
+        if (key !== allowedCurrent?.lane || !lane.current?.id || !allowedCurrent.ids.includes(lane.current.id)) {
+          throw new Error("Queue retains unidentified or unrelated active work");
+        }
+      }
+    }
   }
 
   private isDrained(): boolean {

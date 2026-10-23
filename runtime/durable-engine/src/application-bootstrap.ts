@@ -79,12 +79,13 @@ export interface ApplicationBootstrapOptions {
   offlineInitialize?: boolean;
   /** Publish the existing runtime before recovery can schedule any provider. */
   onMaintenanceSettled?: (workId: string) => void;
-  onOperationSettled?: (operationId: string) => void;
+  onOperationSettled?: RuntimeOptions["onOperationSettled"];
   prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
   materializeAnswer?: RuntimeOptions["materializeAnswer"];
   dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
+  assertAdmission?: RuntimeOptions["assertAdmission"];
   /** Host-owned physical catalog approval; no credentials or provider execution. */
   resolveScheduledModel?: (label: string) => { provider: string; modelId: string };
   observeSidePrompt?: (sourceId: string, observer: NonNullable<SidePromptOptions["onEvent"]>) => () => void;
@@ -198,7 +199,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
-      runtime: { ...r, work, terminal, bindings, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+      runtime: { ...r, work, terminal, bindings, assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         replyThreadFor(input) { assert(); return resolveAcceptedMessageThread(root, input); },
         cancelOperationSource(input, expectedVersion) {
           root.transaction(() => {
@@ -227,7 +228,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
             assert();
           }).immediate();
         },
-        withIdleModelGuard: body => candidateDatabase.withIdleModelGuard(body),
+        withIdleModelGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
+          () => candidateDatabase.withIdleModelGuard(body)),
         existingConversationIds: manifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
@@ -307,7 +309,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
       assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
       return ({ chatJid, item, database: connection }) => {
-        assert();
+        assert(); config.assertAdmission?.();
         if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued admission required");
         work.acceptSourceInTransaction(sealed({ effect: { ...effect(`queue:${item.source_id}`),
           provenanceRef: queuedInputProvenance(item) }, chatJid: chat, sourceId: item.source_id, kind: "message",
@@ -352,9 +354,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       return Object.freeze({ ...adapter.sessionPosition(chat, binding.branchId, binding.sessionId),
         assertCurrent, lifetimeSignal: shutdown.signal,
         runOwnedControl<T>(operation: () => Promise<T>): Promise<T> {
-          assertCurrent();
+          assertCurrent(); config.assertAdmission?.();
           // Register before callback entry so close can join credential writes.
-          const running = Promise.resolve().then(() => { assertCurrent(); return operation(); });
+          const running = Promise.resolve().then(() => { assertCurrent(); config.assertAdmission?.(); return operation(); });
           hostControls.add(running);
           void running.finally(() => hostControls.delete(running)).catch(() => {});
           return running;
@@ -374,7 +376,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const preparing = new Map<string, Promise<void>>();
     const assertLive = () => { assert(); if (closing || shutdown.signal.aborted) throw Error("Application closing"); };
     function prepareInputSourceAdmission(chat: string): Promise<void> {
-      assert();
+      assert(); config.assertAdmission?.();
       if (closing || shutdown.signal.aborted) return Promise.reject(Error("Application closing"));
       if (routeIndex.has(chat)) return Promise.resolve();
       const pending = preparing.get(chat); if (pending) return pending;
@@ -384,14 +386,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (!createConversation) throw Error("Unbound application conversation");
         const row = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
         if (!row || !canonical(chat)) throw Error("Existing root branch required");
-        const binding = await activeController.addConversation(async tx => {
-          assertLive();
+        const binding = await candidateDatabase.withAdmissionGuard(() => { assertLive(); config.assertAdmission?.(); },
+          () => activeController.addConversation(async tx => {
+          assertLive(); config.assertAdmission?.();
           const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
           if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
           const created = await createConversation(tx, chat, row.branch_id);
-          assertLive();
+          assertLive(); config.assertAdmission?.();
           return created;
-        }, () => { assertLive(); committedPossible = true; });
+        }, () => { assertLive(); config.assertAdmission?.(); committedPossible = true; }));
         assertLive();
         // One publication point. Every ingress and session lookup uses this record.
         routeIndex.set(chat, Object.freeze({ ...binding }));
@@ -409,7 +412,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const input = Object.freeze({ ...raw });
       const scope = routeIndex.get(input.chatJid);
       const check = () => {
-        assertLive();
+        assertLive(); config.assertAdmission?.();
         if (!scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
           !/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.sourceId) ||
           input.requestId !== input.sourceId || input.payloadRef !== input.sourceId) throw Error("Side prompt source authority unavailable");
@@ -589,7 +592,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
     }
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
-      assertLive();
+      assertLive(); config.assertAdmission?.();
       options.signal?.throwIfAborted();
       if (((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
@@ -648,7 +651,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       // Immutable payload may outlive denied admission; it never grants authority.
       await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
-        assertLive(); assertParent();
+        assertLive(); config.assertAdmission?.(); assertParent();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
         const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
           { consumed_through_source_seq: number; active_operation_id: string | null } | null;
@@ -686,7 +689,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       } finally { unobserve?.(); }
     }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
-      assertLive();
+      assertLive(); config.assertAdmission?.();
       // The native SDK task does not yet carry the host's per-request budget
       // reservation authority. Never treat ALS or an interactive root work ID
       // as proof of scheduled admission. Until that binding is qualified, only
@@ -754,6 +757,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
        } });
     return Object.freeze({
       ...applicationInput,
+      // Inventory only. The process coordinator supplies the original owner
+      // fence, including its final check after the borrowed SDK lease closes.
+      assertProcessControlIdle() {
+        if (preparing.size || hostControls.size) throw Error("Host admission or credential/control work is active or uncertain");
+      },
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined) {
         if (projection) { assertLive(); if (inputProjection) throw Error("Application input projection already bound"); }
         inputProjection = projection;
@@ -762,7 +770,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       dispatchAcceptedInput: dispatch,
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle = false) {
-        assertLive();
+        assertLive(); config.assertAdmission?.();
         const admission = getQueuedInputSourceAdmission(input.chatJid);
         if (!admission) throw Error("Queued admission unavailable");
         return hostFollowups.enqueueAcceptedFollowupOnce(input.sourceId, input.chatJid, input.text, input.queuedAt,
@@ -794,6 +802,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         await activeController.close();
       })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
+      assertProcessControlIdle(): void;
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
       dispatchAcceptedInput: typeof dispatch;
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;

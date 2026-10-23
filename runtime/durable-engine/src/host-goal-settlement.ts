@@ -1,7 +1,7 @@
 import type Database from "bun:sqlite";
 import { getDeferredQueuedFollowups } from "../../src/db.js";
 import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage.js";
-import type { AcceptedInput, HostConversationRuntime } from "./host-runtime.js";
+import type { AcceptedInput, HostConversationRuntime, SettledAnswer } from "./host-runtime.js";
 import type { TerminalDatabaseEffect, TerminalCommit } from "../../src/service-effects/contracts/terminal-settlement-store.js";
 import { withExtensionKvAuthority, type ExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
@@ -52,8 +52,8 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     readPlan(chatJid: string, assertCurrent: () => void): GoalPlanState;
     admit(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;
   };
-}): (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined> {
-  return async input => {
+}): (input: AcceptedInput, answer?: SettledAnswer) => Promise<TerminalDatabaseEffect | undefined> {
+  return async (input, answer) => {
     const captured = Object.freeze({ ...input });
     options.assertOwner();
     const runtime = options.runtime();
@@ -84,7 +84,7 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     // in commitTerminal; the transaction still rechecks lifecycle and ownership.
     const texts = Object.freeze(prefix.map(input => input.text));
     const usage = Object.freeze(receipts.map(receipt => Object.freeze({ ...receipt })));
-    const progress = options.continuation ? structuredClone(await options.continuation.prepare(captured)) : undefined;
+    const progress = !answer?.processExit && options.continuation ? structuredClone(await options.continuation.prepare(captured)) : undefined;
     options.assertOwner();
     return (commit, scope) => {
       options.assertOwner();

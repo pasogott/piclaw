@@ -1,4 +1,5 @@
 import type Database from "bun:sqlite";
+import { assertProcessAdmission } from "../../runtime/process-admission.js";
 import { Result, type Result as ResultValue } from "../contracts/result.js";
 
 import type { NormalisedTraceInput } from "../contracts/common.js";
@@ -258,6 +259,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `claim:${prefixHash}`;
     const requestHash = canonicalRequestHash(request);
     const transaction = this.database.transaction(() => {
+      // Check after serial admission and BEGIN IMMEDIATE, including replay.
+      assertProcessAdmission();
       const replay = this.replay(key, requestHash, "claimDue", null);
       if (replay !== undefined) return Result.ok(this.restoreClaimReplay(request, replay));
 

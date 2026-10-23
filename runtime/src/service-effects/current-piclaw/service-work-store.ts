@@ -1,4 +1,5 @@
 import { getQueuedInputIntent } from "./queued-input-intent.js";
+import { assertProcessAdmission } from "../../runtime/process-admission.js";
 import {
   Result,
   type Result as ResultValue,
@@ -523,6 +524,8 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
   private applyAcceptSource(
     request: AcceptSourceRequest,
   ): MutationOutcome<AcceptedSourceSnapshot> {
+    // Cancellation is an explicit reconciliation control, not new executable work.
+    if (request.kind !== "cancellation") assertProcessAdmission();
     this.ensureChat(request.chatJid);
     const known = this.database
       .query(

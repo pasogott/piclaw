@@ -6,14 +6,13 @@
  * requestGracefulShutdown() to trigger the same orderly teardown
  * (queue drain → session dispose → web stop → process.exit) that SIGINT uses.
  *
- * For agent-initiated exits (exit_process tool), the actual shutdown is
- * **deferred** until the current turn completes and is persisted to the DB.
- * Call markPendingShutdown() during a tool call, then checkPendingShutdown()
- * from finalizeSuccessfulRun() after the response is committed.
+ * Native exit_process uses the SDK's singleton tool-round termination. Its
+ * host coordinator verifies the committed tool receipt, visible terminal and
+ * accounting, then proves global idleness and joins native cleanup before
+ * calling requestGracefulShutdown(). Recovery never rearms that request.
  *
- * isPendingShutdown() returns true while the flag is set, so the run-agent
- * orchestrator can abort the session immediately after the exit_process tool
- * executes — preventing further tool calls in the same turn.
+ * markPendingShutdown/checkPendingShutdown retain the legacy finalisation
+ * contract. The native coordinator does not use that process-global flag.
  */
 
 import { createLogger } from "../utils/logger.js";
@@ -72,8 +71,8 @@ export async function runPreShutdownHooksOnce(): Promise<void> {
 /**
  * Request an immediate graceful shutdown of the entire runtime.
  *
- * Used by /exit slash command (which runs outside the agent turn).
- * For exit_process tool (mid-turn), use markPendingShutdown() instead.
+ * Used by /exit outside an agent turn and by the native exit coordinator only
+ * after exact terminal persistence, final activity checks and native cleanup.
  */
 export function requestGracefulShutdown(reason: string, delayMs = 800): void {
   const testScheduler = (globalThis as { __PICLAW_EXIT_SCHEDULER__?: () => void }).__PICLAW_EXIT_SCHEDULER__;
