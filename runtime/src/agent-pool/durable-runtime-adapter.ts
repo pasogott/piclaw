@@ -63,6 +63,8 @@ export interface DurableSessionPositionPort {
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
   readonly reset?: () => Promise<void>;
   readonly abort?: () => Promise<boolean>;
+  /** Direct user shutdown, guarded by current host ownership and global idle. */
+  readonly requestExit?: (reason: string) => Promise<void>;
   readonly compact?: (instructions?: string) => Promise<{ compacted: boolean }>;
   /** Observe the same owned maintenance; never admit a new compaction. */
   readonly reconcileMaintenance?: () => Promise<void>;

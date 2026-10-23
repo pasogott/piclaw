@@ -1112,6 +1112,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     onRuntime(value) { captureRuntime = value; },
         prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
+        requestProcessExit: reason => processControls!.requestCommandExit(reason),
         dispatchHostCommand: (regrets || goalCommand) ? async (chat, text) => {
           if (regrets && /^\/regrets(?:\s|$)/.test(text.trim())) { await regretsCommand(chat); return { status: "success", message: "Regrets input queued" }; }
           if (goalCommand) { const result = await goalCommand(chat, text); wakeGoalFollowups(chat); return result; }

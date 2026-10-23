@@ -34,10 +34,11 @@ export function createHostProcessControls(options: Options) {
   const root = options.root;
   let pending: NativeExitReceipt | undefined;
   let scheduled = false;
+  let commandPending = false;
   const assertOwner = () => options.assertOwner();
   const assertAdmission = (input?: AcceptedInput) => {
     assertOwner();
-    if (pending && (!input || Object.keys(pending.input).some(key => input[key as keyof AcceptedInput] !== pending!.input[key as keyof AcceptedInput])))
+    if (commandPending || (pending && (!input || Object.keys(pending.input).some(key => input[key as keyof AcceptedInput] !== pending!.input[key as keyof AcceptedInput]))))
       throw Error("Native shutdown admission is sealed; no new work accepted. Use the existing abort/reconciliation control if completion is uncertain.");
   };
   function assertSqlIdle(scope?: Scope) {
@@ -87,7 +88,7 @@ export function createHostProcessControls(options: Options) {
       const fail = (message: string) => ({ output: [{ type: "text" as const, text: message }], isError: true,
         details: { scheduled: false, pending: false, safe_to_restart: false } });
       if (name === "exit_process" && args.resume_message !== undefined) return fail("Native resume_message is unsupported; no shutdown scheduled.");
-      if (pending) return fail("A native shutdown request is already pending; no additional request scheduled.");
+      if (pending || commandPending) return fail("A native shutdown request is already pending; no additional request scheduled.");
       try {
         assertOwner(); context.abortSignal?.throwIfAborted();
         const snapshot = await inspect({ conversationId: api.conversationId, taskId: api.taskId, callId: api.callId }, name !== "session_status");
@@ -135,6 +136,9 @@ export function createHostProcessControls(options: Options) {
     if (!receipt || receipt.nonce !== request.nonce || terminal.terminal_disposition !== "completed") { pending = undefined; return; }
     const work = root.query("SELECT status FROM budget_work WHERE id=?").get(operationBudgetWorkId(operationId)) as { status: string } | null;
     if (work && work.status !== "completed") throw Error("Native exit accounting settlement is uncertain");
+    scheduleExit(request.reason);
+  };
+  function scheduleExit(reason: string) {
     scheduled = true;
     const finish = async () => {
       let closing = false;
@@ -146,10 +150,10 @@ export function createHostProcessControls(options: Options) {
         closing = true;
         await options.closeNative(); // An uncertain cleanup MUST NOT request process shutdown.
         assertSqlIdle(); // Uses the original application owner, not the now-closed SDK lease.
-        (options.requestShutdown ?? requestGracefulShutdown)(request.reason);
+        (options.requestShutdown ?? requestGracefulShutdown)(reason);
       } catch {
         if (!closing) {
-          try { assertOwner(); pending = undefined; scheduled = false; } catch { /* Lost ownership cannot unseal admission. */ }
+          try { assertOwner(); pending = undefined; commandPending = false; scheduled = false; } catch { /* Lost ownership cannot unseal admission. */ }
         }
         // Refusal is terminal for this request. No delayed retry can bypass new
         // work or uncertain cleanup; a new request needs fresh authorisation.
@@ -157,8 +161,23 @@ export function createHostProcessControls(options: Options) {
       }
     };
     (options.defer ?? (run => { setTimeout(() => { void run(); }, 1500); }))(finish);
-  };
-  return { tools, extension, assertAdmission, onOperationSettled,
-    pending: () => pending !== undefined,
+  }
+  /** Direct user slash control: no SDK round or receipt. Only globally idle
+   * host ownership can enter. Seal before inspection to fence racing input. */
+  async function requestCommandExit(reason: string) {
+    assertAdmission();
+    if (!reason.trim() || reason.length > 512) throw Error("A short exit reason is required");
+    root.transaction(() => { assertSqlIdle(); commandPending = true; }).immediate();
+    try {
+      await inspect();
+      assertSqlIdle();
+      scheduleExit(reason.trim());
+    } catch (error) {
+      try { assertOwner(); commandPending = false; } catch { /* Lost ownership remains sealed. */ }
+      throw error;
+    }
+  }
+  return { tools, extension, assertAdmission, onOperationSettled, requestCommandExit,
+    pending: () => pending !== undefined || commandPending,
     ownsOperation: (operationId: string) => pending?.input.operationId === operationId };
 }

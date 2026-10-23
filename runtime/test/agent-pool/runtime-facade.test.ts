@@ -1505,3 +1505,24 @@ test('durable thinking mutation returns a user-facing error and releases protect
   expect(await facade.applyControlCommand('web:thinking-failure',{type:'thinking',level:'high',raw:'/thinking high'})).toMatchObject({status:'error',message:'maintenance in progress'});
   expect(events).toEqual(['protect','set','release']);
 });
+
+test("native /exit uses current user control ownership without a legacy session", async () => {
+  let exits = 0, legacy = 0, revoked = false, busy = false;
+  const lifetime = new AbortController();
+  const port = { sessionId: "native-exit", branchId: "main", readPosition: async () => null,
+    lifetimeSignal: lifetime.signal, assertCurrent() { if (revoked) throw Error("binding changed"); },
+    async requestExit(reason: string) { if (busy) throw Error("Other host operations are active"); expect(reason).toContain("/exit"); exits++; } };
+  const { facade } = createFacade({ getDurableSession: () => port,
+    getOrCreateRuntime: async () => { legacy++; throw Error("legacy forbidden"); } });
+  const command = parseControlCommand("/exit")!;
+  expect(getNativeCommandCatalogue(port).find(c => c.name === "/exit")?.status).toBe("native");
+  expect((await facade.applyControlCommand("web:native-exit", command)).status).toBe("success");
+  busy = true;
+  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("active");
+  revoked = true;
+  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("binding changed");
+  lifetime.abort();
+  expect((await facade.applyControlCommand("web:native-exit", command)).message).toContain("unavailable");
+  expect(getNativeCommandCatalogue(port).find(c => c.name === "/exit")?.status).toBe("unavailable");
+  expect(exits).toBe(1); expect(legacy).toBe(0);
+});

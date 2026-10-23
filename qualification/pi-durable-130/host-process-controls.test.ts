@@ -282,3 +282,49 @@ for (const kind of ["queue", "control", "claimed", "source_bound"] as const) tes
   f.controls.onOperationSettled("op", result.details);
   expect(f.deferred).toHaveLength(1); expect(f.shutdowns).toHaveLength(0);
 });
+
+test("direct native exit seals admission at idle and shares final cleanup checks", async () => {
+  const f = fixture(); f.terminal();
+  await f.controls.requestCommandExit("  user /exit  ");
+  expect(f.controls.pending()).toBe(true);
+  expect(() => f.controls.assertAdmission()).toThrow("sealed");
+  await expect(f.controls.requestCommandExit("duplicate")).rejects.toThrow("sealed");
+  expect(f.deferred).toHaveLength(1);
+  expect(f.shutdowns).toEqual([]);
+  await f.deferred[0]!();
+  expect(f.events).toEqual(["cleanup", "shutdown"]);
+  expect(f.shutdowns).toEqual(["user /exit"]);
+});
+
+test("direct native exit refuses accepted work, host controls and uncertain scheduling", async () => {
+  const f = fixture();
+  await expect(f.controls.requestCommandExit("user /exit")).rejects.toThrow();
+  expect(f.controls.pending()).toBe(false);
+  f.terminal(); f.hostBusy("control");
+  await expect(f.controls.requestCommandExit("user /exit")).rejects.toThrow();
+  f.hostBusy(undefined); f.closing();
+  await expect(f.controls.requestCommandExit("user /exit")).rejects.toThrow();
+  expect(f.controls.pending()).toBe(false);
+  expect(f.deferred).toHaveLength(0);
+  expect(f.shutdowns).toEqual([]);
+});
+
+test("direct exit cancels on final queued input and never retries", async () => {
+  const f = fixture(); f.terminal();
+  await f.controls.requestCommandExit("user /exit");
+  f.root.exec("INSERT INTO service_effect_s01_queued_inputs VALUES ('queued')");
+  await f.deferred[0]!();
+  expect(f.controls.pending()).toBe(false);
+  expect(f.shutdowns).toEqual([]); expect(f.stats().closed).toBe(0);
+  expect(f.deferred).toHaveLength(1);
+});
+
+test("direct exit leaves admission sealed on ownership loss or uncertain cleanup", async () => {
+  const lost = fixture(); lost.terminal(); lost.revokeOnInspect();
+  await expect(lost.controls.requestCommandExit("user /exit")).rejects.toThrow();
+  expect(lost.controls.pending()).toBe(true); expect(lost.deferred).toHaveLength(0);
+  const cleanup = fixture(); cleanup.terminal(); cleanup.rejectCleanup();
+  await cleanup.controls.requestCommandExit("user /exit");
+  await cleanup.deferred[0]!();
+  expect(cleanup.controls.pending()).toBe(true); expect(cleanup.shutdowns).toEqual([]);
+});

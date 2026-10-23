@@ -83,6 +83,7 @@ export interface ApplicationBootstrapOptions {
   prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
   materializeAnswer?: RuntimeOptions["materializeAnswer"];
   dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
+  requestProcessExit?: (reason: string) => Promise<void>;
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   assertAdmission?: RuntimeOptions["assertAdmission"];
@@ -353,6 +354,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       };
       return Object.freeze({ ...adapter.sessionPosition(chat, binding.branchId, binding.sessionId),
         assertCurrent, lifetimeSignal: shutdown.signal,
+        ...(config.requestProcessExit ? { requestExit: async (reason: string) => {
+          assertCurrent(); config.assertAdmission?.();
+          await config.requestProcessExit!(reason);
+        } } : {}),
         runOwnedControl<T>(operation: () => Promise<T>): Promise<T> {
           assertCurrent(); config.assertAdmission?.();
           // Register before callback entry so close can join credential writes.

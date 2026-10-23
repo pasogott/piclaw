@@ -389,6 +389,15 @@ export class AgentRuntimeFacade {
           return independent;
         } finally { release?.(); }
       }
+      if (command.type === "exit") {
+        if (!port.requestExit || !port.assertCurrent || !port.lifetimeSignal || port.lifetimeSignal.aborted)
+          return { status: "error", message: "Native exit control unavailable. No legacy session was opened." };
+        try {
+          port.assertCurrent();
+          await port.requestExit("Native /exit requested by user");
+          return { status: "success", message: "Graceful native exit requested. Active or uncertain work will refuse shutdown." };
+        } catch (error) { return { status: "error", message: error instanceof Error ? error.message : String(error) }; }
+      }
       if (command.type === "login" || command.type === "logout") {
         if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal) return { status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." };
         const context = this.nativeProviderAuthContext(chatJid, port);
