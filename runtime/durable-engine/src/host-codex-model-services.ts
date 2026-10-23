@@ -2,6 +2,7 @@ import { getCurrentTools, getCurrentSystemPrompt, normalizeContext, toToolDeclar
 import type { Api, Model, TranscriptContext } from '@earendil-works/pi-ai';
 import type { ModelRuntime } from '../../src/durable-legacy-sdk.js';
 import type { CodexOperation, NativeCodexFactories } from './host-codex-model-profile.ts';
+import { auditCodexPromptCache } from './host-prompt-cache-audit.js';
 
 type RootProvider = Parameters<ModelRuntime['registerNativeProvider']>[0];
 /** Constructor-only host authority. capture must resolve the actual invocation source,
@@ -51,16 +52,18 @@ export class HostCodexModelServices {
         onPayload(payload: unknown, actual: Model<Api>) {
           check();
           if (actual.provider !== snapshot.provider || actual.id !== snapshot.id || actual.api !== snapshot.api) throw Error('Codex payload owner changed');
-          const request = hooks.request(payload);
+          let request = hooks.request(payload);
           // Codex auto summaries may contain only encrypted reasoning, leaving
           // no public text for Thoughts. Request the provider's public summary;
           // never decode or display encrypted_content or invent thought text.
           if (observesOutput && request && typeof request === "object" && !Array.isArray(request)) {
             const body = request as Record<string, any>;
             if (body.reasoning?.effort && !["none", "off"].includes(body.reasoning.effort)) {
-              return { ...body, reasoning: { ...body.reasoning, summary: "detailed" } };
+              request = { ...body, reasoning: { ...body.reasoning, summary: "detailed" } };
             }
           }
+          // Fingerprint the final adapted body, not the stored SDK transcript.
+          if (observesOutput) auditCodexPromptCache(operation.sessionId, request);
           return request;
         },
         ...(observesOutput ? { fetch: (async (input, init) => {
