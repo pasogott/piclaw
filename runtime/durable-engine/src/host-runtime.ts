@@ -1,4 +1,5 @@
 import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
+import { readNativeExitReceipt, nativeExitNotice, type NativeExitReceipt } from "./host-process-receipt.js";
 import { modelFailureNotice, parseModelFailure } from "./host-model-failure.js";
 import { createLogger } from "../../src/utils/logger.js";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
@@ -47,6 +48,18 @@ export interface HostDurableBindings {
 export interface SettledAnswer {
   readonly message: AssistantMessage;
   readonly text: string;
+  readonly processExit?: NativeExitReceipt;
+}
+export interface NativeProcessSnapshot {
+  readonly inspection: HarnessInspection;
+  readonly scope?: {
+    readonly input: AcceptedInput;
+    readonly submissionIds: readonly number[];
+    readonly taskId: TaskId;
+    readonly generationId: TaskId;
+    readonly assistantId: number;
+    readonly singleton: boolean;
+  };
 }
 export interface MaterializedAnswer {
   readonly contentRef: string;
@@ -55,11 +68,13 @@ export interface MaterializedAnswer {
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
-  readonly onOperationSettled?: (operationId: string) => void;
+  readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void;
+  /** New work is sealed while an exact native shutdown request settles. */
+  readonly assertAdmission?: (input?: AcceptedInput) => void;
   /** Host timeline root for this exact accepted input, including queued messages. */
   readonly replyThreadFor?: (input: AcceptedInput) => number | null;
   /** Public evidence preparation outside SQLite; effect is invocation-local. */
-  readonly prepareTerminalEffect?: (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>;
+  readonly prepareTerminalEffect?: (input: AcceptedInput, answer?: SettledAnswer) => Promise<TerminalDatabaseEffect | undefined>;
   readonly onMaintenanceSettled?: (workId: string) => void;
   readonly cancelSideSource?: (input: AcceptedInput) => void;
   /** Atomically persist operator cancellation against this exact operation version. */
@@ -160,6 +175,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
     codemodeExecute: o.codemodeExecute,
+    assertAdmission: o.assertAdmission?.bind(o),
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
     operationConversationFor: o.operationConversationFor?.bind(o),
@@ -240,6 +256,7 @@ export class HostConversationRuntime {
   }
   /** Backend-owned public commit; publish only after storage accepts the whole transaction. */
   addConversation<T extends { conversationId: ConversationId }>(create: (tx: import("@earendil-works/pi-durable").Tx) => Promise<T>, beforeCommit?: () => void): Promise<T> {
+    this.options.assertAdmission?.();
     return this.observe(async () => {
       const root = await this.harness.conversation(1 as ConversationId, this.context); this.fence();
       if (!root) throw Error("Missing application root");
@@ -258,6 +275,7 @@ export class HostConversationRuntime {
     return this.allocateIsolatedFork(parentId, allocated, undefined, true);
   }
   private allocateIsolatedFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }, requireHistory = false): Promise<ConversationId> {
+    this.options.assertAdmission?.();
     const choice = model && Object.freeze({ provider: model.provider, modelId: model.modelId });
     return this.observe(async () => {
       const target = choice && this.options.harnessOptions.models.getModel(choice.provider, choice.modelId);
@@ -570,6 +588,7 @@ export class HostConversationRuntime {
 
   /** SDK reset starts a new context on the same proven conversation, retaining raw history. */
   async resetSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<void> {
+    this.options.assertAdmission?.();
     this.fence();
     const copy = Object.freeze({ ...binding });
     if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
@@ -590,6 +609,7 @@ export class HostConversationRuntime {
   }
 
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
+    this.options.assertAdmission?.();
     return this.runMaintenance(binding, instructions, signal);
   }
   /** Resume an explicitly proven paused manual task without admitting a replacement. */
@@ -806,6 +826,46 @@ export class HostConversationRuntime {
    * input. Busy-chat lookup alone is never source authority. No new ledger. */
   captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
     return this.captureSource(conversationId, taskId, callId);
+  }
+  /** Read-only public SDK inspection; never starts, resumes or cancels work. */
+  inspectProcessControl(call?: { conversationId: ConversationId; taskId: TaskId; callId: string }): Promise<NativeProcessSnapshot> {
+    return this.observe(async () => {
+      let scope: NativeProcessSnapshot["scope"];
+      if (call) {
+        if (!this.options.existingConversationIds.includes(call.conversationId)) throw Error("Root process control required");
+        const captured = await this.captureToolSource(call.conversationId, call.taskId, call.callId);
+        if (captured.delegateModel || captured.inputs.length !== 1) throw Error("One root accepted input required");
+        const input = inputSnapshot(captured.inputs[0]!);
+        scope = await this.harness.commit(async tx => {
+          const conversation = await tx.conversation(call.conversationId);
+          const tool = await tx.task(call.taskId);
+          const source = tool?.input as import("@earendil-works/pi-durable").ToolTaskInput | undefined;
+          const live = await tx.doc(LiveDoc, call.conversationId);
+          if (conversation?.owner || tool?.kind !== "pi.tool" || tool.abortRequested || tool.background ||
+              source?.kind !== "model" || source.callId !== call.callId || tool.owner === undefined ||
+              live.run?.taskId !== tool.owner || !live.tools?.some(slot => slot.taskId === call.taskId && slot.callId === call.callId && slot.status === "running"))
+            throw Error("Exact root model control required");
+          const assistant = await tx.entry(source.assistant);
+          const calls = assistant?.model?.flatMap(message => message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : []) ?? [];
+          if (assistant?.kind !== "pi.assistant" || assistant.byTaskId !== tool.owner || assistant.conversationId !== call.conversationId)
+            throw Error("Exact control assistant required");
+          return { input, submissionIds: captured.inputs.flatMap(item => item.submissionId === null ? [] : [item.submissionId]),
+            taskId: tool.id, generationId: tool.owner, assistantId: assistant.id,
+            singleton: calls.length === 1 && calls[0]!.id === call.callId && live.tools.length === 1 && !live.nestedTools?.length };
+        }, this.context);
+        this.assertCapturedSourceCurrent(captured.inputs);
+      }
+      const inspection = await this.harness.inspect(this.context);
+      this.fence();
+      return { inspection, scope };
+    });
+  }
+  /** afterTools runs after result persistence and before SDK run termination. */
+  async verifyProcessExitRound(assistantId: number, input: AcceptedInput): Promise<NativeExitReceipt | undefined> {
+    return this.observe(() => this.harness.commit(async tx => {
+      const assistant = await tx.entry(assistantId as import("@earendil-works/pi-durable").EntryId);
+      return assistant && readNativeExitReceipt(tx, assistant, input, false);
+    }, this.context));
   }
   /** Tools receive an invocation-bound control handle, not a public observer.
    * Open the read-only watch through the host, scoped to the exact live tool's
@@ -1202,6 +1262,7 @@ export class HostConversationRuntime {
   submitIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy, true); }
   private async admitInput(input: AcceptedInput, intent = false) {
     this.fence();
+    this.options.assertAdmission?.(input);
     // Join only owned compaction completion, never its detachable observer. This wait
     // is not active work: maintenance must finish before normal admission can begin.
     // A failed/uncertain maintenance keeps changingModel set and observe rejects;
@@ -1217,6 +1278,7 @@ export class HostConversationRuntime {
   private async submitInput(input: AcceptedInput, intent = false) {
     const port = this.port(intent);
     const { operation, conversation, content } = await this.checked(input, intent);
+    this.options.assertAdmission?.(input);
     const prior = await this.record(input, intent);
     if (prior) {
       await port.recordSubmission(input, prior.id); this.fence();
@@ -1381,6 +1443,12 @@ export class HostConversationRuntime {
       const messages = entry.model ?? [];
       if (messages.length !== 1 || messages[0]!.role !== "assistant") throw new Error("Unsupported answer shape");
       const message = messages[0]!;
+      const processExit = await conversation.commit(tx => readNativeExitReceipt(tx, entry, input), this.context);
+      this.fence();
+      if (processExit) {
+        answer = freezeTree({ message: structuredClone(message), text: nativeExitNotice(processExit.reason), processExit });
+        return { operation, submissionId: record.id, status, answer };
+      }
       // Public pi-ai 1.3 AssistantMessage supports text/thinking/toolCall, NOT image.
       // A tool-call generation is not a final answer. Tool media belongs to the host port.
       if (!Array.isArray(message.content) || message.content.some(part => part.type !== "text" && part.type !== "thinking"))
@@ -1585,7 +1653,7 @@ export class HostConversationRuntime {
   private async settleInput(input: AcceptedInput) {
     const primary = await this.readState(input); const o = this.options;
     if (primary.operation.terminal) {
-      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
+      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId, primary.answer?.processExit); return terminal;
     }
     const initialVersion = primary.operation.version;
     const primarySubmissionId = primary.submissionId;
@@ -1644,13 +1712,13 @@ export class HostConversationRuntime {
       disposition: cancelled ? "cancelled" as const : modelFailed ? "failed" as const : "completed" as const, errorCode: modelFailed ? "model_error" : null, terminalAuthorityRef: null,
       timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: modelFailed ? "runtime model error" : "runtime committed answer" })),
       outboxIntents: [], committedAt: o.now() });
-    const terminalEffect = cancelled || modelFailed ? undefined : await o.prepareTerminalEffect?.(input);
+    const terminalEffect = cancelled || modelFailed ? undefined : await o.prepareTerminalEffect?.(input, state.answer ?? undefined);
     this.fence();
     const terminal = value(await o.terminal.commitTerminal(request, terminalEffect)); this.fence();
     if (modelFailed) log.warn("Native turn failed; no automatic replay", { operation: "durable_turn.model_failed",
       chatJid: input.chatJid, operationId: input.operationId, conversationId: input.conversationId, submissionId: state.submissionId,
       ...(parseModelFailure(state.status?.status === "unanswered" ? state.status.detail : undefined) ?? { category: "unknown" }) });
-    o.onOperationSettled?.(input.operationId); return terminal;
+    o.onOperationSettled?.(input.operationId, state.answer?.processExit); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.

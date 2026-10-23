@@ -1,6 +1,7 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createNativeTurnView, type NativeTurnViewChannel } from "../../src/channels/web/agent/native-turn-view.js";
 import { createLogger } from "../../src/utils/logger.js";
+import { registerProcessAdmissionGuard } from "../../src/runtime/process-admission.js";
 import { createHostRemotePeerTool } from "./host-remote-peer-tool.js";
 import { registerChatTransport } from "../../src/extensions/chat-transport-registry.js";
 import { createHostRegretsTool, createHostRegretsPromptExtension, createHostRegretsSettings } from "./host-regrets-tool.js";
@@ -43,6 +44,7 @@ import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "./host-model-controls.js";
+import { createHostProcessControls, nativeProcessToolNames, nativeProcessInstructions } from "./host-process-controls.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledAddon, bindInstalledAddon, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
@@ -216,7 +218,12 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
 /** Mainstream source factory. Only startup-known chats are admitted; unknown chats fail closed. */
 export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, remotePeerOptions?: { offlineMaintenance?: boolean; transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
   const offlineMaintenance = remotePeerOptions?.offlineMaintenance === true;
-  const assertAdmission = () => { if (offlineMaintenance) throw Error("Offline maintenance cannot admit conversations"); };
+  let processControls: ReturnType<typeof createHostProcessControls> | undefined;
+  let closeForProcessControl: (() => Promise<void>) | undefined;
+  const assertAdmission = () => {
+    if (offlineMaintenance) throw Error("Offline maintenance cannot admit conversations");
+    processControls?.assertAdmission();
+  };
   if (process.platform !== "linux") throw Error("Durable application ownership is qualified only on Linux");
   if (readAccessConfig().mode !== "single-user") throw Error("Durable host builtins require single-user policy; family effect ports are not qualified");
   const ownership = applicationOwnership(owner);
@@ -340,7 +347,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     void watching.catch(error => { liveWatches.delete(chat); log.error("Conversation watch failed", { chatJid: chat, err: error }); });
   };
   const drainPending = (chat: string) => {
-    if (!liveChannel) return;
+    if (!liveChannel || processControls?.pending()) return;
     assert();
     const pending = root.query("SELECT source_seq FROM service_effect_s01_sources WHERE chat_jid=? AND kind='message' AND state='pending' ORDER BY source_seq").all(chat);
     if (!pending.length) { attemptedPending.delete(chat); return; }
@@ -356,6 +363,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   };
   const wakeGoalFollowups = (chat: string) => {
     assert();
+    if (processControls?.pending()) return;
     if (!lifetime.signal.aborted) {
       try { resumePending?.(chat); } catch { /* Persisted admission survives; startup uses the same recovery drain. */ }
     }
@@ -588,15 +596,18 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   } catch (error) { closeResources(); throw error; } finally { catalog.runtime.invalidate("Application extension preflight ended"); }
   let infrastructureClosed = false;
   const closeInfrastructure = () => { if (infrastructureClosed) return; infrastructureClosed = true; for (const qualified of infrastructure) if (qualified.kind === "imap") (qualified.nativeExports["index.ts"]!.disposeImapPool as () => void)(); };
-  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...hostModelToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...hostModelToolNames, ...nativeProcessToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
   const fetchDefault = [...baseApplicationToolNames, "fetch"];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   let previousModelDefault: readonly string[] = [];
+  let previousProcessDefault: readonly string[] = [];
   const completeToolSet = (value: unknown, names: readonly string[]) => Array.isArray(value) && value.length === names.length && new Set(value).size === names.length && names.every(name => value.includes(name));
   const isFactoryDefault = (value: unknown) => isOldDefault(value) || completeToolSet(value, defaultToolNames) ||
     completeToolSet(value, previousDefault) || completeToolSet(value, fetchDefault) ||
     completeToolSet(value, baseApplicationToolNames) || completeToolSet(value, previousModelDefault) ||
-    completeToolSet(value, previousModelDefault.filter(name => name !== "codemode"));
+    completeToolSet(value, previousModelDefault.filter(name => name !== "codemode")) ||
+    completeToolSet(value, previousProcessDefault) || completeToolSet(value, previousProcessDefault.filter(name => name !== "fetch")) ||
+    completeToolSet(value, previousProcessDefault.filter(name => !(hostModelToolNames as readonly string[]).includes(name)));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
   let sandboxClose: Promise<void> | undefined;
@@ -630,6 +641,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
   const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
   previousModelDefault = applicationToolNames.filter(name => !(hostModelToolNames as readonly string[]).includes(name));
+  previousProcessDefault = applicationToolNames.filter(name => !(nativeProcessToolNames as readonly string[]).includes(name));
   if (drawio) {
     drawioHost = drawio.addon.bindDrawioVendorHost({
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); },
@@ -664,7 +676,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   // Allocate/recover the shared namespace before any accepted task or API read.
   codeReview?.addon.reviewService();
   const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
-    assert(); signal.throwIfAborted();
+    assertAdmission(); assert(); signal.throwIfAborted();
     if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native model budget admission unavailable");
     if (!available.some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model not approved");
     if (!host.modelRegistry.getAvailable().some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model no longer available");
@@ -673,7 +685,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   };
   const instructionsFor = (chatJid?: string) => loadHostInstructions({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(),
     projectTrusted: true, additionalSkillPaths: [...settings.getSkillPaths(), ...infrastructure.flatMap(item => [...item.skillPaths]), ...resourceQualifications.flatMap(item => [...item.skillPaths]), ...(regrets?.skillPaths ?? [])],
-    channelAppendix: [nativeToolInstructions, chatJid ? buildChannelSystemPromptAppendix(detectChannel(chatJid), chatJid) ?? "" : "", ...infrastructure.map(infrastructurePrompt)].filter(Boolean).join("\n\n") });
+    channelAppendix: [nativeToolInstructions, nativeProcessInstructions, chatJid ? buildChannelSystemPromptAppendix(detectChannel(chatJid), chatJid) ?? "" : "", ...infrastructure.map(infrastructurePrompt)].filter(Boolean).join("\n\n") });
   const instructionUpgrades = new Map<number, string>();
   const toolUpgrades: number[] = [];
   // Validate stored choices without opening/writing SDK documents or bundle ports.
@@ -806,6 +818,24 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
   const builtins = [...tools];
+  processControls = createHostProcessControls({ root, runtime,
+    assertOwner() { assert(); if (readAccessConfig().mode !== "single-user") throw Error("Native process control requires single-user policy"); },
+    assertHostIdle(input) {
+      bundle.assertProcessControlIdle();
+      if (!nativeQueue) throw Error("Shared execution queue unavailable");
+      if (!input) { nativeQueue.assertProcessControlIdle(); return; }
+      const message = root.query("SELECT rowid FROM messages WHERE chat_jid=? AND id=? AND is_bot_message=0").get(input.chatJid, input.sourceId) as { rowid: number } | null;
+      const chat = input.chatJid;
+      const ids = [`durable-recovery:${input.operationId}`, `chat:${chat}`, `resume:${chat}`, `resume:${chat}:wake`,
+        ...(message ? [`chat:${chat}:${message.rowid}`, `resume:${chat}:${message.rowid}`, `compaction-resume:${chat}:${input.sourceId}`] : [])];
+      nativeQueue.assertProcessControlIdle({ lane: `chat:${chat}`, ids });
+    },
+    async closeNative() { if (!closeForProcessControl) throw Error("Native cleanup owner unavailable"); await closeForProcessControl(); },
+  });
+  const releaseProcessAdmission = registerProcessAdmissionGuard(() => processControls!.assertAdmission());
+  // A failed/uncertain or successful shutdown stays sealed through process exit.
+  resourceDisposers.push(() => { if (!processControls!.pending()) releaseProcessAdmission(); });
+  tools.push(...processControls.tools);
   tools.push(...createHostModelTools({
     assertCurrent() { assert(); lifetime.signal.throwIfAborted(); if (readAccessConfig().mode !== "single-user") throw Error("Native model controls unavailable"); },
     readContext: call => runtime().readToolModelContext(call),
@@ -883,7 +913,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     assertCurrent();
     return result;
   } }));
-  registry.install(defineExtension({ name: "app.host-builtins", tools }));
+  registry.install(defineExtension({ name: "app.host-builtins", tools, hooks: processControls.extension.hooks }));
   if (regretsPrompt) registry.install(regretsPrompt);
   if (observability) registry.install(createHostObservabilityPrompt(observability.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); observability.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
@@ -1057,11 +1087,22 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: (input, onlyIfIdle = true) => bundle.admitHostFollowup(input, onlyIfIdle),
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
-        assertInputAdmission(chat) { ensureLiveWatch(chat); },
+        assertAdmission: input => processControls!.assertAdmission(input),
+        assertInputAdmission(chat) { assertAdmission(); ensureLiveWatch(chat); },
         materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
-    onOperationSettled(operationId) {
+    onOperationSettled(operationId, processExit) {
       assert();
+      if (processExit || processControls!.ownsOperation(operationId)) {
+        try { reconcileOperationBudgetWork(root, operationId); }
+        finally {
+          publishTerminal(operationId);
+          const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
+          if (row) clearInflightMarker(row.chat_jid);
+        }
+        processControls!.onOperationSettled(operationId, processExit);
+        return; // No Goal or queue continuation after a committed exit receipt.
+      }
       try { reconcileOperationBudgetWork(root, operationId); }
       finally {
         publishTerminal(operationId);
@@ -1173,7 +1214,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   }
   if (!offlineMaintenance) await bundle.retryRecoveredWork();
   let closing: Promise<void> | undefined;
-  return { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
+  const backend: RuntimeBackend = { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
       const position = bundle.sessionOptions.getDurableSession?.(chat);
       return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
     },
@@ -1248,6 +1289,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (failures.length) throw new AggregateError(failures, "Native tool cleanup uncertain");
       })();
     } };
+  closeForProcessControl = () => backend.close();
+  return backend;
   } catch (error) {
     lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
     const cleanupFailures: unknown[] = [];
