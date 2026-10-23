@@ -129,7 +129,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -669,6 +669,58 @@ for (const scenario of ["native-process-exit", "native-process-exit-accounting",
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if (scenario.startsWith("native-shutdown-")) {
+    const { admitWebUserMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
+    const marker = join(workspace, "shutdown-tool-once.txt");
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { entered = resolve; });
+    toolSequence = [{ name: "bash", arguments: { command: `printf X >> '${marker}'` } }];
+    onProviderResponse = () => { if (calls === 1) checkpointHold = { entered }; };
+    try {
+      const stored = await admitWebUserMessage(channel, { chatJid: "web:default", content: "Complete one tool before restart", isBot: false,
+        mediaIds: [], agentId: "default", agentName: "Fixture" }, { acceptSource: bound.getInputSourceAdmission!("web:default") },
+        () => owner.assertCurrentOwner(), new AbortController().signal);
+      assert(stored);
+      const source = root.query("SELECT rowid,id FROM messages WHERE rowid=?").get(stored.id) as { rowid: number; id: string };
+      const running = bound.dispatchAcceptedInput!("web:default", source.id, source.rowid)!().catch(error => error);
+      await held;
+      expect(readFileSync(marker, "utf8")).toBe("X");
+      expect(calls).toBe(2);
+      const submission = root.query("SELECT id FROM submissions ORDER BY id DESC LIMIT 1").get();
+      const completedTools = root.query("SELECT id,record FROM tasks WHERE kind=json_quote('pi.tool') AND status='terminal' ORDER BY id").all();
+      expect(completedTools.length).toBeGreaterThan(0);
+      const signal = checkpointHold!.signal!;
+      if (scenario === "native-shutdown-stop-recover") {
+        backend.stop();
+        await Bun.sleep(10);
+        expect(signal.aborted).toBe(false); // Producer stop must not manufacture a provider failure.
+      }
+      await backend.close();
+      await running;
+      expect(signal.aborted).toBe(true); // The SDK, not dependency teardown, interrupted the request.
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(source.id)).toEqual({ state: "claimed" });
+      expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid='web:default'").get()).toEqual({ phase: "executing" });
+      expect(root.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([]);
+      expect(root.query("SELECT id,record FROM tasks WHERE kind=json_quote('pi.tool') AND status='terminal' ORDER BY id").all()).toEqual(completedTools);
+      checkpointHold = undefined; onProviderResponse = undefined;
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      const reopened = backend.bind({ queue: base.queue, agentPool: pool });
+      expect(await reopened.dispatchAcceptedInput!("web:default", source.id, source.rowid)!()).toBe("settled");
+      expect(root.query("SELECT id FROM submissions ORDER BY id DESC LIMIT 1").get()).toEqual(submission);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(source.id)).toEqual({ state: "consumed" });
+      expect(root.query("SELECT terminal_disposition FROM service_effect_s01_operations WHERE chat_jid='web:default'").get()).toEqual({ terminal_disposition: "completed" });
+      expect(root.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([{ content: "factory synthetic reply" }]);
+      expect(root.query("SELECT id,record FROM tasks WHERE kind=json_quote('pi.tool') AND status='terminal' ORDER BY id").all()).toEqual(completedTools);
+      expect(readFileSync(marker, "utf8")).toBe("X");
+      expect(calls).toBe(3);
+    } finally {
+      checkpointHold = undefined; onProviderResponse = undefined;
+      await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      owner.release(); closeDatabase();
+    }
+    return;
+  }
   if (scenario.startsWith("native-process-")) {
     const { admitWebUserMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
     const { nativeExitNotice } = await import("../../runtime/durable-engine/src/host-process-receipt.js");
@@ -2254,18 +2306,23 @@ for (const scenario of ["native-process-exit", "native-process-exit-accounting",
       root.query("INSERT INTO service_effect_s01_chats(chat_jid,active_operation_id) VALUES ('web:pending-recovery',NULL)").run();
       root.query("UPDATE service_effect_s01_chats SET next_source_seq=2 WHERE chat_jid='web:pending-recovery'").run();
       root.query("INSERT INTO service_effect_s01_sources VALUES ('web:pending-recovery',1,'pending-recovery',?,'message','pending','payload',NULL,NULL,'now',NULL,'provenance',0)").run("a".repeat(64));
-      await expect(recovered.reconcileMaintenance!()).rejects.toThrow("Host work is not idle");
-      expect(calls).toBe(callsBeforeStop);
+      // Scoped startup recovery may already have completed this exact task.
+      // Unrelated accepted work must not block reconciliation or be consumed.
+      await recovered.reconcileMaintenance!();
+      expect(calls).toBe(beforeCalls + 2); // One held attempt and one recovered attempt.
+      expect(calls).toBeGreaterThanOrEqual(callsBeforeStop);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='pending-recovery'").get()).toEqual({ state: "pending" });
+      const callsAfterMaintenance = calls;
       backend.stop();
       expect(() => recovered.reconcileMaintenance!()).toThrow("Application closing");
-      expect(calls).toBe(callsBeforeStop);
+      expect(calls).toBe(callsAfterMaintenance);
       await backend.close();
       root.query("UPDATE service_effect_s01_sources SET state='disposed' WHERE source_id='pending-recovery'").run();
       backend = await createDefaultApplicationRuntime(owner, async () => services);
       recovered = backend.sessionOptions.getDurableSession!("web:default")!;
       const callsBeforeResume = calls;
       await recovered.reconcileMaintenance!();
-      expect(calls).toBe(callsBeforeResume + 1);
+      expect(calls).toBe(callsBeforeResume); // Completed maintenance must not run again.
       expect(root.query("SELECT state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt' ORDER BY r.rowid").all()).toEqual([{ state: "unresolved" }, { state: "settled" }]);
       expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "active" }]);
       expect(root.query("SELECT id FROM entries WHERE json_extract(record, '$.kind')='pi.compaction'").all()).toHaveLength(1);

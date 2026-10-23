@@ -51,6 +51,14 @@ Authentication alone leaves the selected model unchanged. Activation requires ex
 
 A `CredentialSynchronizationError` can occur after credentials have been saved. Recovery uses `refresh({ allowNetwork: false })`; it does not repeat login, roll back credentials or forward credential-bearing errors and causes. Warning fields and user messages remain bounded and secret-free.
 
+## Service interruption
+
+Stopping the backend seals host producers and observers without aborting execution dependencies. Closing it joins owned credential operations and closes the public SDK before disposing provider and tool dependencies. This prevents shutdown cancellation from being committed as a provider failure while the SDK scheduler is still writable.
+
+Reopening can continue the same accepted submission from its committed request checkpoint, retaining completed tool results. It may issue another provider request; it does not resume the original token stream or clear uncertain accounting holds. A tool interrupted before its result commits has no new exactly-once guarantee. Genuine committed model errors remain terminal and are not replayed.
+
+If cleanup or held maintenance cannot finish, ownership and dependencies stay retained. The operator's process-wide shutdown backstop still applies; no successful cleanup is fabricated.
+
 ## Replies and timeline data
 
 Command execution and reply delivery have separate results. A successful native command can return HTTP 201 with `response_delivery: failed` when publication fails. Do not repeat the command to repair delivery. Root threading is resolved in the message transaction.
