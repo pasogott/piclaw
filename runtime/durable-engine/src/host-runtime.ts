@@ -18,6 +18,7 @@ import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEf
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import.js";
 import { projectPublicHistory } from "./session-tree.js";
+import { materializePlanContext } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
 
 /** Immutable host-persisted intent; never supplied as arbitrary user text. */
@@ -85,6 +86,8 @@ export interface RuntimeOptions {
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Same-file owner/admission fences; SDK compaction itself orders the target conversation. */
   readonly withCompactionGuard?: <T>(body: () => Promise<T>) => Promise<T>;
+  /** Prompt entries support pre-ACK execution; check accepted source at SQL commit. */
+  readonly withPromptContextGuard?: <T>(check: () => void, body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
    * Adapters/models/tools must fence effects themselves, including EF-S02 inside its SQL commit. */
   readonly owner: { assert(): void; release(): void | Promise<void> };
@@ -182,6 +185,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     assertAdmission: o.assertAdmission?.bind(o),
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     withCompactionGuard: o.withCompactionGuard?.bind(o),
+    withPromptContextGuard: o.withPromptContextGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
@@ -1266,6 +1270,21 @@ export class HostConversationRuntime {
       if (!this.routed(input)) throw Error("Host binding conflict");
       this.options.bindings.assertSourceCurrent?.(input);
     }
+  }
+  preparePlanContext(conversationId: ConversationId, taskId: TaskId, inputs: readonly HostInputBinding[],
+    messages: readonly import("@earendil-works/pi-ai").Message[], content: import("@earendil-works/pi-ai").UserMessage["content"],
+    assertAddonCurrent: () => void, context: Context) {
+    return this.observe(async () => {
+      const guard = this.options.withPromptContextGuard;
+      if (!guard || !inputs.length || !this.options.bindings.assertSourceCurrent) throw Error("Plan context write guard unavailable");
+      const check = () => { context.abortSignal?.throwIfAborted(); assertAddonCurrent(); this.assertCapturedSourceCurrent(inputs); };
+      return guard(check, async () => {
+        const conversation = await this.harness.conversation(conversationId, context);
+        check();
+        if (!conversation) throw Error("Plan conversation unavailable");
+        return materializePlanContext(conversation, taskId, inputs[0]!.chatJid, messages, content, check, context);
+      });
+    });
   }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {

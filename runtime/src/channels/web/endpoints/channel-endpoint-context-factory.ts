@@ -140,7 +140,12 @@ export function createWebChannelEndpointContexts(
             // turn that failure into permission to display a stored estimate.
             let runtimeUsage;
             try { runtimeUsage = await channel.agentPool.getContextUsageForChat(chatJid); }
-            catch { return null; }
+            catch {
+              const generation = channel.agentPool.getSessionGenerationForChat?.(chatJid);
+              return generation
+                ? { tokens: null, contextWindow: null, percent: null, sessionGeneration: generation, tokensAreAuthoritative: true as const }
+                : null;
+            }
             const currentGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
               ? channel.agentPool.getSessionGenerationForChat(chatJid)
               : null;

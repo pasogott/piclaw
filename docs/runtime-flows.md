@@ -206,7 +206,11 @@ The web client refreshes this state on:
 - `visibilitychange` when the document becomes visible again
 - successful manual `/compact`, through an immediate `context_usage` status event
 
-After `/compact`, the backend prefers an estimate from the rebuilt session. If that estimate has null tokens—for example while a provider-native session rewrite is settling—it uses the compaction report's safety-adjusted estimate instead. Direct and deferred command paths do not persist or broadcast null-token updates. `GET /agent/context` awaits the live session lookup, then falls back to validated persisted channel usage when the session was evicted, lookup failed, or runtime tokens are null.
+Native reset (`/new-session`) and manual/automatic compaction retain conversation identity. Fresh native estimates remain valid; unavailable counts are `null`, never a fabricated zero or a revived stored/report estimate. Direct/deferred command events and completed-turn snapshots can clear same-session meters. Failed native display reads also clear counts when the current identity remains known. Legacy readers without the native authority hint retain their validated same-generation compatibility fallback.
+
+`GET /agent/context` returns a full snapshot with `contextUpdate: "replace"`. This public marker replaces `tokens`, `contextWindow` and `percent`, including nulls. Runtime authority hints stay private. Without the marker, partial/cache-only telemetry retains omitted meters. Cache accounting remains independent. Both skins share this reconciliation, generation/revision guards and persisted-cache invalidation; late polls cannot undo a newer accepted boundary.
+
+Ordinary context requests perform **zero full-tree summary reads** and omit `sessionTree`. Clients needing the historical summary field must request `GET /agent/context?include_tree=1` (and their usual `chat_jid`). Each opt-in request reads the existing exact public tree: `{ sessionTree: { leafId, total } }`. `/tree`, session pickers, imported-history redaction and head/count semantics are unchanged. The repository consumer audit found no Classic/Visual meter consumer for that field; the qualification consumer now requests it explicitly. Arbitrary external clients were not observable in this audit. No latency improvement has been measured.
 
 Together, those paths keep the context compaction affordance in sync immediately after compaction and when returning to the tab or reopening the webapp, without requiring another agent turn or waiting for the slower backstop poller.
 

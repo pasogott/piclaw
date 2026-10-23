@@ -358,15 +358,25 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   try {
     const readSummary = async () => {
       channel.setContextUsage(chat, { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: "preserved-session" });
-      const response = await channel.handleRequest(new Request(`http://fixture/agent/context?chat_jid=${encodeURIComponent(chat)}`));
-      expect(response.status).toBe(200);
-      const payload = await response.json() as { sessionTree: { leafId: string | null; total: number }; sessionGeneration: string };
+      const treeReader = spyOn(pool, "getSessionTreeSummaryForChat");
+      let payload: Record<string, unknown>;
+      try {
+        const response = await channel.handleRequest(new Request(`http://fixture/agent/context?chat_jid=${encodeURIComponent(chat)}`));
+        expect(response.status).toBe(200);
+        payload = await response.json() as Record<string, unknown>;
+        expect(treeReader).not.toHaveBeenCalled();
+        expect(payload).not.toHaveProperty("sessionTree");
+      } finally { treeReader.mockRestore(); }
+      const usage = await pool.getContextUsageForChat(chat);
+      expect(payload).toMatchObject({ tokens: usage!.tokens, contextWindow: usage!.contextWindow, percent: usage!.percent,
+        sessionGeneration: "preserved-session", contextUpdate: "replace" });
+      expect(payload).not.toHaveProperty("tokensAreAuthoritative");
+      const response = await channel.handleRequest(new Request(`http://fixture/agent/context?chat_jid=${encodeURIComponent(chat)}&include_tree=1`));
+      const explicit = await response.json() as { sessionTree: { leafId: string | null; total: number } };
       const tree = await pool.getSessionTreeForChat(chat);
-      expect(payload.sessionTree).toEqual({ leafId: tree.leafId, total: tree.total });
-      expect(payload.sessionTree.total).toBeGreaterThan(0);
-      expect(payload.sessionGeneration).toBe("preserved-session");
-      expect(payload).toMatchObject({ tokens: null, percent: null });
-      return payload.sessionTree;
+      expect(explicit.sessionTree).toEqual({ leafId: tree.leafId, total: tree.total });
+      expect(explicit.sessionTree.total).toBeGreaterThan(0);
+      return explicit.sessionTree;
     };
     const initialSummary = await readSummary();
     const events: { type: string; data: any }[] = [];
@@ -644,8 +654,14 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       const allCompactTurns = events.filter(e => e.type === "agent_status" && e.data.title === "Compacting context");
       expect(allCompactTurns).toHaveLength(2);
       for (const intent of allCompactTurns) {
-        expect(events.filter(e => e.type === "agent_status" && e.data.turn_id === intent.data.turn_id).map(e => e.data.type))
+        const statuses = events.filter(e => e.type === "agent_status" && e.data.turn_id === intent.data.turn_id);
+        expect(statuses.filter(e => e.data.type !== "context_usage").map(e => e.data.type))
           .toEqual(["intent", compactSucceeds ? "done" : "error"]);
+        for (const snapshot of statuses.filter(e => e.data.type === "context_usage")) {
+          expect(compactSucceeds).toBe(true);
+          expect(snapshot.data.context_usage).toMatchObject({ sessionGeneration: "preserved-session", contextUpdate: "replace" });
+          expect(snapshot.data.context_usage).not.toHaveProperty("tokensAreAuthoritative");
+        }
       }
       expect(channel.getQueuedFollowupCount(chat)).toBe(0);
     }

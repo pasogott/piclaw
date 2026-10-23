@@ -236,6 +236,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
             assert();
           }).immediate();
         },
+        withPromptContextGuard: (check, body) => candidateDatabase.withAdmissionGuard(check, body),
         withIdleModelGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
           () => candidateDatabase.withIdleModelGuard(body)),
         withCompactionGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },

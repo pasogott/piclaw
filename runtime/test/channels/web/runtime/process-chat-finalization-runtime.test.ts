@@ -34,7 +34,7 @@ describe("process chat finalization runtime", () => {
       expect(calls).toEqual(["save", "context", "peek-queue"]);
       expect(statuses).toEqual([expect.objectContaining({
         type: "done",
-        context_usage: { tokens: 10, contextWindow: 100, percent: 10, sessionGeneration: "session-current" },
+        context_usage: { tokens: 10, contextWindow: 100, percent: 10, sessionGeneration: "session-current", contextUpdate: "replace" },
       })]);
     });
   });
@@ -70,6 +70,7 @@ describe("process chat finalization runtime", () => {
         contextWindow: null,
         percent: null,
         sessionGeneration: "session-new",
+        contextUpdate: "replace",
         reset: true,
       }]);
       expect(statuses[0]).toMatchObject({

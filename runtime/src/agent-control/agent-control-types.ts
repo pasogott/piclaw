@@ -295,6 +295,8 @@ export interface AgentControlResult {
   };
   /** Fresh context indicator payload to broadcast after commands that rewrite context. */
   contextUsage?: {
+    /** Internal reader hint; public projections translate it to replacement semantics. */
+    tokensAreAuthoritative?: true;
     tokens: number | null;
     contextWindow: number | null;
     percent: number | null;

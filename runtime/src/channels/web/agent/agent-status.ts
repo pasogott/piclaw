@@ -6,6 +6,7 @@ import type { WebAgentBufferEntry } from "./agent-buffers.js";
 import { getAddonApiHealthSnapshot } from "../../../addons/addon-api-health.js";
 import { getMcpStartupDiagnostics } from "../../../secure/mcp-keychain.js";
 import { appendServerTiming, measureAsync, measureSync } from "../http/server-timing.js";
+import { publicContextUsage } from "../context-usage.js";
 
 export interface TokenUsageCounterSummary {
   input_tokens: number;
@@ -289,21 +290,21 @@ export function handleAgentStatusRequest(req: Request, ctx: AgentStatusContext):
 }
 
 /** Build shared context and latest-run usage metadata for an authorised chat. */
-export async function buildAgentContextSnapshot(chatJid: string, ctx: AgentStatusContext): Promise<Record<string, unknown>> {
+export async function buildAgentContextSnapshot(chatJid: string, ctx: AgentStatusContext,
+  options: { includeTree?: boolean } = {}): Promise<Record<string, unknown>> {
   const cacheUsage = formatTokenUsageContext(ctx.getTokenUsageForChat(chatJid));
   // Read-only endpoint: never claims or clears the active turn/status surface.
-  const sessionTree = ctx.getSessionTreeSummaryForChat
+  const sessionTree = options.includeTree && ctx.getSessionTreeSummaryForChat
     ? { sessionTree: await ctx.getSessionTreeSummaryForChat(chatJid) }
     : {};
   const usage = await ctx.getContextUsageForChat(chatJid);
   if (!usage) {
-    return { tokens: null, contextWindow: null, percent: null, sessionGeneration: null, cacheUsage, ...sessionTree };
+    return { tokens: null, contextWindow: null, percent: null, sessionGeneration: null, contextUpdate: "replace", cacheUsage, ...sessionTree };
   }
   return {
-    tokens: usage.tokens,
-    contextWindow: usage.contextWindow,
-    percent: usage.percent,
+    ...publicContextUsage(usage),
     sessionGeneration: usage.sessionGeneration ?? null,
+    contextUpdate: "replace",
     cacheUsage,
     ...sessionTree,
   };
@@ -313,7 +314,9 @@ export async function buildAgentContextSnapshot(chatJid: string, ctx: AgentStatu
 export async function handleAgentContextRequest(req: Request, ctx: AgentStatusContext): Promise<Response> {
   const { result, durationMs } = await measureAsync(async () => {
     const chatJid = resolveChatJid(req, ctx.defaultChatJid);
-    return ctx.json(await buildAgentContextSnapshot(chatJid, ctx));
+    return ctx.json(await buildAgentContextSnapshot(chatJid, ctx, {
+      includeTree: new URL(req.url).searchParams.get("include_tree") === "1",
+    }));
   });
   return appendServerTiming(result, {
     name: "agent_context",

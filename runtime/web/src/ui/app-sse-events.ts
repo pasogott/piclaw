@@ -52,6 +52,7 @@ import {
   normalizeContextUsage,
   persistContextUsage,
   reconcileContextUsageForChat,
+  restoreContextUsage,
 } from './app-status-refresh-orchestration.js';
 
 type StateSetter<T> = (next: T | ((prev: T) => T)) => void;
@@ -479,9 +480,10 @@ export function handleAppSseEvent(
     if (!isCurrentChatEvent) {
       const eventChatJid = typeof data?.chat_jid === 'string' ? data.chat_jid.trim() : '';
       const inactiveContextUsage = normalizeContextUsage(data?.context_usage);
-      if (eventChatJid && data?.context_reset === true && inactiveContextUsage?.sessionGeneration) {
-        const resetUsage = reconcileContextUsageForChat(eventChatJid, null, inactiveContextUsage, { reset: true });
-        persistContextUsage(eventChatJid, resetUsage);
+      if (eventChatJid && (data?.context_reset === true || inactiveContextUsage?.contextUpdate === 'replace') && inactiveContextUsage?.sessionGeneration) {
+        reconcileContextUsageForChat(eventChatJid, restoreContextUsage(eventChatJid), inactiveContextUsage, {
+          reset: data?.context_reset === true,
+        });
       }
       if (data?.type === 'done' || data?.type === 'error') {
         void refreshActiveChatAgents();

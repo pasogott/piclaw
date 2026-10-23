@@ -129,7 +129,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -308,9 +308,13 @@ for (const scenario of ["native-shutdown-stop-recover", "native-shutdown-close-r
   const codemodePlan = scenario.startsWith("native-codemode-plan");
   const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
   const nativeGoal = scenario === "native-goal" || scenario === "native-goal-budget" || scenario === "native-codemode-plan-goal";
-  const nativePlan = scenario === "native-plan" || nativeGoal || codemodePlan;
+  const planClear = scenario === "native-plan-clear";
+  const planInitiallyEmpty = scenario === "native-plan-initial-empty";
+  const nativePlan = scenario.startsWith("native-plan") || nativeGoal || codemodePlan;
   if (nativeGoal) installGoalFixture(workspace);
-  const planStep = codemodePlan ? "CODEMODE_PLAN_OWNED" : "NATIVE_PLAN_NEW";
+  const defaultPlanStep = "Update this plan thoroughly with ongoing work";
+  const planStep = planClear ? defaultPlanStep : codemodePlan ? "CODEMODE_PLAN_OWNED" : "NATIVE_PLAN_NEW";
+  const expectedPlanMarkdown = planClear ? "" : `- [-] ${planStep}`;
   if (nativePlan) {
     const source = process.env.DURABLE_ADDONS_ROOT;
     if (!source) throw Error("DURABLE_ADDONS_ROOT required");
@@ -327,8 +331,8 @@ for (const scenario of ["native-shutdown-stop-recover", "native-shutdown-close-r
     }
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
-    extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
-    toolSequence = codemodePlan ? [{ name: "codemode", arguments: { code: codemodePlanCancelled
+    extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: planInitiallyEmpty ? "" : "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
+    toolSequence = planClear ? [{ name: "plan", arguments: { action: "write", markdown: "" } }] : codemodePlan ? [{ name: "codemode", arguments: { code: codemodePlanCancelled
       ? 'try { await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");'
       : 'const r=await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]});console.log(r)' } }]
       : [{ name: "plan", arguments: { action: "update", plan: [{ step: planStep, status: "in_progress" }] } }];
@@ -1955,25 +1959,38 @@ for (const scenario of ["native-shutdown-stop-recover", "native-shutdown-close-r
     expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 7 : 4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
-    expect(planRequests[0]).toContain("NATIVE_PLAN_OLD");
+    expect(planRequests[0]).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");
     expect(planRequests[1]).toContain(planStep);
-    for (const request of planRequests) {
-      expect(request.match(/Current Plan Sidebar checklist/g)).toHaveLength(1);
+    const contextBefore = JSON.parse(planRequests[0]!) as { messages: { role: string }[] };
+    const contextAfter = JSON.parse(planRequests[1]!) as typeof contextBefore;
+    const dialogueBefore = contextBefore.messages.filter(message => message.role !== "system");
+    const dialogueAfter = contextAfter.messages.filter(message => message.role !== "system");
+    expect(JSON.stringify(dialogueAfter.slice(0, dialogueBefore.length))).toBe(JSON.stringify(dialogueBefore));
+    expect(contextAfter.messages.filter(message => message.role === "system"))
+      .toEqual(contextBefore.messages.filter(message => message.role === "system"));
+    for (const [index, request] of planRequests.entries()) {
+      expect(request.match(/Current Plan Sidebar checklist/g)).toHaveLength(index + 1);
       expect(request.match(/## Plan Sidebar/g)).toHaveLength(1);
     }
+    const storedSnapshots = (root.query("SELECT record FROM entries WHERE json_extract(record, '$.kind')='host.plan-context' ORDER BY id").all() as { record: string }[])
+      .map(row => JSON.parse(row.record));
+    expect(storedSnapshots).toHaveLength(2);
+    expect(JSON.stringify(storedSnapshots[0])).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");
+    expect(JSON.stringify(storedSnapshots[1])).toContain(planStep);
+    expect(JSON.stringify(await first!.readTree!())).not.toContain("Current Plan Sidebar checklist");
     if (codemodePlan) {
       expect(observedResults.get("factory-tool-1")?.toolName).toBe("codemode");
       expect(observedResults.get("factory-tool-1")?.isError).not.toBe(true);
       expect(JSON.stringify(observedResults.get("factory-tool-1")?.content)).toContain("Plan updated.");
-    } else expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "plan", content: [{ type: "text", text: "Plan updated." }] });
-    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: `- [-] ${planStep}` });
+    } else expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "plan", content: [{ type: "text", text: planClear ? "Updated plan for web:default." : "Plan updated." }] });
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: expectedPlanMarkdown });
     expect(root.query("SELECT scope_key FROM extension_kv WHERE extension_id='plan-sidebar'").all()).toEqual([{ scope_key: "web:default" }]);
     expect(root.query("SELECT content FROM messages WHERE chat_jid='web:default' AND is_bot_message=1").all()).toEqual([{ content: "factory synthetic reply" }]);
     expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(message.id)).toEqual({ state: "consumed" });
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
     closeDatabase(); initDatabase();
-    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: `- [-] ${planStep}` });
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: expectedPlanMarkdown });
     backend = await createDefaultApplicationRuntime(owner, async () => services);
     expect(backend.sessionOptions.getDurableSession!("web:default")).toBeDefined();
     backend.stop(); await backend.close();

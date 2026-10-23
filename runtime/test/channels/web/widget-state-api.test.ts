@@ -71,6 +71,7 @@ describe("widget state API", () => {
           const accepted = context && (!stored || "sessionGeneration" in context);
           const expected = accepted ? JSON.parse(JSON.stringify({
             tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent, sessionGeneration: "session-1",
+            ...("tokensAreAuthoritative" in context && context.tokensAreAuthoritative === true ? { contextUpdate: "replace" } : {}),
           })) : { tokens: null, contextWindow: null, percent: null, sessionGeneration: "session-1" };
           expect(body.chats[0].context).toEqual(expected);
           expect(JSON.stringify(body)).not.toMatch(/tokensAreAuthoritative|futurePrivateField/);

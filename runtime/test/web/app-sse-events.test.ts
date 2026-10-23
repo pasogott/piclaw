@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { getAgentUiSnapshot, invalidateAgentUiSnapshot } from '../../web/src/ui/agent-ui-snapshot.js';
+import { applyChatPaneStateSnapshot, createEmptyChatPaneState } from '../../web/src/ui/app-chat-pane-state.js';
 
 import { handleAppSseEvent, type HandleAppSseEventDependencies } from '../../web/src/ui/app-sse-events.js';
 import {
@@ -9,6 +10,9 @@ import {
 import {
   reconcileContextUsageForChat,
   resetContextSessionGenerationsForTests,
+  persistContextUsage,
+  restoreContextUsage,
+  refreshContextUsageForChat,
 } from '../../web/src/ui/app-status-refresh-orchestration.js';
 
 afterEach(() => {
@@ -709,6 +713,71 @@ test('handleAppSseEvent resets context on a new session generation and rejects s
     tokens: null,
     sessionGeneration: 'session-new',
   });
+});
+
+test('same-identity replacement clears active and inactive persisted meters without losing cache telemetry', () => {
+  const previousWindow = (globalThis as any).window;
+  const storage = new Map<string, string>();
+  (globalThis as any).window = { localStorage: {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  } };
+  try {
+    const state = createDeps();
+    for (const chat of ['chat:alpha', 'chat:beta']) {
+      const previous = reconcileContextUsageForChat(chat, null, {
+        tokens: 777, contextWindow: 10000, percent: 7.77, sessionGeneration: 'stable-session',
+        cacheUsage: { latest: { cacheHitRate: 75 } },
+      }, { authoritative: true });
+      persistContextUsage(chat, previous);
+      if (chat === 'chat:alpha') state.setContextUsageState(previous);
+      handleAppSseEvent('agent_status', { chat_jid: chat, type: 'context_usage', context_usage: {
+        tokens: null, contextWindow: null, percent: null, sessionGeneration: 'stable-session', contextUpdate: 'replace',
+      } }, state.deps);
+      expect(restoreContextUsage(chat)).toMatchObject({ tokens: null, percent: null, cacheUsage: { latest: { cacheHitRate: 75 } } });
+    }
+    expect(state.getContextUsageState()).toMatchObject({ tokens: null, percent: null });
+    expect(state.getAgentStatusState()).toBeNull();
+  } finally { (globalThis as any).window = previousWindow; }
+});
+
+test('switching back cannot restore stale pane meters after inactive replacement, storage failure and offline refresh', async () => {
+  const previousWindow = (globalThis as any).window;
+  const storage = new Map<string, string>();
+  let failWrites = false;
+  (globalThis as any).window = { localStorage: {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { if (failWrites) throw Error('storage unavailable'); storage.set(key, value); },
+  } };
+  try {
+    const state = createDeps(); // alpha active; beta's saved pane is inactive
+    const previous = reconcileContextUsageForChat('chat:beta', null, {
+      tokens: 777, contextWindow: 10000, percent: 7.77, sessionGeneration: 'stable-session',
+      cacheUsage: { latest: { cacheHitRate: 75 } },
+    }, { authoritative: true });
+    persistContextUsage('chat:beta', previous);
+    const pane = { ...createEmptyChatPaneState(), contextUsage: previous, agentPlan: 'keep plan',
+      followupQueueItems: [{ row_id: 'keep', content: 'keep queue' }] };
+    failWrites = true;
+    handleAppSseEvent('agent_status', { chat_jid: 'chat:beta', type: 'context_usage', context_usage: {
+      tokens: null, contextWindow: null, percent: null, sessionGeneration: 'stable-session', contextUpdate: 'replace',
+    } }, state.deps);
+    expect(JSON.parse(storage.get('piclaw:ctx:chat:beta')!).tokens).toBe(777); // disk is genuinely stale
+    let plan = '';
+    const refs = new Proxy({}, { get: (target: any, key) => target[key] ??= { current: null } });
+    applyChatPaneStateSnapshot({ snapshot: pane, currentChatJid: 'chat:beta', refs: refs as any, setters: {
+      ...state.deps, setIsAgentTurnActive() {}, setCurrentTurnId() {}, setActiveModel() {},
+      setActiveThinkingLevel() {}, setSupportsThinking() {}, setActiveModelUsage() {},
+      setAgentPlan: value => { plan = value; },
+    } });
+    expect(state.getContextUsageState()).toMatchObject({ tokens: null, percent: null, cacheUsage: { latest: { cacheHitRate: 75 } } });
+    expect(plan).toBe('keep plan');
+    expect(state.getFollowupQueueItems()).toEqual([{ row_id: 'keep', content: 'keep queue' }]);
+    await refreshContextUsageForChat({ currentChatJid: 'chat:beta', activeChatJidRef: { current: 'chat:beta' },
+      getAgentContext: async () => { throw Error('offline'); }, setContextUsage: state.deps.setContextUsage });
+    expect(state.getContextUsageState()?.tokens).toBeNull();
+    expect(restoreContextUsage('chat:beta')?.tokens).toBeNull();
+  } finally { (globalThis as any).window = previousWindow; }
 });
 
 test('handleAppSseEvent accepts current-generation compaction context updates', () => {

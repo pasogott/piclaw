@@ -301,7 +301,9 @@ test('restoreContextUsage rejects local storage from a replaced session generati
       sessionGeneration: 'session-new',
     }, { authoritative: true });
 
-    expect(restoreContextUsage('chat:alpha')).toBeNull();
+    expect(restoreContextUsage('chat:alpha')).toMatchObject({
+      tokens: null, percent: null, sessionGeneration: 'session-new',
+    });
   } finally {
     (globalThis as any).window = previousWindow;
   }

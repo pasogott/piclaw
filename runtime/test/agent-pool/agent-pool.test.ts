@@ -395,8 +395,9 @@ test("agent pool stores SSH config for future sessions when no live SSH session 
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
-  const { initDatabase, getSshConfig } = await importFresh<typeof import("../src/db.js")>("../src/db.js");
+  const { initDatabase, getSshConfig, storeChatMetadata } = await importFresh<typeof import("../src/db.js")>("../src/db.js");
   initDatabase();
+  storeChatMetadata("web:other", "2026-10-23T00:00:00.000Z", "SSH target fixture");
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
 
   let pool: any;
