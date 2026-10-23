@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 /**
  * test/channels/web/web-build.test.ts – Build verification tests.
  *
@@ -56,6 +57,8 @@ test("build:web produces bundle assets", async () => {
   expect(appBundle).toContain('#editor-vendor/codemirror');
   expect(editorBundle).toContain('#editor-vendor/codemirror');
 
-  expect(statSync(appBundlePath).size).toBeLessThan(1_500_000);
+  // Compact Delegate rows add 1.7KB raw / 0.7KB gzip over the prior bundle.
+  expect(statSync(appBundlePath).size).toBeLessThan(1_505_000);
+  expect(gzipSync(appBundle).byteLength).toBeLessThan(415_000);
   expect(statSync(editorBundlePath).size).toBeLessThan(500_000);
 }, WEB_BUILD_TEST_TIMEOUT_MS);
