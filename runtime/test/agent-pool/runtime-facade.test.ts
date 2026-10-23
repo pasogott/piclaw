@@ -1549,3 +1549,39 @@ test("native critical controls preserve scope, report failures and never fall ba
  revoked=true;expect((await run('/restart')).message).toContain('binding lost');expect(restarts).toBe(1);
  lifetime.abort();expect((await run('/bash printf NO')).status).toBe('error');expect(bashes).toBe(1);expect(legacy).toBe(0);
 });
+
+
+for (const native of [false, true]) for (const supportsOff of [false, true]) {
+  test(`cold/native=${native} thinking capabilities agree with catalogue and command (off=${supportsOff})`, async () => {
+    let reads = 0, writes = 0, legacy = 0;
+    const model = { provider: 'synthetic', id: 'capabilities', reasoning: true,
+      thinkingLevelMap: { off: supportsOff ? 'none' : null, minimal: null, low: 'low', medium: null, high: 'high' } };
+    const port = { sessionId: 'capabilities', branchId: 'main', readPosition: async () => null,
+      readModel: async () => 'synthetic/capabilities', readThinkingLevel: async () => { reads++; return 'high'; },
+      setThinkingLevel: async () => { writes++; } };
+    const { facade } = createFacade({ ...(native ? { getDurableSession: () => port } : {}),
+      modelRegistry: { getAvailable: () => [model] } as any,
+      getOrCreateRuntime: async () => { legacy++; throw Error('legacy hydration forbidden'); } });
+    for (const includeCatalogue of [true, false]) {
+      const status = await facade.getAvailableModels('web:capabilities', { includeCatalogue, includeProviderUsage: false, includeProviderDiagnostics: false });
+      // Cold non-native has no persisted selection. Native must report exact
+      // model-specific support, not add the generic no-session 'off' fallback.
+      if (native) {
+        const expected = supportsOff ? ['off', 'low', 'high'] : ['low', 'high'];
+        expect(status.available_thinking_levels).toEqual(expected);
+        expect(status.available_thinking_level_labels).toEqual(expected);
+        expect(status.model_options[0]?.thinking_levels).toEqual(expected);
+      } else expect(status.available_thinking_levels).toEqual(['off']);
+    }
+    if (native) {
+      const query = await facade.applyControlCommand('web:capabilities', { type: 'thinking', raw: '/thinking' });
+      expect(query.message).toContain(supportsOff ? 'Available levels: off, low, high' : 'Available levels: low, high');
+      expect(await facade.applyControlCommand('web:capabilities', { type: 'thinking', level: 'off', raw: '/thinking off' })).toMatchObject({ status: supportsOff ? 'success' : 'error' });
+      expect(writes).toBe(supportsOff ? 1 : 0);
+      expect(reads).toBe(3);
+      expect(await facade.applyControlCommand('web:capabilities', { type: 'cycle_thinking', raw: '/cycle-thinking' })).toMatchObject({ status: 'success', thinking_level: supportsOff ? 'off' : 'low' });
+      expect(writes).toBe(supportsOff ? 2 : 1);
+    }
+    expect(legacy).toBe(0);
+  });
+}

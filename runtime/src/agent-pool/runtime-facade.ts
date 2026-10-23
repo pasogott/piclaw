@@ -492,7 +492,7 @@ export class AgentRuntimeFacade {
         const label = await port.readModel?.();
         const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === label);
         if (!model) return { status: "error", message: "No available native thinking model." };
-        const levels = getAvailableThinkingLevelsForModel(model, ["off"]);
+        const levels = getAvailableThinkingLevelsForModel(model);
         const current = await port.readThinkingLevel?.();
         const next = levels[(levels.findIndex(level => level === current) + 1) % levels.length];
         if (!next) return { status: "error", message: "No available thinking levels." };
@@ -588,7 +588,7 @@ export class AgentRuntimeFacade {
         }
         const level = await port.readThinkingLevel();
         const display = level ? formatThinkingLevelForDisplay(level, model) : null;
-        const levels = getAvailableThinkingLevelsForModel(model, ["off"]);
+        const levels = getAvailableThinkingLevelsForModel(model);
         return { status: "success", message: [
           `Model: ${current}`, `Thinking level: ${display ?? "unknown"}`,
           `Available levels: ${levels.map(value => formatThinkingLevelForDisplay(value, model)).join(", ")}`,
@@ -699,12 +699,12 @@ export class AgentRuntimeFacade {
     const supportsThinking = session && typeof (session as AgentSession & { supportsThinking?: () => boolean }).supportsThinking === "function"
       ? (session as AgentSession & { supportsThinking: () => boolean }).supportsThinking()
       : Boolean(currentModelDescriptor?.reasoning);
-    const baseThinkingLevels: string[] = session && typeof (session as AgentSession & { getAvailableThinkingLevels?: () => string[] }).getAvailableThinkingLevels === "function"
+    const baseThinkingLevels: string[] | undefined = session && typeof (session as AgentSession & { getAvailableThinkingLevels?: () => string[] }).getAvailableThinkingLevels === "function"
       ? (session as AgentSession & { getAvailableThinkingLevels: () => string[] }).getAvailableThinkingLevels()
-      : ["off"];
+      : undefined;
     const availableThinkingLevels: string[] = currentModelDescriptor
       ? getAvailableThinkingLevelsForModel(currentModelDescriptor, baseThinkingLevels)
-      : baseThinkingLevels;
+      : baseThinkingLevels ?? ["off"];
     const activeProvider = session?.model?.provider ?? currentModelOption?.provider ?? null;
     const includeProviderUsage = options.includeProviderUsage !== false;
     const providerUsage = includeProviderUsage && activeProvider
