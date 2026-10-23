@@ -60,19 +60,22 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     const text = await runtime.readAcceptedInputText(captured);
     options.assertOwner();
     const identity = addon.goalInputIdentity(text);
-    if (identity === null) return undefined;
-    if (!identity) throw Error("Invalid accepted Goal identity");
+    if (identity === false) throw Error("Invalid accepted Goal identity");
     const goal = withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.chatJid,
       assertCurrent: options.assertOwner, write() { throw Error("Goal preparation is read-only"); } }, () => addon.loadThreadGoal(captured.chatJid));
     let proof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
-    if (goal && (goal.status === "complete" || goal.status === "stopped")) {
+    if (identity && goal && (goal.status === "complete" || goal.status === "stopped")) {
       proof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status };
       if (identity.goalId !== goal.goal_id || identity.generation + 1 !== goal.lifecycle_generation ||
         !await runtime.hasSettledGoalTerminalResult(captured, proof)) throw Error("Goal terminal operation proof required");
     }
-    const batch = await runtime.readSettledInputUsage(captured);
+    // Ordinary user turns must also wake an active Goal. Their usage is not
+    // Goal-owned: only explicit accepted Goal inputs authorize accounting.
+    if (!identity && (!options.continuation || goal?.status !== "active")) return undefined;
+    const ordinaryGoal = !identity && goal ? { goalId: goal.goal_id, generation: goal.lifecycle_generation } : undefined;
+    const batch = identity ? await runtime.readSettledInputUsage(captured) : { inputs: [], receipts: [] };
     options.assertOwner();
-    if (!batch?.receipts.length) throw Error("Missing committed Goal usage");
+    if (!batch || (identity && !batch.receipts.length)) throw Error("Missing committed Goal usage");
     const ordinary = batch.inputs.findIndex(input => addon.goalInputIdentity(input.text) === null);
     if (ordinary >= 0 && batch.inputs.slice(ordinary).some(input => addon.goalInputIdentity(input.text) !== null))
       throw Error("Goal input after ordinary steer");
@@ -92,7 +95,13 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
       withGoalSettlementAuthority(options.root, commit, scope, authority => {
         if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
         const source = { operationId: captured.operationId, conversationId: captured.conversationId };
-        accountCommittedGoalBatch(addon, authority, texts, usage, proof, source);
+        if (identity) accountCommittedGoalBatch(addon, authority, texts, usage, proof, source);
+        if (ordinaryGoal) {
+          const current = addon.loadThreadGoal(captured.chatJid);
+          // Pause/replacement during preparation revokes this continuation. It
+          // must not stop the unrelated, already committed user answer settling.
+          if (!current || current.goal_id !== ordinaryGoal.goalId || current.lifecycle_generation !== ordinaryGoal.generation || current.status !== "active") return;
+        }
         if (!options.continuation || !progress || !options.continuation.addon.shouldContinueGoalAfterMessage(progress.message)) return;
         const current = addon.loadThreadGoal(captured.chatJid) as GoalContinuationState | null;
         if (current?.status === "budget_limited") {
