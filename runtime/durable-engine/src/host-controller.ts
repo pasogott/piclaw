@@ -4,6 +4,9 @@ import { withoutAbortSignal, type Context } from "@earendil-works/chord/context"
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions } from "./host-runtime.js";
 import { reconstituteAcceptedWork } from "./host-recovery.js";
 import type { HostCutoverController } from "./host-cutover.js";
+import { AcceptedReplyThreadUnavailableError } from "./host-message-thread.js";
+import { createLogger } from "../../src/utils/logger.js";
+const log = createLogger("durable.controller");
 
 type Recovery = Parameters<typeof reconstituteAcceptedWork>[0];
 export interface HostOwnership {
@@ -187,6 +190,7 @@ export async function createHostController(config: HostControllerOptions, contex
     await authorizeRecoveredWork(inspection);
     bootstrapApproval = false;
     let retry: Promise<void> | undefined;
+    const unavailableReplyThreads = new Set<string>();
     const activeRuntime = runtime;
     // Explicit same-ID intent repair only. Never resume/wait or replay a primary model turn.
     // Rescan SQL on every call: the bootstrap snapshot is not continuing source authority.
@@ -212,11 +216,22 @@ export async function createHostController(config: HostControllerOptions, contex
         // only for cold-start operations: their previous dispatcher no longer exists.
         for (const entry of current) {
           assert();
-          if (entry.role !== "primary" || entry.binding?.submissionId == null) continue;
+          if (entry.role !== "primary" || entry.binding?.submissionId == null || unavailableReplyThreads.has(entry.input.operationId)) continue;
           const state = await activeRuntime.reconcile(entry.input);
           if ((state.status?.status === "unanswered" && state.status.reason === "model_error") ||
               (startupAnswers.has(entry.input.operationId) && state.status?.status === "done")) {
-            if (await activeRuntime.settle(entry.input)) startupAnswers.delete(entry.input.operationId);
+            try {
+              if (await activeRuntime.settle(entry.input)) startupAnswers.delete(entry.input.operationId);
+            } catch (error) {
+              assert();
+              if (!(error instanceof AcceptedReplyThreadUnavailableError)) throw error;
+              // Retain the accepted source and committed answer. Never fabricate
+              // a replacement thread or let one unavailable root crash all chats.
+              unavailableReplyThreads.add(entry.input.operationId);
+              log.warn("Recovered reply thread unavailable; accepted input retained", {
+                operation: "durable_recovery.reply_thread_unavailable", operationId: entry.input.operationId, chatJid: entry.input.chatJid,
+              });
+            }
           }
         }
         assert();
