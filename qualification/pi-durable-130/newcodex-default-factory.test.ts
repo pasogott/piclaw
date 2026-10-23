@@ -6,6 +6,9 @@ import { createProvider, createAssistantMessageEventStream } from "../../node_mo
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.ts";
 import { HostCodexModelServices } from "../../runtime/durable-engine/src/host-codex-model-services.ts";
 
+const routingOwner = {};
+const routingScope = () => ({ turnId: "fixture-turn", accountRef: "fixture-account", provider: routingOwner });
+
 // Regression for the factory prerequisite, not a default-factory qualification receipt.
 applicationTest("normal public Root stream preserves original request signal and actual physical model at Codex capture", async () => {
   const root = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false,
@@ -28,7 +31,7 @@ applicationTest("normal public Root stream preserves original request signal and
     auth: { apiKey: { name: "synthetic", resolve: async () => ({ auth: { apiKey: "synthetic" }, source: "fixture" }) } },
     api: { stream, streamSimple: stream } }));
   const request = new AbortController(), lifetime = new AbortController();
-  const codex = new HostCodexModelServices({
+  const codex = new HostCodexModelServices({ routingScope,
     async capture(combined, actual, original) {
       expect(original).toBe(request.signal);
       expect(combined).not.toBe(original);

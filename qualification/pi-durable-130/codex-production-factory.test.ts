@@ -16,6 +16,7 @@ import { WebChannel } from "../../runtime/src/channels/web.js";
 import { admitWebUserMessage } from "../../runtime/src/channels/web/messaging/message-store.js";
 import type { Model, AssistantMessage, CredentialStore } from "../../node_modules/@earendil-works/pi-ai";
 import { HostConversationRuntime } from "../../runtime/durable-engine/src/host-runtime.js";
+import { HostCodexModelServices } from "../../runtime/durable-engine/src/host-codex-model-services.js";
 const rootUrl = new URL("../../package.json", import.meta.url).href;
 const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-coding-agent", rootUrl));
 const { createAssistantMessageEventStream, getCurrentTools } = await import(import.meta.resolve("@earendil-works/pi-ai", rootUrl));
@@ -59,6 +60,8 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
   const runtime = await ModelRuntime.create({ credentials, modelsPath: null, modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} }, allowModelNetwork: false, refreshOnCreate: false });
   const alternate = { ...model, id: "synthetic-alternate", name: "Synthetic alternate" };
   let calls = 0;
+  const routingTokens: (string | null)[] = [];
+  const routingRelease = spyOn(HostCodexModelServices.prototype, "releaseTurn");
   let fixtureError: unknown;
   let bodyFailed = false;
   let bodyPulls = 0;
@@ -68,7 +71,11 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
     await originalClose.call(this);
     joined++;
   });
-  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+    if (scenario === "write") {
+      routingTokens.push(new Headers(init?.headers).get("x-codex-turn-state"));
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream", "x-codex-turn-state": "ROUTING_TOKEN_" + routingTokens.length } });
+    }
     if (scenario === "broken-sse") return new Response(new ReadableStream({
       async pull(controller) {
         bodyPulls++;
@@ -103,6 +110,10 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
         expect(options?.headers?.["x-fixture"]).toBe("owned");
         const payload = await options!.onPayload!({ model: model.id, input: [], tools: tools.map(t => ({type: "function", name: t.name, description: t.description, parameters: t.parameters})) }, actual);
         expect(payload).toBeDefined();
+        if (scenario === "write") {
+          const response = await options!.fetch!("https://fixture.invalid/responses", { method: "POST", body: JSON.stringify(payload), headers: options!.headers as HeadersInit });
+          await response.text();
+        }
         if (scenario !== "write" && scenario !== "model") {
           for (const name of ["image_generation", "web_search"]) {
             const declaration = tools.find(t => t.name === name)!;
@@ -219,8 +230,21 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
       expect(reservation.settlement_sha256).toHaveLength(64);
       expect((getDb().query("SELECT status FROM budget_work WHERE id=?").get(reservation.work_id) as any).status).toBe("completed");
     }
-    if (scenario === "write") expect(readFileSync(join(workspace, "native-factory-proof.txt"), "utf8")).toBe("native write proof\n");
-    else if (scenario !== "model") {
+    if (scenario === "write") {
+      expect(readFileSync(join(workspace, "native-factory-proof.txt"), "utf8")).toBe("native write proof\n");
+      expect(routingTokens).toEqual([null, "ROUTING_TOKEN_1"]);
+      const firstOperation = getDb().query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=? ORDER BY primary_source_seq DESC LIMIT 1").get("web:default") as { operation_id: string };
+      expect(routingRelease).toHaveBeenCalledWith(firstOperation.operation_id);
+      const second = await admitWebUserMessage(channel, { chatJid: "web:default", content: "A new synthetic user turn", mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" }, { acceptSource: bound.getInputSourceAdmission!("web:default") }, () => owner.assertCurrentOwner(), new AbortController().signal);
+      expect(second).not.toBeNull();
+      const next = getDb().query("SELECT id FROM messages WHERE rowid=?").get(second!.id) as { id: string };
+      expect(await bound.dispatchAcceptedInput!("web:default", next.id, second!.id)!()).toBe("settled");
+      if (fixtureError) throw fixtureError;
+      expect(routingTokens).toEqual([null, "ROUTING_TOKEN_1", null]);
+      expect(calls).toBe(3);
+      expect(JSON.stringify(getDb().query("SELECT record FROM entries").all())).not.toContain("ROUTING_TOKEN_");
+      expect(JSON.stringify(getDb().query("SELECT content FROM document_revisions").all())).not.toContain("ROUTING_TOKEN_");
+    } else if (scenario !== "model") {
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const bots = getDb().query("SELECT content FROM messages WHERE is_bot_message=1 AND chat_jid=?").all("web:default") as {content:string}[];
       expect(bots).toHaveLength(priorBotCount + 1);
@@ -237,7 +261,7 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
     expect(JSON.stringify(treeBefore)).not.toContain("Files:");
     await backend.close(); backend = undefined;
     backend = await createDefaultApplicationRuntime(owner, async () => services as never);
-    expect(calls).toBe((scenario === "write" || scenario === "model") ? 2 : 1);
+    expect(calls).toBe(scenario === "write" ? 3 : scenario === "model" ? 2 : 1);
     const reopened = backend.sessionOptions.getDurableSession!("web:default")!;
     if (scenario === "model") {
       expect(await reopened.readModel!()).toBe(model.provider + "/" + alternate.id);
@@ -246,5 +270,5 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
     const treeAfter = await reopened.readTree!();
     expect(treeAfter).toEqual(treeBefore);
     expect(runtime.getRegisteredNativeProvider(model.provider)).toBe(provider);
-  } finally { fetchSpy.mockRestore(); try { await backend?.close(); } finally { closeSpy.mockRestore(); owner.release(); closeDatabase(); } }
+  } finally { fetchSpy.mockRestore(); try { await backend?.close(); } finally { routingRelease.mockRestore(); closeSpy.mockRestore(); owner.release(); closeDatabase(); } }
 }, 60000);
