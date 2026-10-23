@@ -83,6 +83,8 @@ export interface RuntimeOptions {
   readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
+  /** Same-file owner/admission fences; SDK compaction itself orders the target conversation. */
+  readonly withCompactionGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
    * Adapters/models/tools must fence effects themselves, including EF-S02 inside its SQL commit. */
   readonly owner: { assert(): void; release(): void | Promise<void> };
@@ -179,6 +181,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     codemodeExecute: o.codemodeExecute,
     assertAdmission: o.assertAdmission?.bind(o),
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
+    withCompactionGuard: o.withCompactionGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
@@ -211,6 +214,7 @@ export class HostConversationRuntime {
   private commandBashWaits = new Map<string, Promise<unknown>>();
   private authorizingMaintenance = false;
   private maintenance?: Promise<unknown>;
+  private maintenanceResult?: Promise<{ compacted: boolean }>;
   private maintenanceTaskId?: number;
   private maintenanceBinding?: { chatJid: string; conversationId: number };
   private pendingMaintenance?: {
@@ -535,7 +539,7 @@ export class HostConversationRuntime {
     const check = () => {
       this.fence();
       if (copy.incarnation !== o.incarnation || id === undefined || o.conversationFor(copy.chatJid, copy.branchId) !== id) throw new Error("Host binding conflict");
-      if (this.changingModel) throw new Error("Runtime is not idle");
+      if (this.changingModel || this.maintenanceBinding) throw new Error("Runtime is not idle");
     };
     check();
     const choice = Object.freeze({ provider: model.provider, modelId: model.modelId });
@@ -612,7 +616,7 @@ export class HostConversationRuntime {
   }
   async setSessionThinkingLevel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void> {
     this.fence();
-    if (this.changingModel) throw new Error("Runtime is not idle");
+    if (this.changingModel || this.maintenanceBinding) throw new Error("Runtime is not idle");
     const current = await this.readSessionModel(binding);
     const slash = current?.indexOf("/") ?? -1;
     if (!current || slash < 1) throw new Error("No model selected");
@@ -628,7 +632,7 @@ export class HostConversationRuntime {
     if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
       !this.options.existingConversationIds.includes(copy.conversationId as ConversationId)) throw Error("Host binding conflict");
     if (!this.options.withIdleModelGuard) throw Error("Idle model guard unavailable");
-    if (this.changingModel || this.active.size) throw Error("Runtime is not idle");
+    if (this.changingModel || this.maintenanceBinding || this.active.size) throw Error("Runtime is not idle");
     this.changingModel = true;
     const operation = (async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
@@ -646,7 +650,7 @@ export class HostConversationRuntime {
    * read persisted configuration, without reset/replay. */
   async reloadSession(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}): Promise<void> {
     this.fence();
-    if (this.changingModel) throw Error("Runtime is not idle");
+    if (this.changingModel || this.maintenanceBinding) throw Error("Runtime is not idle");
     // Terminal host settlement can precede release of the observed dispatch.
     // Join that cleanup, never replay or abort another chat to obtain idle.
     const deadline = Date.now() + 5000;
@@ -705,7 +709,7 @@ export class HostConversationRuntime {
   private async runSessionCommand<T>(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}, body: (conversation: NonNullable<Awaited<ReturnType<Harness["conversation"]>>>) => Promise<T>): Promise<T> {
     this.options.assertAdmission?.(); this.fence();
     if (binding.incarnation !== this.options.incarnation || this.options.conversationFor(binding.chatJid,binding.branchId) !== binding.conversationId) throw Error("Host binding conflict");
-    if (!this.options.withIdleModelGuard || this.changingModel || this.active.size) throw Error("Runtime is not idle");
+    if (!this.options.withIdleModelGuard || this.changingModel || this.maintenanceBinding || this.active.size) throw Error("Runtime is not idle");
     this.changingModel = true;
     const operation = Promise.resolve().then(() => this.options.withIdleModelGuard!(async () => {
       const snapshot = await this.harness.inspect(this.context); this.fence();
@@ -719,6 +723,15 @@ export class HostConversationRuntime {
   }
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
     this.options.assertAdmission?.();
+    this.fence();
+    if (this.options.withCompactionGuard && this.maintenanceBinding && this.maintenanceResult) {
+      if (this.maintenanceBinding.chatJid === binding.chatJid && this.maintenanceBinding.conversationId === binding.conversationId) {
+        if (binding.incarnation !== this.options.incarnation || this.options.conversationFor(binding.chatJid, binding.branchId) !== binding.conversationId) throw Error("Host binding conflict");
+        return awaitWithContext(this.maintenanceResult, withAbortSignal(signal ?? new AbortController().signal, this.context));
+      }
+      // Serialize manual commands, never refuse because another conversation is compacting.
+      return this.maintenance!.then(() => this.compactSession(binding, instructions, signal));
+    }
     return this.runMaintenance(binding, instructions, signal);
   }
   /** Resume an explicitly proven paused manual task without admitting a replacement. */
@@ -727,10 +740,11 @@ export class HostConversationRuntime {
     const copy = Object.freeze({ ...binding });
     if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
       !this.options.existingConversationIds.some(id => id === copy.conversationId)) throw Error("Host binding conflict");
-    if (!this.options.withIdleModelGuard) throw Error("Idle model guard unavailable");
-    // Check pending host ingress before claiming maintenance. Release the SQL
-    // guard before scheduling or provider IO; failed preflight leaves no claim.
-    return this.options.withIdleModelGuard(async () => {}).then(() => this.runMaintenance(copy, undefined, undefined, taskId));
+    const guard = this.options.withCompactionGuard ?? this.options.withIdleModelGuard;
+    if (!guard) throw Error("Compaction guard unavailable");
+    // Claim the exact recovered task synchronously before any unrelated resume
+    // can start its provider. The operation checks SQL fences before scheduling.
+    return this.runMaintenance(copy, undefined, undefined, taskId);
   }
   private runMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal, recoveredTaskId?: TaskId<CompactionResult>): Promise<{ compacted: boolean }> {
     this.fence();
@@ -739,34 +753,37 @@ export class HostConversationRuntime {
     const id = o.existingConversationIds.find(id => id === copy.conversationId);
     if (copy.incarnation !== o.incarnation || id === undefined || o.conversationFor(copy.chatJid, copy.branchId) !== id) throw new Error("Host binding conflict");
     if (instructions !== undefined && (typeof instructions !== "string" || instructions.length > 65536)) throw new Error("Invalid compact instructions");
-    if (!o.withIdleModelGuard) throw new Error("Idle model guard unavailable");
-    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    const scoped = !!o.withCompactionGuard;
+    const guard = o.withCompactionGuard ?? o.withIdleModelGuard;
+    if (!guard) throw new Error("Compaction guard unavailable");
+    if (this.changingModel || this.maintenanceBinding || (!scoped && this.active.size)) throw new Error("Runtime is not idle");
     signal?.throwIfAborted();
     this.maintenanceBinding = Object.freeze({ chatJid: binding.chatJid, conversationId: binding.conversationId });
     if (recoveredTaskId !== undefined) this.maintenanceTaskId = recoveredTaskId;
-    this.changingModel = true; // Claim before the first await, across the entire authority domain.
+    this.changingModel = !scoped; // Legacy idle-only adapters retain their global exclusion.
     const context = withoutAbortSignal(this.context);
     const assertOwner = () => o.owner.assert(); // Close seals callers but joins this maintenance.
     let admitted = false, terminalFailure = false;
     let settleTask: (() => Promise<{ compacted: boolean }>) | undefined;
     const operation = (async () => {
+      if (recoveredTaskId !== undefined) await guard(async () => {});
       const inspection = await this.harness.inspect(context); assertOwner();
-      if (recoveredTaskId === undefined && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Runtime is not idle");
+      if (!scoped && recoveredTaskId === undefined && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Runtime is not idle");
       this.authorizingMaintenance = true;
       try { await o.authorizeScheduling(inspection); } finally { this.authorizingMaintenance = false; }
       assertOwner();
       const conversation = await this.harness.conversation(id, context); assertOwner();
       if (!conversation) throw new Error("Missing existing conversation");
-      const taskId = recoveredTaskId ?? await o.withIdleModelGuard!(async () => {
+      const taskId = recoveredTaskId ?? await guard(async () => {
         // Same Session line and same-file BEGIN IMMEDIATE checks before task admission.
         await conversation.commit(async tx => {
           assertOwner();
-          for (const conversationId of o.existingConversationIds) {
+          for (const conversationId of scoped ? [] : o.existingConversationIds) {
             if ((await tx.doc(InboxDoc, conversationId)).items.length || (await tx.doc(LiveDoc, conversationId)).run) throw new Error("Runtime is not idle");
           }
         }, context);
         const current = await this.harness.inspect(context); assertOwner();
-        if (current.tasks.length || current.submissions.length) throw new Error("Runtime is not idle");
+        if (!scoped && (current.tasks.length || current.submissions.length)) throw new Error("Runtime is not idle");
         admitted = true; // A lost admission ACK is also uncertain, never permission to resubmit.
         return conversation.compact(instructions, context);
       }); // Release SQL guard at admission, never across provider execution or summary writes.
@@ -775,9 +792,11 @@ export class HostConversationRuntime {
       if (recoveredTaskId !== undefined) {
         const inspection = await this.harness.inspect(context); assertOwner();
         const task = await this.harness.getTask(taskId, context); assertOwner();
-        if (inspection.scheduling !== "paused" || inspection.tasks.length !== 1 || inspection.tasks[0]?.record.id !== taskId || inspection.submissions.length ||
+        const pendingWrite = task?.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result.submissionId : undefined;
+        if (inspection.scheduling !== "paused" || (!scoped && (inspection.tasks.length !== 1 || inspection.tasks[0]?.record.id !== taskId || inspection.submissions.length)) ||
           task?.kind !== "pi.compaction" || task.conversationId !== id || task.owner !== undefined || task.background ||
-          (task.input as { reason?: string }).reason !== "manual" || task.state.status === "terminal") throw Error("Unknown recovered maintenance authority");
+          (task.input as { reason?: string }).reason !== "manual" || (task.state.status === "terminal" && (!scoped || task.state.outcome.status !== "completed" ||
+            !inspection.submissions.some(submission => submission.type === "write" && submission.conversationId === id && submission.id === pendingWrite)))) throw Error("Unknown recovered maintenance authority");
         this.authorizingMaintenance = true;
         try { await this.progress(); } finally { this.authorizingMaintenance = false; }
         assertOwner();
@@ -806,7 +825,7 @@ export class HostConversationRuntime {
         if (entryId !== undefined) {
           const entry = await conversation.commit(tx => tx.entry(entryId!), context); assertOwner();
           const view = await conversation.context(context); assertOwner();
-          if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || view.head?.id !== entryId) throw new Error("Compaction context not committed");
+          if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || (!scoped && view.head?.id !== entryId)) throw new Error("Compaction context not committed");
         }
         o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`);
         return { compacted: entryId !== undefined };
@@ -834,17 +853,47 @@ export class HostConversationRuntime {
         } };
       });
     });
-    this.maintenance = settlement.then(() => { this.changingModel = false; }, async () => {
+    this.maintenanceResult = settlement;
+    const releaseMaintenance = () => { this.changingModel = false; this.maintenanceBinding = undefined; this.maintenanceTaskId = undefined; };
+    this.maintenance = settlement.then(releaseMaintenance, async () => {
       try {
         const current = await this.harness.inspect(context); assertOwner();
-        if (!current.tasks.length && !current.submissions.length) this.changingModel = false;
+        if (scoped ? !current.tasks.some(task => task.record.id === this.maintenanceTaskId) : !current.tasks.length && !current.submissions.length) releaseMaintenance();
       } catch { this.changingModel = true; } // An unreadable domain retains exclusion and ownership.
     });
     return awaitWithContext(settlement, withAbortSignal(signal ?? new AbortController().signal, context));
   }
   ownsMaintenance(taskId: number): boolean {
     this.fence();
-    return this.changingModel && this.maintenanceTaskId === taskId && this.maintenanceBinding !== undefined;
+    return this.maintenanceTaskId === taskId && this.maintenanceBinding !== undefined;
+  }
+  /** Discover only public SDK manual tasks or completed tasks whose exact write
+   * is still unsettled. No historical task is permission to replay summarization. */
+  async inspectRecoverableMaintenance(inspection: HarnessInspection) {
+    this.fence();
+    const manual = (task: HarnessInspection["tasks"][number]["record"]) => task.kind === "pi.compaction" && task.owner === undefined && !task.background &&
+      (task.input as { reason?: string }).reason === "manual";
+    const tasks = inspection.tasks.map(item => item.record).filter(manual);
+    for (const conversationId of new Set(inspection.submissions.filter(submission => submission.type === "write").map(submission => submission.conversationId))) {
+      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+      do {
+        const page = await this.harness.commit(tx => tx.scanTasks({ conversationId, kind: "pi.compaction", status: "terminal", order: "descending" }, 100, cursor), this.context); this.fence();
+        for (const task of page.items) if (manual(task) && task.state.status === "terminal" && task.state.outcome.status === "completed" &&
+          inspection.submissions.some(submission => submission.type === "write" && submission.conversationId === conversationId && submission.id === (task.state.status === "terminal" && task.state.outcome.status === "completed" ? (task.state.outcome.result as CompactionResult).submissionId : undefined))) tasks.push(task);
+        cursor = page.next;
+      } while (cursor !== undefined);
+    }
+    return tasks;
+  }
+  /** The SDK's manual-summary write is not a new host input. Qualify only the
+   * exact completed compaction result owned by this runtime, never arbitrary writes. */
+  async ownsMaintenanceSubmission(submission: HarnessInspection["submissions"][number], taskId = this.maintenanceTaskId, conversationId = this.maintenanceBinding?.conversationId): Promise<boolean> {
+    this.fence();
+    if (conversationId === undefined || taskId === undefined || submission.conversationId !== conversationId || submission.type !== "write") return false;
+    const task = await this.harness.getTask(taskId as TaskId<CompactionResult>, this.context); this.fence();
+    return task?.kind === "pi.compaction" && task.conversationId === conversationId && task.owner === undefined && !task.background &&
+      (task.input as { reason?: string }).reason === "manual" && task.state.status === "terminal" && task.state.outcome.status === "completed" &&
+      task.state.outcome.result.submissionId === submission.id;
   }
   /** Explicit observation repair only: no task submission, provider retry or new queue. */
   reconcileMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<void> {
@@ -921,7 +970,7 @@ export class HostConversationRuntime {
   }
   assertMaintenanceRequest(scope: { taskId: number; conversationId: number; taskKind: string; phase: string; signal: AbortSignal }): void {
     this.fence(); scope.signal.throwIfAborted();
-    if (!this.changingModel || this.maintenanceTaskId !== scope.taskId || scope.taskKind !== "pi.compaction" || scope.phase !== "summarize"
+    if (!this.maintenanceBinding || this.maintenanceBinding.conversationId !== scope.conversationId || this.maintenanceTaskId !== scope.taskId || scope.taskKind !== "pi.compaction" || scope.phase !== "summarize"
       || !this.options.existingConversationIds.some(id => id === scope.conversationId)) throw Error("Exact maintenance request required");
   }
 
@@ -1921,7 +1970,7 @@ export class HostConversationRuntime {
         await this.maintenance;
         this.options.owner.assert();
         const inspection = await this.harness.inspect(withoutAbortSignal(this.context));
-        if (inspection.tasks.length || inspection.submissions.length)
+        if (this.options.withCompactionGuard ? this.maintenanceBinding !== undefined : inspection.tasks.length || inspection.submissions.length)
           throw new Error(`Maintenance not quiescent (task ${this.maintenanceTaskId ?? "admission uncertain"}); owner retained`);
       }
       if (requireQuiescent) {

@@ -238,6 +238,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         },
         withIdleModelGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
           () => candidateDatabase.withIdleModelGuard(body)),
+        withCompactionGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
+          () => candidateDatabase.withCompactionGuard(body)),
         existingConversationIds: manifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },

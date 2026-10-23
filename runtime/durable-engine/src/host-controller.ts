@@ -85,6 +85,7 @@ export async function createHostController(config: HostControllerOptions, contex
     const hostInputs = new Set(known), delegateRoots = new Set<number>();
     for (const submission of inspection.submissions) {
       if (known.has(submission.id)) continue;
+      if (await runtime.ownsMaintenanceSubmission(submission, maintenance?.taskId, maintenance?.binding.conversationId)) { assert(); known.add(submission.id); continue; }
       const child = await runtime.inspectOwnedDelegateAuthority(submission); assert();
       if (!child || !child.inputs.length || child.inputs.some(input => input.submissionId === null || !hostInputs.has(input.submissionId))) return deny();
       known.add(submission.id);
@@ -101,6 +102,10 @@ export async function createHostController(config: HostControllerOptions, contex
     const { runs, compactions } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
     const backgroundCompactions = new Set<number>();
     for (const { record } of inspection.tasks) {
+      if (record.kind === "pi.compaction" && record.owner === undefined && !record.background &&
+          (record.input as { reason?: string }).reason === "manual" && runtime.ownsMaintenance(record.id)) {
+        roots.add(record.id); continue;
+      }
       if (record.kind !== "pi.compaction" || !record.background || record.owner !== undefined ||
         (record.input as { reason?: string }).reason !== "threshold" || !manifest.some(binding => binding.conversationId === record.conversationId)) continue;
       if (!compactions.some(status => status.conversationId === record.conversationId && status.taskId === record.id && status.reason === "threshold" && !status.blocking)) continue;
@@ -119,7 +124,6 @@ export async function createHostController(config: HostControllerOptions, contex
       // Only a persisted terminal receipt removes it from the live authority domain.
       if (await runtime.isTaskTerminal(record.id)) { assert(); continue; }
       assert();
-      if (maintenance && record.id !== maintenance.taskId) return deny();
       let current = record;
       const seen = new Set<number>();
       while (!roots.has(current.id)) {
@@ -179,10 +183,11 @@ export async function createHostController(config: HostControllerOptions, contex
     // Public Harness inspection covers the entire store, including unknown conversations.
     const { inspection } = await runtime.inspectAuthority();
     if (inspection.scheduling !== "paused") throw Error("Expected paused bootstrap");
-    // Independent maintenance has no accepted-input operation. Admit only one
-    // paused manual task with an exact manifest conversation and no other work.
-    if (!recovered.length && !inspection.submissions.length && inspection.tasks.length === 1) {
-      const task = inspection.tasks[0]!.record;
+    // Manual maintenance has no accepted-input operation. Admit one exact
+    // manifest task, including its terminal summary write, alongside proven work.
+    const manualTasks = await runtime.inspectRecoverableMaintenance(inspection); assert();
+    if (manualTasks.length === 1) {
+      const task = manualTasks[0]!;
       const binding = manifest.find(b => b.conversationId === task.conversationId);
       if (binding && task.kind === "pi.compaction" && task.owner === undefined && !task.background &&
         (task.input as { reason?: string }).reason === "manual") maintenance = { taskId: task.id as import("@earendil-works/pi-durable").TaskId<import("@earendil-works/pi-durable").CompactionResult>, binding };
@@ -197,6 +202,10 @@ export async function createHostController(config: HostControllerOptions, contex
     function reconcileRecovered(): Promise<void> {
       if (retry) return retry;
       retry = (async () => {
+        // Restore manual-compaction provider authority before another accepted
+        // input can resume this same SDK scheduler. Do not block startup on a
+        // summary write waiting for an independently recovered run to finish.
+        if (r.withCompactionGuard && maintenance) void resumeRecoveredMaintenance().catch(error => log.error("Recovered maintenance remains pending", { err: error }));
         let current = await scan();
         recovered = current;
         // Complete an already accepted cancellation, never resume it as model work.

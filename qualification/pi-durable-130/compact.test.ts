@@ -277,7 +277,7 @@ for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) 
   }
 }, 20000);
 
-test("controller explicitly adopts one checkpointed manual compaction without replacing its task", async () => {
+for (const scoped of [false, true]) test(`controller adopts one checkpointed manual compaction without replacing its task: scoped=${scoped}`, async () => {
   const { createHostController } = await import("../../runtime/durable-engine/src/host-controller.js");
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "recovered-manual-"));
   const path = join(dir, "shared.db"), owner = TestOwner.acquire(path), root = new Database(path);
@@ -320,7 +320,8 @@ test("controller explicitly adopts one checkpointed manual compaction without re
         now: () => new Date(0).toISOString(), harnessOptions, work, bindings,
         terminal: { getTerminal: forbidden, commitTerminal: forbidden } as any,
         existingConversationIds: [id], conversationFor: () => id, putAnswer: forbidden,
-        withIdleModelGuard: body => sql.withIdleModelGuard(body) },
+        withIdleModelGuard: body => sql.withIdleModelGuard(body),
+        ...(scoped ? { withCompactionGuard: <T>(body: () => Promise<T>) => sql.withCompactionGuard(body) } : {}) },
       recovery: { manifest: [binding], work, bindings, readAcceptedInput: forbidden } }, context);
     expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
     expect(f.host.modelCalls).toBe(0);
@@ -328,7 +329,7 @@ test("controller explicitly adopts one checkpointed manual compaction without re
     expect(() => controller!.runtime.recoverMaintenance({ ...binding, incarnation: "recovered-manual", conversationId: id + 1 }, taskId)).toThrow("Host binding conflict");
     await controller.reconcileRecovered();
     const paused = await controller.runtime.inspectAuthority();
-    expect(paused.inspection.scheduling).toBe("paused");
+    if (!scoped) expect(paused.inspection.scheduling).toBe("paused");
     expect(paused.inspection.tasks.map(task => task.record.id)).toEqual([taskId]);
     expect(paused.inspection.submissions).toEqual([]);
     expect(controller.recoveredMaintenanceChat).toBe(binding.chatJid);
@@ -336,8 +337,10 @@ test("controller explicitly adopts one checkpointed manual compaction without re
     const resumed = controller.resumeRecoveredMaintenance();
     expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
     await recoveredEntered.promise;
-    expect(() => controller!.runtime.compactSession({ ...binding, incarnation: "recovered-manual" })).toThrow("Runtime is not idle");
+    if (!scoped) expect(() => controller!.runtime.compactSession({ ...binding, incarnation: "recovered-manual" })).toThrow("Runtime is not idle");
+    const coalesced = scoped ? controller!.runtime.compactSession({ ...binding, incarnation: "recovered-manual" }) : undefined;
     recoveredHold.release();
+    if (coalesced) expect(await coalesced).toEqual({ compacted: true });
     expect(await resumed).toEqual({ compacted: true });
     expect(controller.recoveredMaintenanceChat).toBeUndefined();
     expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
