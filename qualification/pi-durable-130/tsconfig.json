@@ -48,6 +48,7 @@
     "tools.test.ts",
     "bash-port.test.ts",
     "plan.test.ts",
+    "host-plan-context.test.ts",
     "installed-tool-catalog.test.ts",
     "installed-delegate-catalog.test.ts",
     "vertical.test.ts",

@@ -1,0 +1,302 @@
+import "./src/test-guard.js";
+import { expect, test as bunTest } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { Harness, createRegistry, defineExtension, defineTool, type Conversation, type TaskId, type GenerationHooks } from "../../runtime/durable-engine/qualification/durable.ts";
+import { createModels, createProvider, Type, type AssistantMessage, type Message, type Model } from "../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
+import { materializePlanContext, hostPlanContextKind } from "../../runtime/durable-engine/src/host-plan-context.js";
+import { projectPublicHistory } from "../../runtime/durable-engine/src/session-tree.js";
+import { context, barrier } from "./src/fixture.js";
+import { awaitWithContext } from "../../runtime/durable-engine/qualification/context.ts";
+// Match the public Root provider's normalization brand, not the private engine's.
+import { normalizeContext as normalizeRootContext } from "../../node_modules/@earendil-works/pi-ai";
+import { streamSimple as codexStream } from "@earendil-works/pi-ai/api/openai-codex-responses";
+
+// These are isolated SQLite/harness integration cases; allow for the repository's
+// background test priority and shared-host I/O without relaxing assertions.
+const test = (name: string, body: () => Promise<void>, timeout = 30000) => bunTest(name, body, timeout);
+
+const model: Model<"openai-completions"> = { id: "plan-context", provider: "plan-fixture", name: "Plan fixture",
+  api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false,
+  contextWindow: 100000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const content = (plan: string) => [{ type: "text" as const, text: `Current Plan Sidebar checklist for web:plan:\n\n${plan || "(empty)"}` }];
+const answer = (plan?: string, index = 0): AssistantMessage => ({ role: "assistant", api: model.api,
+  provider: model.provider, model: model.id, timestamp: index + 1,
+  content: plan === undefined ? [{ type: "text", text: "synthetic summary or answer" }] :
+    [{ type: "toolCall", id: `change-${index}`, name: "change_plan", arguments: { markdown: plan } }],
+  stopReason: plan === undefined ? "stop" : "toolUse", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+    totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+
+async function fixture() {
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "plan-context-"));
+  const requests: Message[][] = [], failures: unknown[] = [];
+  const state = { plan: "- [ ] ORIGINAL", allowed: true, prepared: false, maintenance: false,
+    replies: [] as string[], taskId: 0 as TaskId,
+    afterPersist: undefined as ((ctx: Parameters<typeof materializePlanContext>[6]) => Promise<void>) | undefined,
+    wrap: (conversation: Conversation) => conversation };
+  const assertCurrent = () => { if (!state.allowed) throw Error("Plan source revoked"); };
+  const registry = createRegistry();
+  let harness: Harness, conversation: Conversation, database: BunSqliteDatabase;
+  const handlers: Pick<GenerationHooks, "beforeRequest"> = { async beforeRequest(request, api, ctx) {
+    state.prepared = false; state.taskId = api.taskId;
+    try {
+      const current = (await harness.conversation(api.conversationId, ctx))!;
+      const messages = await database.withAdmissionGuard(assertCurrent, () =>
+        materializePlanContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), assertCurrent, ctx));
+      await state.afterPersist?.(ctx);
+      state.prepared = true;
+      return { messages };
+    } catch (error) { failures.push(error); throw error; }
+  } };
+  const tool = defineTool({ name: "change_plan", description: "Fixture Plan update", callers: ["model"], replay: "unsafe",
+    parameters: Type.Object({ markdown: Type.String() }), async execute(args) {
+      state.plan = args.markdown; return { output: [{ type: "text", text: "Plan updated." }] };
+    } });
+  const extension = defineExtension({ name: "plan-fixture", tools: [tool], hooks: [{ task: "pi.generation", handlers }] });
+  registry.install(extension);
+  const models = createModels({ authContext: { env: async () => { throw Error("No ambient credentials"); },
+    fileExists: async () => { throw Error("No ambient credentials"); } } });
+  const stream = (_: unknown, request: { messages: readonly Message[] }) => {
+    if (!state.maintenance && !state.prepared) throw Error("Plan dispatch was not prepared");
+    state.prepared = false;
+    requests.push(structuredClone([...request.messages]));
+    const message = answer(state.maintenance ? undefined : state.replies.shift(), requests.length);
+    const result = new AssistantMessageEventStream();
+    result.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message }); result.end(); return result;
+  };
+  models.setProvider(createProvider({ id: model.provider, models: [model], api: { stream, streamSimple: stream },
+    auth: { apiKey: { name: "Synthetic only", resolve: async () => ({ auth: {}, source: "fixture" }) } } }));
+  const options = { models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } };
+  const open = async () => {
+    database = new BunSqliteDatabase(join(dir, "history.sqlite"));
+    return Harness.open(await SqliteStorage.open(database), options, context);
+  };
+  harness = await open();
+  conversation = await harness.root(context, { agent: { model: { provider: model.provider, modelId: model.id },
+    instructions: "Stable Plan fixture policy", extensions: [extension], tools: [tool] } });
+  return { state, requests, failures, get harness() { return harness; }, get conversation() { return conversation; },
+    async entries() { return (await conversation.entries({ order: "ascending" }, 1000, undefined, context)).items; },
+    async submit(text: string, target = conversation) { return target.submit({ type: "input", content: [{ type: "text", text }] }, context); },
+    async run(text = "continue", target = conversation) { return (await this.submit(text, target)).wait(context); },
+    async reopen() { const id = conversation.id; await harness.close(context); harness = await open(); conversation = (await harness.conversation(id, context))!; },
+    async close() { await harness.close(context); await rm(dir, { recursive: true, force: true }); } };
+}
+const snapshots = (rows: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["entries"]>>) => rows.filter(row => row.kind === hostPlanContextKind);
+function prefix(before: readonly Message[], after: readonly Message[]) {
+  expect(after.length).toBeGreaterThan(before.length);
+  expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+}
+
+test("Plan changes after a tool append a snapshot without moving the previous request prefix", async () => {
+  const f = await fixture();
+  try {
+    f.state.replies.push("- [-] UPDATED"); await f.run();
+    expect(f.requests).toHaveLength(2); prefix(f.requests[0]!, f.requests[1]!);
+    expect(snapshots(await f.entries())).toHaveLength(2);
+    expect(JSON.stringify(f.requests[1])).toContain("ORIGINAL"); expect(JSON.stringify(f.requests[1])).toContain("UPDATED");
+    expect(f.failures).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("unchanged Plan is not duplicated over tool rounds or later accepted inputs", async () => {
+  const f = await fixture();
+  try {
+    f.state.replies.push(f.state.plan, f.state.plan); await f.run(); await f.run("next user turn");
+    expect(f.requests).toHaveLength(4);
+    for (let i = 1; i < f.requests.length; i++) prefix(f.requests[i - 1]!, f.requests[i]!);
+    expect(snapshots(await f.entries())).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("A to B to A preserves each historical snapshot rather than deduplicating by old text", async () => {
+  const f = await fixture();
+  try {
+    f.state.replies.push("- [x] B", f.state.plan); await f.run();
+    expect(snapshots(await f.entries())).toHaveLength(3);
+    for (let i = 1; i < 3; i++) prefix(f.requests[i - 1]!, f.requests[i]!);
+  } finally { await f.close(); }
+});
+
+test("empty Plan becomes an explicit clearing snapshot and is deduplicated", async () => {
+  const f = await fixture();
+  try {
+    f.state.replies.push("", ""); await f.run();
+    expect(snapshots(await f.entries())).toHaveLength(2);
+    expect(JSON.stringify(f.requests.at(-1))).toContain("(empty)");
+    prefix(f.requests[0]!, f.requests[1]!); prefix(f.requests[1]!, f.requests[2]!);
+  } finally { await f.close(); }
+});
+
+test("initially empty Plan has one stable snapshot until the checklist changes", async () => {
+  const f = await fixture();
+  try {
+    f.state.plan = ""; await f.run(); await f.run(); expect(snapshots(await f.entries())).toHaveLength(1);
+    f.state.plan = "- [ ] populated"; await f.run();
+    prefix(f.requests[0]!, f.requests[1]!); prefix(f.requests[1]!, f.requests[2]!);
+    expect(snapshots(await f.entries())).toHaveLength(2);
+  } finally { await f.close(); }
+});
+
+test("reopen retains unchanged Plan position and immutable original entries", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const original = snapshots(await f.entries())[0]!;
+    await f.reopen(); await f.run("after reopen");
+    expect(snapshots(await f.entries())).toEqual([original]); prefix(f.requests[0]!, f.requests[1]!);
+  } finally { await f.close(); }
+});
+
+test("pre-dispatch interruption recovers the exact pinned suffix before appending a newer Plan", async () => {
+  const f = await fixture(); const committed = barrier();
+  try {
+    f.state.afterPersist = async ctx => { committed.release(); await awaitWithContext(new Promise<void>(() => {}), ctx); };
+    const submission = await f.submit("interrupted"); const waiting = submission.wait(context).catch(() => undefined);
+    await committed.promise; const original = snapshots(await f.entries())[0]!;
+    expect(f.requests).toHaveLength(0);
+    f.state.afterPersist = undefined; f.state.plan = "- [-] changed offline";
+    await f.reopen(); await waiting;
+    const recovered = (await f.harness.submission(submission.id, context))!; await recovered.wait(context);
+    expect(f.requests).toHaveLength(1);
+    const entries = snapshots(await f.entries()); expect(entries).toHaveLength(2); expect(entries[0]).toEqual(original);
+    const sent = JSON.stringify(f.requests[0]); expect(sent.indexOf("ORIGINAL")).toBeLessThan(sent.indexOf("changed offline"));
+    await f.run(); expect(snapshots(await f.entries())).toEqual(entries);
+  } finally { await f.close(); }
+}, 10000);
+
+test("forks inherit the historical snapshot without rewriting it or appending a duplicate", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const entries = await f.entries(); const inherited = snapshots(entries)[0]!;
+    const child = await f.conversation.fork(entries.at(-1)!.id, { ownership: { kind: "ownerless" } }, context);
+    await f.run("fork input", child);
+    const rows = (await child.entries({ order: "ascending" }, 100, undefined, context)).items;
+    expect(snapshots(rows)).toEqual([inherited]); prefix(f.requests[0]!, f.requests[1]!);
+    expect(snapshots(await f.entries())).toEqual([inherited]);
+  } finally { await f.close(); }
+});
+
+test("independent native conversations do not share Plan deduplication state", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const agent = await f.conversation.agent(context);
+    const child = await f.harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
+      model: agent.model!, instructions: "other context", extensions: agent.extensions, tools: agent.tools } }, context);
+    await f.run("other conversation", child);
+    const main = snapshots(await f.entries());
+    const other = snapshots((await child.entries({ order: "ascending" }, 100, undefined, context)).items);
+    expect(main).toHaveLength(1); expect(other).toHaveLength(1); expect(main[0]!.id).not.toBe(other[0]!.id);
+    expect(other[0]!.conversationId).toBe(child.id);
+  } finally { await f.close(); }
+});
+
+for (const reset of [true, false]) test(`Plan rematerializes after ${reset ? "reset" : "actual compaction"} without consulting discarded snapshots`, async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 4; i++) await f.run(`history ${i}`);
+    const original = snapshots(await f.entries())[0]!;
+    if (reset) await f.conversation.reset("reset handoff", context);
+    else {
+      f.state.maintenance = true;
+      const task = await f.conversation.compact(undefined, context);
+      const result = await f.harness.waitForTask(task, context); f.state.maintenance = false;
+      expect(result.state.outcome.status).toBe("completed");
+      if (result.state.outcome.status === "completed") {
+        const placed = (await f.harness.submission(result.state.outcome.result.submissionId!, context))!;
+        expect((await placed.wait(context)).status).toBe("done");
+      }
+    }
+    const view = await f.conversation.context(context); expect(view.entries.some(entry => entry.id === original.id)).toBe(false);
+    await f.run("post boundary");
+    const current = await f.conversation.context(context);
+    expect(current.entries.filter(entry => entry.kind === hostPlanContextKind)).toHaveLength(1);
+    expect(snapshots(await f.entries())[0]).toEqual(original);
+    await f.run("same again"); prefix(f.requests.at(-2)!, f.requests.at(-1)!);
+  } finally { await f.close(); }
+});
+
+test("source revocation after candidate append rolls back the snapshot at the SQL boundary", async () => {
+  const f = await fixture();
+  try {
+    f.state.wrap = original => new Proxy(original, { get(target, key) {
+      if (key === "commit") return (change: Parameters<Conversation["commit"]>[0], ctx: Parameters<Conversation["commit"]>[1]) =>
+        original.commit(async tx => { const result = await change(tx); f.state.allowed = false; return result; }, ctx);
+      const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    await expect(f.run()).rejects.toThrow("Session failed");
+    expect(f.requests).toHaveLength(0);
+    await f.reopen(); expect(snapshots(await f.entries())).toHaveLength(0);
+    expect(String(f.failures[0])).toContain("Plan source revoked");
+  } finally { await f.close(); }
+});
+
+test("an omitted snapshot is rematerialized from current Plan state without rewriting historical entries", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const original = snapshots(await f.entries())[0]!;
+    await f.conversation.commit(tx => tx.appendEntry(f.conversation.id, { kind: "test.context-edit",
+      edits: [{ target: original.id, action: "omit" }] }), context);
+    await f.run("after deliberate context edit"); await f.run("unchanged again");
+    const rows = snapshots(await f.entries()); expect(rows).toHaveLength(2); expect(rows[0]).toEqual(original);
+    expect(rows[1]!.model).toEqual(original.model); prefix(f.requests[1]!, f.requests[2]!);
+  } finally { await f.close(); }
+});
+
+test("unknown or truncated request prefixes fail closed without a context write", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const before = await f.entries();
+    await expect(materializePlanContext(f.conversation, f.state.taskId, "web:plan", [], content("new"), () => {}, context))
+      .rejects.toThrow("Unowned Plan request suffix");
+    await expect(materializePlanContext(f.conversation, f.state.taskId, "web:plan", [{ role: "user", content: "forged", timestamp: 0 }],
+      content("new"), () => {}, context)).rejects.toThrow("Unknown Plan request cutoff");
+    expect(await f.entries()).toEqual(before);
+  } finally { await f.close(); }
+});
+
+test("actual Codex HTTP bodies retain an exact input-item prefix and stable instructions/tools/cache key", async () => {
+  const f = await fixture();
+  try {
+    f.state.replies.push("- [-] UPDATED"); await f.run();
+    const bodies: { input: unknown[]; instructions: unknown; tools: unknown; prompt_cache_key: unknown }[] = [];
+    const transport = Object.assign(async (_url: unknown, init?: RequestInit) => {
+      const raw = init?.body;
+      let bytes: Uint8Array;
+      if (typeof raw === "string") bytes = new TextEncoder().encode(raw);
+      else if (raw instanceof Uint8Array) bytes = raw;
+      else throw Error("Unexpected synthetic Codex body");
+      if (new Headers(init?.headers).get("content-encoding") === "zstd") bytes = Bun.zstdDecompressSync(bytes);
+      bodies.push(JSON.parse(new TextDecoder().decode(bytes)));
+      return new Response('data: {"type":"response.completed","response":{"id":"plan-wire-fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0}}}}\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+    }, { preconnect() {} }) as typeof fetch;
+    const jwt = "e30." + Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-only" } })).toString("base64url") + ".synthetic";
+    for (const messages of f.requests) {
+      const result = await codexStream({ ...model, provider: "openai-codex", api: "openai-codex-responses" }, normalizeRootContext({ messages }),
+        { apiKey: jwt, fetch: transport, transport: "sse", sessionId: "plan-wire-fixture" }).result();
+      expect(result.stopReason).toBe("stop");
+    }
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[1]!.input.slice(0, bodies[0]!.input.length))).toBe(JSON.stringify(bodies[0]!.input));
+    for (const field of ["instructions", "tools", "prompt_cache_key"] as const) expect(bodies[1]![field]).toEqual(bodies[0]![field]);
+    expect(JSON.stringify(bodies[1]!.input)).toContain("ORIGINAL");
+    expect(JSON.stringify(bodies[1]!.input)).toContain("UPDATED");
+  } finally { await f.close(); }
+});
+
+test("terminal generations cannot append Plan context and snapshots remain hidden from the existing tree", async () => {
+  const f = await fixture();
+  try {
+    await f.run(); const rows = await f.entries(); const view = await f.conversation.context(context);
+    await expect(materializePlanContext(f.conversation, f.state.taskId, "web:plan", view.messages, content("new"), () => {}, context))
+      .rejects.toThrow("Exact live Plan generation required");
+    expect(await f.entries()).toEqual(rows);
+    const visible = projectPublicHistory(rows, null);
+    expect(visible.some(node => node.entry.type === "message" && JSON.stringify(node.entry).includes("ORIGINAL"))).toBe(false);
+    expect(visible.filter(node => node.entry.type === "message")).toHaveLength(2);
+    const hidden = snapshots(rows)[0]!;
+    expect(() => projectPublicHistory([{ ...hidden, data: { owner: "forged" } }], null)).toThrow("Invalid hidden Plan context");
+  } finally { await f.close(); }
+});
