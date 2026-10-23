@@ -86,6 +86,29 @@ test('selected admission rolls back when registry changes inside the selection t
   } finally { await f.harness.close(context); }
 });
 
+test('selected model admission accepts a compacted context with retained entries ordered after its new head', async () => {
+  const f = await fixture();
+  try {
+    for (let n = 0; n < 3; n++) {
+      const input = await f.root.submit({ type: 'input', requestId: `compact-history-${n}`, content: `Decision ${n}: ` + 'detail '.repeat(6000) }, context);
+      expect((await input.wait(context)).status).toBe('done');
+    }
+    const task = await f.root.compact(undefined, context);
+    await f.harness.waitForTask(task, context);
+    const view = await f.root.context(context);
+    const frontier = await f.root.commit(async tx => (await tx.scanEntries({ conversationId: f.root.id, order: 'descending' }, 1)).items[0]?.id, context);
+    expect(view.entries.at(-1)?.id).not.toBe(frontier);
+    const admission = await f.prepare();
+    await f.root.commit(async tx => {
+      const current = await tx.doc(AgentDoc, f.root.id);
+      await admission.assertCurrent(tx, current);
+      current.model = { provider: 'qualification', modelId: 'post-compaction' };
+    }, context);
+    expect((await f.harness.snapshot(AgentDoc, f.root.id, context)).model?.modelId).toBe('post-compaction');
+    expect(f.host.credentialLookups).toBe(0);
+  } finally { await f.harness.close(context); }
+});
+
 test('forked conversation admission validates inherited context without requiring a local transcript tail', async () => {
   const f = await fixture();
   try {

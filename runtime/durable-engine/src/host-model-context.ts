@@ -78,13 +78,17 @@ export async function prepareModelContextAdmission(options: {
   };
   checkScope();
   const expectedState = JSON.stringify((await options.readAgentState()) ?? {}); checkScope();
+  // Context order after compaction differs from append order: retained older
+  // entries follow the new head. Fence the actual transcript frontier instead.
+  const tail = await conversation.commit(async tx =>
+    (await tx.scanEntries({ conversationId: conversation.id, order: 'descending' }, 1)).items[0]?.id, context);
+  checkScope();
   const resolved = await conversation.agent(context); checkScope();
   const view = await conversation.context(context); checkScope();
   const tools = resolved.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
   // Match the JSON envelope used by the conservative bound, without executable
   // tools, callable-only declarations or resolved host metadata.
   const schemas = JSON.parse(JSON.stringify(tools)) as ModelToolSchema[];
-  const tail = view.entries.at(-1)?.id;
   const promptSectionBytes = await options.measure(view.messages, resolved); checkScope();
   return {
     messages: view.messages, tools: schemas, promptSectionBytes, assertScopeCurrent: checkScope,
