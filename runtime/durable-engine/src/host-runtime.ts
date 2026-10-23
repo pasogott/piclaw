@@ -1,6 +1,6 @@
 import { createTrackedBashOperations } from "../../src/tools/tracked-bash.js";
 import { withChatContext } from "../../src/core/chat-context.js";
-import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
+import { assertModelContextFits, measureModelPromptSections, prepareModelContextAdmission, type ModelContextAdmission, type ModelToolSchema } from "./host-model-context.js";
 import { readNativeExitReceipt, nativeExitNotice, type NativeExitReceipt } from "./host-process-receipt.js";
 import { modelFailureNotice, parseModelFailure } from "./host-model-failure.js";
 import { createLogger } from "../../src/utils/logger.js";
@@ -555,35 +555,56 @@ export class HostConversationRuntime {
       const needsContextCheck = selectingModel && (selected?.provider !== choice.provider || selected?.modelId !== choice.modelId);
       // Thinking-only choices preserve the model limits and must not re-run
       // conservative candidate admission against an already accepted context.
-      const view = needsContextCheck ? await conversation.context(this.context) : undefined; check();
-      const promptSectionBytes = view ? await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel) : undefined; check();
+      const admission = needsContextCheck ? await this.prepareContextAdmission(conversation, choice, thinkingLevel) : undefined; check();
       await conversation.commit(async tx => {
         check();
         const agent = await tx.doc(AgentDoc, id!);
         const changesModel = agent.model?.provider !== choice.provider || agent.model?.modelId !== choice.modelId;
         if (selectingModel && changesModel) {
-          if (!view) throw new Error("Host model changed");
-          this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
+          if (!admission) throw new Error("Host model changed");
+          await admission.assertCurrent(tx, agent); check();
+          this.assertContextFitsModel(admission.messages, agent, target, admission.promptSectionBytes, admission.tools);
         }
         if (thinkingLevel !== undefined) {
           if (agent.model?.provider !== choice.provider || agent.model.modelId !== choice.modelId) throw new Error("Thinking model changed");
           await configure(tx, id!, { thinkingLevel: thinkingLevel as ModelThinkingLevel });
         } else await configure(tx, id!, { model: choice });
-        check();
+        admission?.assertScopeCurrent(); check();
       }, this.context);
       check();
     });
   }
-  private async measurePromptSections(conversation: import("@earendil-works/pi-durable").Conversation, messages: readonly import("@earendil-works/pi-ai").Message[], model?: { provider: string; modelId: string }, thinkingLevel?: string): Promise<number> {
-    const current = await conversation.agent(this.context); this.fence();
+  private async prepareContextAdmission(conversation: import("@earendil-works/pi-durable").Conversation, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<ModelContextAdmission> {
+    return prepareModelContextAdmission({ conversation, context: this.context,
+      registry: this.options.harnessOptions.registry,
+      defaultExtensions: () => this.options.harnessOptions.settings?.extensions,
+      readAgentState: () => this.harness.snapshot(AgentDoc, conversation.id, this.context),
+      measure: (messages, agent) => this.measurePromptSections(conversation, messages, model, thinkingLevel, agent),
+      assertCurrent: () => this.fence(),
+    });
+  }
+  async prepareToolModelContext(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<ModelContextAdmission> {
+    const source = await this.captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+    const guard = () => this.assertCapturedSourceCurrent(source.inputs);
+    return this.observe(async () => {
+      guard();
+      const conversation = await this.harness.conversation(call.conversationId, this.context); guard();
+      if (!conversation) throw Error("Missing existing conversation");
+      const admission = await this.prepareContextAdmission(conversation, model, thinkingLevel); guard();
+      return { ...admission, assertScopeCurrent() { guard(); admission.assertScopeCurrent(); },
+        async assertCurrent(tx, current) { guard(); await admission.assertCurrent(tx, current); guard(); } };
+    });
+  }
+  private async measurePromptSections(conversation: import("@earendil-works/pi-durable").Conversation, messages: readonly import("@earendil-works/pi-ai").Message[], model?: { provider: string; modelId: string }, thinkingLevel?: string, resolved?: import("@earendil-works/pi-durable").Agent): Promise<number> {
+    const current = resolved ?? await conversation.agent(this.context); this.fence();
     const agent = { ...current, ...(model ? { model } : {}), ...(thinkingLevel !== undefined ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}) };
     const read = { snapshot: this.harness.snapshot.bind(this.harness), snapshotAsOf: this.harness.snapshotAsOf.bind(this.harness) };
     const env = await this.options.harnessOptions.env?.({ conversationId: conversation.id, cwd: agent.cwd, read }, this.context); this.fence();
     const bytes = await measureModelPromptSections(messages, { conversationId: conversation.id, agent, env, read }, this.context); this.fence();
     return bytes;
   }
-  private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }, promptSectionBytes?: number): void {
-    assertModelContextFits(messages, agent, target, this.options.harnessOptions.registry.snapshot(), promptSectionBytes);
+  private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }, promptSectionBytes?: number, tools?: readonly ModelToolSchema[]): void {
+    assertModelContextFits(messages, agent, target, this.options.harnessOptions.registry.snapshot(), promptSectionBytes, tools);
   }
   /** Persist next-request selection without mutating the prepared request. */
   async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
