@@ -61,3 +61,37 @@ const audit = createPromptCacheAuditor(record => log.info("Codex prompt cache fi
 export function auditCodexPromptCache(sessionId: string, payload: unknown): void {
   if (process.env.PICLAW_PROMPT_CACHE_AUDIT === "1") audit(sessionId, payload);
 }
+
+
+/** Final HTTP routing only. Never retain URLs, credentials or header values. */
+export function createPromptTransportAuditor(emit: (record: PromptCacheAudit) => void) {
+  return (sessionId: string, input: string | URL | Request, init?: RequestInit, response?: Response): void => {
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const headers = new Headers(response ? response.headers : init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const record: PromptCacheAudit = {
+        auditType: response ? "response" : "dispatch", sessionHash: hash(sessionId),
+        routeHash: hash(url.origin + url.pathname),
+        ...(response ? { status: response.status, responseUrlHash: response.url ? hash(new URL(response.url).origin + new URL(response.url).pathname) : "" } : {}),
+      };
+      const names = [...headers.keys()].sort().slice(0, 64);
+      record.headerNamesHash = jsonHash(names);
+      for (const name of names) {
+        if (/(authorization|cookie|api.?key|token|secret)/i.test(name)) continue;
+        record["header_" + name.slice(0, 80)] = jsonHash(headers.get(name));
+      }
+      if (!response && typeof init?.body === "string") {
+        record.wireBytes = Buffer.byteLength(init.body); record.wireHash = hash(init.body);
+      } else if (!response && ArrayBuffer.isView(init?.body)) {
+        const bytes = init.body as ArrayBufferView;
+        record.wireBytes = bytes.byteLength;
+        record.wireHash = createHash("sha256").update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)).digest("hex");
+      }
+      emit(record);
+    } catch { /* Optional diagnostics cannot alter dispatch or response handling. */ }
+  };
+}
+const auditTransport = createPromptTransportAuditor(record => log.info("Codex transport fingerprint", record));
+export function auditCodexTransport(sessionId: string, input: string | URL | Request, init?: RequestInit, response?: Response): void {
+  if (process.env.PICLAW_PROMPT_CACHE_AUDIT === "1") auditTransport(sessionId, input, init, response);
+}

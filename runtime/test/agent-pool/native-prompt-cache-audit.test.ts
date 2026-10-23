@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { HostCodexModelServices } from "../../durable-engine/src/host-codex-model-services.ts";
 import { addLogSink, removeLogSink, type LogRecord } from "../../src/utils/logger.ts";
-import { createPromptCacheAuditor, type PromptCacheAudit } from "../../durable-engine/src/host-prompt-cache-audit.ts";
+import { createPromptCacheAuditor, createPromptTransportAuditor, type PromptCacheAudit } from "../../durable-engine/src/host-prompt-cache-audit.ts";
 
 const body = (input = [{ role: "user", content: "PRIVATE-PROMPT" }]) => ({
   model: "model", instructions: "PRIVATE-INSTRUCTIONS", tools: [{ name: "PRIVATE-TOOL" }],
@@ -108,4 +108,23 @@ test("host audit is opt-in, fingerprints final detailed-summary adaptation, and 
     if (old === undefined) delete process.env.PICLAW_PROMPT_CACHE_AUDIT;
     else process.env.PICLAW_PROMPT_CACHE_AUDIT = old;
   }
+});
+
+
+test("transport fingerprints locate routing/header differences without URL, body or credential values", () => {
+  const rows: PromptCacheAudit[] = [], audit = createPromptTransportAuditor(r => rows.push(r));
+  const input = "https://PRIVATE_USER:PRIVATE_PASSWORD@api.invalid/private/route?token=PRIVATE_QUERY";
+  const init = { headers: { authorization: "Bearer PRIVATE_AUTH", cookie: "PRIVATE_COOKIE", "session-id": "PRIVATE_SESSION", "chatgpt-account-id": "PRIVATE_ACCOUNT", "x-custom-route": "PRIVATE_ROUTE", "x-api-key": "PRIVATE_KEY" }, body: "PRIVATE_BODY" };
+  audit("PRIVATE_HOST_SESSION", input, init);
+  audit("PRIVATE_HOST_SESSION", input, {...init, headers: {...init.headers, "session-id": "different"}});
+  expect(rows[0]!.routeHash).toBe(rows[1]!.routeHash);
+  expect(rows[0]!["header-session-id"]).toBeUndefined();
+  expect(rows[0]!["header_session-id"]).not.toBe(rows[1]!["header_session-id"]);
+  expect(rows[0]!["header_authorization"]).toBeUndefined();expect(rows[0]!["header_cookie"]).toBeUndefined();expect(rows[0]!["header_x-api-key"]).toBeUndefined();
+  expect(rows[0]!.wireBytes).toBe(12);
+  audit("PRIVATE_HOST_SESSION", input, init, new Response("PRIVATE_RESPONSE", {status:201,headers:{"x-served-by":"PRIVATE_BACKEND"}}));
+  expect(rows[2]!.status).toBe(201);expect(rows[2]!.auditType).toBe("response");
+  expect(JSON.stringify(rows)).not.toContain("PRIVATE");
+  expect(() => createPromptTransportAuditor(() => {throw Error("sink");})("s", input, init)).not.toThrow();
+  expect(() => audit("s", "not a URL", init)).not.toThrow();
 });

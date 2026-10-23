@@ -2,7 +2,7 @@ import { getCurrentTools, getCurrentSystemPrompt, normalizeContext, toToolDeclar
 import type { Api, Model, TranscriptContext } from '@earendil-works/pi-ai';
 import type { ModelRuntime } from '../../src/durable-legacy-sdk.js';
 import type { CodexOperation, NativeCodexFactories } from './host-codex-model-profile.ts';
-import { auditCodexPromptCache } from './host-prompt-cache-audit.js';
+import { auditCodexPromptCache, auditCodexTransport } from './host-prompt-cache-audit.js';
 
 type RootProvider = Parameters<ModelRuntime['registerNativeProvider']>[0];
 /** Constructor-only host authority. capture must resolve the actual invocation source,
@@ -68,8 +68,10 @@ export class HostCodexModelServices {
         },
         ...(observesOutput ? { fetch: (async (input, init) => {
           check();
+          auditCodexTransport(operation.sessionId, input, init);
           const response = await (authority.fetch ?? globalThis.fetch)(input, init);
           check();
+          auditCodexTransport(operation.sessionId, input, init, response);
           if (closed) throw Error("Codex output closed");
           const clone = response.clone();
           tail = tail.then(() => { check(); return authority.observe(operation, clone, check); });
