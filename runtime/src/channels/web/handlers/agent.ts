@@ -1119,10 +1119,9 @@ async function handleAgentMessageInScope(
     );
   }
 
-  // Native maintenance is idle-only. Never admit a slash command as ordinary
-  // model input while waiting for an active turn. Keep legacy queue behavior separate.
-  if (command?.type === "compact" && isActive) {
-    if (prepareInputText) return channel.json({ error: "Native compaction requires an idle conversation. Retry /compact after the active turn settles." }, 400);
+  // Native compaction uses SDK conversation ordering, even during an active turn.
+  // Keep legacy deferral separate; a native slash command is never model input.
+  if (command?.type === "compact" && isActive && !prepareInputText) {
     if (acceptSource !== undefined) return queueDeferredFollowup(content, { source: "web.compose", browserContext: browserObservability, wakeIfIdle: true });
   }
 
@@ -1289,6 +1288,9 @@ async function handleAgentMessageInScope(
   let commandStatusTurnId: unknown;
   let commandStatusStarted = false;
   const emitCommandStatus = (payload: Record<string, unknown>) => {
+    // Concurrent native compaction must not claim or clear the running turn's
+    // lifecycle surface. Its context update remains a side-channel event.
+    if (prepareInputText && command?.type === "compact" && isActive && payload.type !== "context_usage") return;
     const activeStatus = typeof channel.getAgentStatus === "function"
       ? channel.getAgentStatus(chatJid)
       : null;

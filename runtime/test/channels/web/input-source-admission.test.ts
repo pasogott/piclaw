@@ -1004,15 +1004,22 @@ test("native command acknowledges execution but reports failed reply persistence
   expect(f.db.query("SELECT count(*) n FROM service_effect_s01_sources").get()).toEqual({ n: 0 });
 });
 
-test("busy native compaction is rejected, never queued as ordinary model input", async () => {
-  const f = fixture(undefined, () => true), before = f.snapshot();
+test("busy native compaction executes without model admission or overwriting the active turn", async () => {
+  const f = fixture(undefined, () => true);
   f.busy(true, true); f.expectSources(0);
-  let prepared = 0, controlled = 0;
+  let prepared = 0, controlled = 0, statusWrites = 0;
   f.channel.prepareInputText = () => { prepared++; return "must not become a prompt"; };
-  f.channel.agentPool.applyControlCommand = async () => { controlled++; throw Error("Must not invoke a busy control"); };
+  f.channel.agentPool.applyControlCommand = async (_chat, command) => {
+    controlled++; expect(command.type).toBe("compact");
+    return { status: "success", message: "Context compacted.", contextUsage: { tokens: 20, contextWindow: 100, percent: 20 } };
+  };
+  f.channel.sendMessage = async () => {};
+  f.channel.updateAgentStatus = () => { statusWrites++; };
   const response = await f.route({ content: "/compact preserve user context" });
-  expect(response.status).toBe(400); expect(await response.text()).toContain("idle conversation");
-  expect(prepared).toBe(0); expect(controlled).toBe(0); expect(f.snapshot()).toEqual(before); expect(f.jobs).toHaveLength(0);
+  expect(response.status).toBe(201); expect(await response.json()).toMatchObject({command:{status:"success",message:"Context compacted."}});
+  expect(prepared).toBe(0); expect(controlled).toBe(1); expect(statusWrites).toBe(0);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(getDeferredQueuedFollowups("web:default")).toEqual([]); expect(f.jobs).toHaveLength(0);
 });
 
 for (const content of ["/queue", "/steer", "/queue /exit", "/steer /model hidden", "/queue-all payload"]) {
