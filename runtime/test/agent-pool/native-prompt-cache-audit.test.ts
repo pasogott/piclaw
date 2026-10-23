@@ -128,3 +128,17 @@ test("transport fingerprints locate routing/header differences without URL, body
   expect(() => createPromptTransportAuditor(() => {throw Error("sink");})("s", input, init)).not.toThrow();
   expect(() => audit("s", "not a URL", init)).not.toThrow();
 });
+
+
+test("wire audit decodes the transmitted zstd body and reports credential changes without fingerprints", () => {
+ const rows: PromptCacheAudit[] = [], audit = createPromptTransportAuditor(r=>rows.push(r));
+ const payload={instructions:"PRIVATE_INSTRUCTIONS",prompt_cache_key:"PRIVATE_KEY",input:[{role:"user",content:"PRIVATE_PROMPT"}]};
+ const init={headers:{authorization:"Bearer PRIVATE_AUTH", "content-encoding":"zstd"},body:Bun.zstdCompressSync(JSON.stringify(payload))};
+ audit("s","https://api.invalid",init);audit("s","https://api.invalid",init);
+ audit("s","https://api.invalid",{...init,headers:{...init.headers,authorization:"Bearer PRIVATE_OTHER"}});
+ expect(rows.map(r=>r.credentialEpoch)).toEqual([1,1,2]);
+ expect(rows[0]!.wireInstructionsHash).toBe(createHash("sha256").update(JSON.stringify(payload.instructions)).digest("hex"));
+ expect(rows[0]!.wireCacheKeyHash).toBe(createHash("sha256").update(JSON.stringify(payload.prompt_cache_key)).digest("hex"));
+ expect(rows[0]!.wireInputPrefixHashes).toContain(createHash("sha256").update(JSON.stringify(payload.input[0])).digest("hex"));
+ expect(JSON.stringify(rows)).not.toContain("PRIVATE");
+});
