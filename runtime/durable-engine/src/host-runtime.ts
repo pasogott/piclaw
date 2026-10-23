@@ -955,6 +955,41 @@ export class HostConversationRuntime {
       return assistant && readNativeExitReceipt(tx, assistant, input, false);
     }, this.context));
   }
+  /** A foreground child's SDK input is scheduling authority only through its
+   * exact live model Delegate call and that call's accepted host inputs. This
+   * reads public SDK records; ancestry and caller-provided receipts are not proof.
+   */
+  inspectOwnedDelegateAuthority(inspected: HarnessInspection["submissions"][number]) {
+    return this.observe(async () => {
+      const proof = await this.harness.commit(async tx => {
+        const child = await tx.conversation(inspected.conversationId);
+        if (!child?.owner || (await tx.conversation(child.owner.conversationId))?.owner) return undefined;
+        const owner = await tx.task(child.owner.taskId);
+        if (!owner || owner.kind !== "pi.tool" || owner.conversationId !== child.owner.conversationId ||
+          owner.background || owner.abortRequested || owner.state.status === "terminal") return undefined;
+        const input = owner.input as import("@earendil-works/pi-durable").ToolTaskInput;
+        if (input.kind !== "model") return undefined;
+        const assistant = await tx.entry(input.assistant);
+        const calls = assistant?.model?.flatMap(message => message.role === "assistant"
+          ? message.content.filter(part => part.type === "toolCall" && part.id === input.callId && part.name === "delegate") : []) ?? [];
+        if (assistant?.kind !== "pi.assistant" || assistant.conversationId !== owner.conversationId || calls.length !== 1) return undefined;
+        const siblings = await tx.scanConversations({ ownerTaskId: owner.id }, 2);
+        if (siblings.next || siblings.items.length !== 1 || siblings.items[0]?.id !== child.id) return undefined;
+        const submission = await tx.submissionByRequest(child.id, `delegate:${owner.id}`);
+        if (!submission || submission.type !== "input" || submission.id !== inspected.id ||
+          submission.requestId !== inspected.requestId || submission.conversationId !== inspected.conversationId) return undefined;
+        const live = await tx.doc(LiveDoc, child.id);
+        if (live.run && (live.run.inputs.length !== 1 || live.run.inputs[0] !== submission.id)) return undefined;
+        if (submission.status === "placed" && !live.run) return undefined;
+        return { parent: owner.conversationId, owner: owner.id, callId: input.callId, taskId: live.run?.taskId };
+      }, this.context);
+      this.fence();
+      if (!proof) return undefined;
+      const captured = await this.captureToolSource(proof.parent, proof.owner, proof.callId);
+      this.assertCapturedSourceCurrent(captured.inputs);
+      return { inputs: captured.inputs, taskId: proof.taskId };
+    }, true);
+  }
   /** Tools receive an invocation-bound control handle, not a public observer.
    * Open the read-only watch through the host, scoped to the exact live tool's
    * task-owned child. No arbitrary child/history access or execution authority.

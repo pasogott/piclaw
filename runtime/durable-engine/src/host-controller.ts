@@ -76,10 +76,18 @@ export async function createHostController(config: HostControllerOptions, contex
         } else known.add(state.submissionId);
       }
     }
-    // Includes submissions in conversations absent from the host manifest, and submissions
-    // with no corresponding host operation. A caller-supplied approval cannot bypass this.
-    if (inspection.submissions.some(s => !known.has(s.id))) return deny();
-    const roots = new Set<number>();
+    // Foreground Delegate children have SDK inputs, not independent host sources.
+    // Qualify their exact task/request ownership back to ALREADY known host inputs;
+    // neither a conversation ancestor nor a child-supplied request grants authority.
+    const hostInputs = new Set(known), delegateRoots = new Set<number>();
+    for (const submission of inspection.submissions) {
+      if (known.has(submission.id)) continue;
+      const child = await runtime.inspectOwnedDelegateAuthority(submission); assert();
+      if (!child || !child.inputs.length || child.inputs.some(input => input.submissionId === null || !hostInputs.has(input.submissionId))) return deny();
+      known.add(submission.id);
+      if (child.taskId !== undefined) delegateRoots.add(child.taskId);
+    }
+    const roots = new Set<number>(delegateRoots);
     if (maintenance) {
       if (!bootstrapApproval && inspection.tasks.some(t => t.record.id === maintenance!.taskId) && !runtime.ownsMaintenance(maintenance.taskId) && inspection.scheduling !== "paused") return deny();
       const task = inspection.tasks.find(t => t.record.id === maintenance!.taskId)?.record;
