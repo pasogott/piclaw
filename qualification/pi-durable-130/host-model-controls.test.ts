@@ -3,26 +3,26 @@ import { test, expect } from "bun:test";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "../../runtime/durable-engine/src/host-model-controls.js";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
 
-function fixture(sections: any[] = []) {
+function fixture(sections: any[] = [], messages: any[] = []) {
   const model = (provider: string, id: string, contextWindow = 200000) => ({ provider, id, name: id, api: "openai-responses", reasoning: true,
     input: ["text"], contextWindow, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   const catalog = [model("first", "one"), model("second", "two"), model("second", "tiny", 100)];
   let state: any = { model: { provider: "first", modelId: "one" }, thinkingLevel: "off", tools: ["bash"] };
-  let valid = true, available = true, guards = 0, reads = 0, duringDoc: (() => void) | undefined;
+  let valid = true, available = true, guards = 0, reads = 0, duringDoc: ((current: any) => void) | undefined;
   const tools = createHostModelTools({ assertCurrent() { if (!valid) throw Error("revoked"); }, available: () => catalog as any,
     assertModel(choice) { if (!available || !catalog.some(m => m.provider === choice.provider && m.id === choice.modelId)) throw Error("unavailable"); },
-    async readContext(call) { expect(call.conversationId).toBe(7); reads++; return []; },
+    async readContext(call) { expect(call.conversationId).toBe(7); reads++; return messages; },
     async captureSourceGuard(call) { expect(call).toEqual({ conversationId: 7, taskId: 9, toolCallId: "owned" }); return () => { guards++; if (!valid) throw Error("revoked"); }; },
   });
   const api: any = { conversationId: 7, taskId: 9, callId: "owned", registry: { tools: () => [], sections: () => sections },
     async agent() { return { ...state, sections }; },
-    async commit(body: any) { const copy = structuredClone(state); const result = await body({ async doc() { duringDoc?.(); return copy; } }); state = copy; return result; } };
+    async commit(body: any) { const copy = structuredClone(state); const result = await body({ async doc() { duringDoc?.(copy); return copy; } }); state = copy; return result; } };
   const run = async (name: string, args: any = {}, ctx = context) => {
     const tool = tools.find(t => t.name === name)!;
     const result: any = await tool.execute(args, api, ctx); return JSON.parse(result.output[0].text);
   };
   return { tools, run, state: () => state, revoke() { valid = false; }, unapprove() { available = false; },
-    duringDoc(fn: () => void) { duringDoc = fn; }, stats: () => ({ guards, reads }) };
+    duringDoc(fn: (current: any) => void) { duringDoc = fn; }, stats: () => ({ guards, reads }) };
 }
 test("native model controls are registered, model-only and nonreplayable, with native discovery guidance", () => {
   const f = fixture(); expect(f.tools.map(t => t.name)).toEqual([...hostModelToolNames]);
@@ -41,7 +41,7 @@ test("owned model and thinking selection persists only the conversation and pres
   expect(f.state()).toEqual({ model: { provider: "second", modelId: "two" }, thinkingLevel: "off", tools: ["bash"] });
   await f.run("switch_model", { model: "one" }); expect(f.state().model.provider).toBe("first");
   await f.run("switch_thinking", { level: "medium" }); expect(f.state().thinkingLevel).toBe("medium");
-  expect(f.stats().reads).toBe(3);
+  expect(f.stats().reads).toBe(2);
 });
 test("invalid model/thinking leaves state unchanged and small-context targets retain the existing admission bound", async () => {
   const f = fixture(), before = structuredClone(f.state());
@@ -70,5 +70,32 @@ for (const failure of ["oversize", "render-error", "revoked"] as const) test(`dy
   const f = fixture([{key:"dynamic", async render() { if(failure==="render-error") throw Error("unreadable prompt"); if(failure==="revoked") f.revoke(); return "界".repeat(failure==="oversize" ? 100000 : 1); }}]);
   const before = structuredClone(f.state());
   await expect(f.run("set_model", {model:"second/two"})).rejects.toThrow();
+  expect(f.state()).toEqual(before);
+});
+
+for (const sameModel of [false, true]) test(`thinking-only controls skip model-fit work with explicit same model=${sameModel}`, async () => {
+  const f = fixture([{ key: "not-needed", async render() { throw Error("must not render for thinking-only"); } }],
+    [{ role: "user", content: "x".repeat(210000), timestamp: 0 }]);
+  const result = await f.run("set_model", { ...(sameModel ? { model: "first/one" } : {}), thinking_level: "high" });
+  expect(result.thinking_level).toBe("high"); expect(f.state().model).toEqual({ provider: "first", modelId: "one" });
+  expect(f.stats().reads).toBe(0);
+  await f.run("switch_thinking", { level: "off" }); expect(f.state().thinkingLevel).toBe("off");
+  expect((await f.run("set_model", {thinking_level:"invalid"})).error).toContain("Unsupported");
+  expect(f.state().thinkingLevel).toBe("off");
+  await expect(f.run("set_model", {model:"second/two"})).rejects.toThrow("must not render");
+  expect(f.state().model).toEqual({ provider: "first", modelId: "one" });
+});
+test("large existing context permits a thinking-only change but still rejects a different-model fit", async () => {
+  const f = fixture([], [{role:"user", content:"x".repeat(210000),timestamp:0}]);
+  expect((await f.run("switch_thinking",{level:"high"})).thinking_level).toBe("high");
+  expect(f.stats().reads).toBe(0);
+  await expect(f.run("set_model",{model:"second/two"})).rejects.toThrow("compact first");
+  expect(f.state().model).toEqual({provider:"first",modelId:"one"});
+  expect(f.state().thinkingLevel).toBe("high");
+});
+test("same-model optimisation fails closed if the persisted model changes during preparation", async () => {
+  const f=fixture(); const before=structuredClone(f.state());
+  f.duringDoc(current=>{current.model={provider:"second",modelId:"two"};});
+  await expect(f.run("set_model",{model:"first/one",thinking_level:"high"})).rejects.toThrow("Model selection changed");
   expect(f.state()).toEqual(before);
 });

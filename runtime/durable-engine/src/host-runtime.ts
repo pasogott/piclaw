@@ -550,12 +550,21 @@ export class HostConversationRuntime {
     await this.observe(async () => {
       const conversation = await this.harness.conversation(id!, this.context); check();
       if (!conversation) throw new Error("Missing existing conversation");
-      const view = await conversation.context(this.context); check();
-      const promptSectionBytes = await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel); check();
+      const selectingModel = thinkingLevel === undefined;
+      const selected = selectingModel ? (await conversation.agent(this.context)).model : choice; check();
+      const needsContextCheck = selectingModel && (selected?.provider !== choice.provider || selected?.modelId !== choice.modelId);
+      // Thinking-only choices preserve the model limits and must not re-run
+      // conservative candidate admission against an already accepted context.
+      const view = needsContextCheck ? await conversation.context(this.context) : undefined; check();
+      const promptSectionBytes = view ? await this.measurePromptSections(conversation, view.messages, choice, thinkingLevel) : undefined; check();
       await conversation.commit(async tx => {
         check();
         const agent = await tx.doc(AgentDoc, id!);
-        this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
+        const changesModel = agent.model?.provider !== choice.provider || agent.model?.modelId !== choice.modelId;
+        if (selectingModel && changesModel) {
+          if (!view) throw new Error("Host model changed");
+          this.assertContextFitsModel(view.messages, agent, target, promptSectionBytes);
+        }
         if (thinkingLevel !== undefined) {
           if (agent.model?.provider !== choice.provider || agent.model.modelId !== choice.modelId) throw new Error("Thinking model changed");
           await configure(tx, id!, { thinkingLevel: thinkingLevel as ModelThinkingLevel });

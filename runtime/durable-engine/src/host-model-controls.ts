@@ -56,13 +56,16 @@ export function createHostModelTools(options: Options) {
       }
       const requestedLevel = name === "switch_thinking" ? raw.level : raw.thinking_level;
       const changing = !!choice || requestedLevel !== undefined;
-      const messages = changing ? await options.readContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) : undefined;
+      const resolved = choice ? await api.agent(context) : undefined;
       check();
-      const resolved = changing ? await api.agent(context) : undefined;
+      const needsContextCheck = !!choice && (resolved?.model?.provider !== choice.provider || resolved?.model?.modelId !== choice.modelId);
+      // Only a different model needs candidate context admission. Level-only
+      // changes, including an explicit unchanged model, preserve current limits.
+      const messages = needsContextCheck ? await options.readContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) : undefined;
       check();
-      const promptSectionBytes = resolved ? await measureModelPromptSections(messages!, {
+      const promptSectionBytes = needsContextCheck ? await measureModelPromptSections(messages!, {
         conversationId: api.conversationId,
-        agent: { ...resolved, ...(choice ? { model: choice } : {}), ...(requestedLevel !== undefined ? { thinkingLevel: requestedLevel as any } : {}) },
+        agent: { ...resolved!, ...(choice ? { model: choice } : {}), ...(requestedLevel !== undefined ? { thinkingLevel: requestedLevel as any } : {}) },
         env: api.env, read: api,
       }, context) : undefined;
       check();
@@ -78,7 +81,11 @@ export function createHostModelTools(options: Options) {
         const level = requestedLevel ?? current.thinkingLevel;
         if (level !== undefined && !supported.includes(level as any)) return { error: "Unsupported thinking level for the selected model; specify a supported thinking_level.", thinking_levels: supported };
         if (changing) {
-          assertModelContextFits(messages!, current, model, api.registry, promptSectionBytes);
+          const changesModel = !!choice && (current.model?.provider !== choice.provider || current.model?.modelId !== choice.modelId);
+          if (changesModel) {
+            if (!needsContextCheck) throw Error("Model selection changed; retry the command.");
+            assertModelContextFits(messages!, current, model, api.registry, promptSectionBytes);
+          }
           // Public SDK commit keeps this atomic with the owned tool result. Recheck
           // model policy and source after every await, including immediately before commit.
           await configure(tx, api.conversationId, { ...(choice ? { model: choice } : {}), ...(level !== undefined ? { thinkingLevel: level as any } : {}) });
