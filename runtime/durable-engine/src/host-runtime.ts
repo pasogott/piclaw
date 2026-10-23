@@ -1315,12 +1315,44 @@ export class HostConversationRuntime {
           throw Error("Host operation authority unavailable");
         if (current.harness ? current.harness.sessionId !== o.sessionId || current.harness.lane !== o.lane ||
           current.harness.watchGeneration !== o.generation || current.harness.state !== "running" ||
-          !live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId)
+          (!live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId) && data.role !== "intent")
           : callId !== undefined || data.role !== "primary" || current.primarySourceSeq !== input.sourceSeq)
           throw Error("Exact host harness required");
         operation = current; inputs.push(bound);
       }
-      if (!operation || !inputs.some(input => input.sourceSeq === operation!.primarySourceSeq)) throw Error("Host primary input required");
+      if (!operation) throw Error("Host primary input required");
+      if (!inputs.some(input => input.sourceSeq === operation!.primarySourceSeq)) {
+        // A late accepted intent starts a new SDK run after its primary completed.
+        // The run contains only the intent; prove the original primary through
+        // its exact durable binding and public SDK evidence, never ancestry.
+        const primaryId = Number(operation.harness?.harnessOperationId);
+        if (!Number.isSafeInteger(primaryId) || primaryId <= 0 || String(primaryId) !== operation.harness?.harnessOperationId)
+          throw Error("Exact host primary binding required");
+        const submission = await this.harness.submission(primaryId as SubmissionId, this.context); this.fence();
+        const status = await submission?.status(this.context); this.fence();
+        if (!status || status.type !== "input" || status.status !== "done" || status.conversationId !== conversationId ||
+          status.entry === undefined) throw Error("Completed host primary required");
+        const entry = await this.harness.commit(tx => tx.entry(status.entry!), this.context); this.fence();
+        const data = entry?.data as Record<string, unknown> | undefined;
+        if (entry?.kind !== "host.accepted" || data?.role !== "primary") throw Error("Exact host primary binding required");
+        const primary = inputSnapshot(data as unknown as AcceptedInput);
+        if (primary.operationId !== operation.operationId || primary.conversationId !== conversationId ||
+          primary.sourceSeq !== operation.primarySourceSeq) throw Error("Exact host primary binding required");
+        const bound = await this.port(false).get(primary); this.fence();
+        if (!bound || bound.submissionId !== primaryId) throw Error("Exact host primary binding required");
+        const checked = await this.checked(primary); this.fence();
+        const record = await this.record(primary); this.fence();
+        if (checked.operation.version !== operation.version || record?.status !== "done" || record.id !== primaryId)
+          throw Error("Completed host primary required");
+        inputs.unshift(bound);
+      }
+      const current = value(await o.work.getOperation(operation.operationId)); this.fence();
+      if (!current || current.version !== operation.version || current.phase !== "executing" || current.cancellation ||
+        current.harness?.harnessOperationId !== operation.harness?.harnessOperationId ||
+        current.harness?.sessionId !== operation.harness?.sessionId || current.harness?.lane !== operation.harness?.lane ||
+        current.harness?.watchGeneration !== operation.harness?.watchGeneration || current.harness?.state !== operation.harness?.state)
+        throw Error("Host operation authority unavailable");
+      this.assertCapturedSourceCurrent(inputs);
       return { inputs: Object.freeze(inputs), operation, sourceModel };
     });
   }
