@@ -10,10 +10,10 @@ import { openFixture, context } from "./src/fixture.js";
 import { installServiceWorkSchema } from "../../runtime/src/service-effects/current-piclaw/service-work-schema.js";
 import { createDurableConversationAdapter } from "../../runtime/src/agent-pool/durable-runtime-adapter.js";
 import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
-import { Harness, InboxDoc, defineExtension } from "../../runtime/durable-engine/qualification/durable.ts";
+import { Harness, defineExtension } from "../../runtime/durable-engine/qualification/durable.ts";
 import { createProvider } from "../../runtime/durable-engine/qualification/ai.ts";
 
-test("shared DB actual facade resolves, persists/reopens and fails closed for pending/stale/concurrent model changes", async () => {
+test("shared DB next-request model controls persist while destructive reset retains global idle/owner/transaction guards", async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "idle-model-"));
   const path = join(dir, "shared.db"), owner = TestOwner.acquire(path), root = new Database(path);
   installServiceWorkSchema(root);
@@ -35,7 +35,7 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
   await f.close();
   const manifest = [{ chatJid: "web:idle", branchId: "main", conversationId: id }];
   const unused = async () => { throw Error("unused effect"); };
-  const config = { incarnation: "idle", owner: { assert: () => owner.assert(), release() {} }, openStorage,
+  const config = { incarnation: "idle", owner: { assert() { owner.assert(); if (stale) throw Error("stale owner"); }, release() {} }, openStorage,
     withIdleModelGuard: <T>(body: () => Promise<T>) => { beforeGuard?.(); return sql.withIdleModelGuard(body); },
     harnessOptions: { models: f.models, registry: f.registry },
     work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
@@ -70,15 +70,16 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
     expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
     expect(promptRenders).toBeGreaterThan(0);
     promptText = "界".repeat(100000);
-    await expect(app.applyControlCommand("web:idle", command)).rejects.toThrow("bound exceeded");
+    expect(await app.applyControlCommand("web:idle", command)).toMatchObject({ status: "error", message: expect.stringContaining("bound exceeded") });
     expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
     promptText = "";
-    await expect(app.applyControlCommand("web:idle", { ...other, modelId: "tiny" })).rejects.toThrow("bound exceeded");
+    expect(await app.applyControlCommand("web:idle", { ...other, modelId: "tiny" })).toMatchObject({ status: "error", message: expect.stringContaining("bound exceeded") });
     expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
     expect((await app.applyControlCommand("web:idle", command)).status).toBe("success");
     expect((await app.applyControlCommand("web:idle", { ...command, modelId: "unknown" })).status).toBe("error");
     const results = await Promise.allSettled([app.applyControlCommand("web:idle", command), app.applyControlCommand("web:idle", command)]);
-    expect(results.filter(r => r.status === "rejected")).toHaveLength(1);
+    expect(results.every(r => r.status === "fulfilled" && r.value.status === "success")).toBe(true);
+    const resetCommand = { type: "new_session" as const, raw: "/new-session" };
     const beforeReset = await app.saveSessionPosition("web:idle");
     const callsBeforeReset = f.host.modelCalls;
     const reset = await app.applyControlCommand("web:idle", { type: "new_session", raw: "/new-session" });
@@ -88,11 +89,12 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
     expect((await app.applyControlCommand("web:idle", { type: "new_session", parent: "/legacy.jsonl", raw: "/new-session /legacy.jsonl" })).status).toBe("error");
     root.query("INSERT INTO service_effect_s01_chats(chat_jid,active_operation_id) VALUES ('pending',NULL)").run();
     root.query("UPDATE service_effect_s01_chats SET next_source_seq=2 WHERE chat_jid='pending'").run();
-    // An accepted source anywhere in the shared file denies SET, even without an active operation.
+    // Next-request model selection is allowed while work is pending; destructive reset is not.
     root.query("INSERT INTO service_effect_s01_sources VALUES ('pending',1,'source',?,'message','pending','payload',NULL,NULL,'now',NULL,'provenance',0)").run("a".repeat(64));
-    await expect(app.applyControlCommand("web:idle", command)).rejects.toThrow("not idle");
+    expect(await app.applyControlCommand("web:idle", command)).toMatchObject({ status: "success" });
     expect(await app.applyControlCommand("web:idle", { type: "new_session", raw: "/new-session" })).toMatchObject({ status: "error", message: "Host work is not idle" });
     root.query("UPDATE service_effect_s01_sources SET state='disposed'").run();
+    const guardedResetPosition = await app.saveSessionPosition("web:idle");
     // WAL lets a valid owner admit work while root retains an older idle read snapshot.
     root.exec("PRAGMA journal_mode=WAL");
     const writer = new Database(path);
@@ -107,7 +109,7 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
         expect(writer.query("SELECT state FROM service_effect_s01_sources").get()).toEqual({ state: "pending" });
         expect(root.query("SELECT state FROM service_effect_s01_sources").get()).toEqual({ state: "disposed" });
       };
-      await expect(app.applyControlCommand("web:idle", other)).rejects.toThrow("Root connection transaction active");
+      expect(await app.applyControlCommand("web:idle", resetCommand)).toMatchObject({ status: "error", message: expect.stringContaining("Root connection transaction active") });
       expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
     } finally {
       beforeGuard = undefined;
@@ -127,7 +129,7 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
         }
       };
       try {
-        await expect(app.applyControlCommand("web:idle", other)).rejects.toThrow("Root connection transaction active");
+        expect(await app.applyControlCommand("web:idle", resetCommand)).toMatchObject({ status: "error", message: expect.stringContaining("Root connection transaction active") });
         expect(checks).toBe(target);
       } finally {
         guardHook = undefined;
@@ -137,28 +139,31 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
       app = appFor();
       expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
       expect(root.inTransaction).toBe(false);
+      expect(await app.saveSessionPosition("web:idle")).toBe(guardedResetPosition);
     }
-    // Work admitted after candidate inspection but before the storage guard must deny SET.
+    // Work admitted after reset inspection but before the storage guard must deny reset.
     beforeGuard = () => root.query("UPDATE service_effect_s01_sources SET state='pending'").run();
-    await expect(app.applyControlCommand("web:idle", other)).rejects.toThrow("not idle");
+    expect(await app.applyControlCommand("web:idle", resetCommand)).toMatchObject({ status: "error", message: expect.stringContaining("not idle") });
     beforeGuard = undefined;
+    expect(await app.saveSessionPosition("web:idle")).toBe(guardedResetPosition);
     root.query("UPDATE service_effect_s01_sources SET state='disposed'").run();
     // Under BEGIN IMMEDIATE, another connection cannot admit work; loss of owner
-    // at the final guard must roll back the actual changed model, not just report failure.
+    // at the final guard must roll back reset, not just report failure.
     let checks = 0;
     guardHook = () => {
       if (++checks === 2) expect(() => root.query("UPDATE service_effect_s01_sources SET state='pending'").run()).toThrow();
       if (checks === 3) throw Error("final guard lost owner");
     };
-    await expect(app.applyControlCommand("web:idle", other)).rejects.toThrow("final guard lost owner");
+    expect(await app.applyControlCommand("web:idle", resetCommand)).toMatchObject({ status: "error", message: expect.stringContaining("final guard lost owner") });
     guardHook = undefined;
     expect(checks).toBe(3);
     // Candidate deliberately seals a session after any storage commit failure.
     await runtime.close(); runtime = await HostConversationRuntime.open(config, context);
     app = appFor();
     expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
+    expect(await app.saveSessionPosition("web:idle")).toBe(guardedResetPosition);
     stale = true;
-    await expect(app.applyControlCommand("web:idle", command)).rejects.toThrow("stale owner");
+    expect(await app.applyControlCommand("web:idle", command)).toMatchObject({ status: "error", message: expect.stringContaining("stale owner") });
     stale = false;
     expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
     await runtime.close(); runtime = await HostConversationRuntime.open(config, context);
@@ -167,13 +172,12 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
     await runtime.close();
     const harness = await Harness.open(await openStorage(), config.harnessOptions, context);
     const conversation = (await harness.conversation(id, context))!;
-    await conversation.commit(async tx => {
-      (await tx.doc(InboxDoc, id)).items.push({ id: 999 as any, mode: "write", entry: { kind: "qualification.pending" } });
-    }, context);
+    await conversation.submit({ type: "input", requestId: "pending-reset", content: "Pending reset qualification fixture" }, context);
     await harness.close(context);
     runtime = await HostConversationRuntime.open(config, context);
-    await expect(appFor().applyControlCommand("web:idle", other)).rejects.toThrow("not idle");
-    expect(await appFor().getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
+    expect(await appFor().applyControlCommand("web:idle", other)).toMatchObject({ status: "success" });
+    expect(await appFor().applyControlCommand("web:idle", resetCommand)).toMatchObject({ status: "error", message: expect.stringContaining("not idle") });
+    expect(await appFor().getCurrentModelLabel("web:idle")).toBe("alternate/other");
     expect(f.host.modelCalls).toBe(0);
     expect(f.host.credentialLookups).toBe(0);
   } finally { await runtime.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true }); }
