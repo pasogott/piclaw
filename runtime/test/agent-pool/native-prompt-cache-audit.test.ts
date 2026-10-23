@@ -78,6 +78,7 @@ test("host audit is opt-in, fingerprints final detailed-summary adaptation, and 
     signal: controller.signal, assertCurrent() { if (!current) throw Error("revoked"); } };
   const service = new HostCodexModelServices({
     async capture() { return operation; }, assertAccount() {}, async observe() {}, async flush() {}, preserveHostTools: true,
+    routingScope() { return { turnId: "fixture-turn", accountRef: "fixture-account", provider: operation }; },
   }, { createNativeCodexHooks() { return {
     request(payload) { return { ...(payload as object), include: ["adapted-by-addon"] }; },
     headers(headers) { return headers; }, context(messages) { return [...messages]; }, systemPrompt(prompt) { return prompt; },

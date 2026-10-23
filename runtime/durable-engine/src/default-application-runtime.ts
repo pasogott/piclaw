@@ -400,7 +400,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const assertCodex = () => { assert(); lifetime.signal.throwIfAborted(); codex?.assertCurrent(); if (!owner.record.nonce) throw Error("Codex application owner identity unavailable"); };
   const outputs = new Map<string, any>();
   const outputBindings = new WeakMap<CodexOperation, ReturnType<typeof createHostCodexArtifactStore>>();
-  const accountBindings = new WeakMap<CodexOperation, { accountRef: string | null; provider: object | undefined }>();
+  const accountBindings = new WeakMap<CodexOperation, { turnId: string; accountRef: string | null; provider: object | undefined }>();
   const codexAuthPath = join(getPiclawAgentDir(), "auth.json");
   const codexServices = codex ? new HostCodexModelServices({
     preserveHostTools: true,
@@ -426,12 +426,23 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const operation: CodexOperation = Object.freeze({ id: randomUUID(), sessionId: "native-conversation:" + scope.conversationId,
         cwd: WORKSPACE_DIR, model: Object.freeze({ provider: model.provider, id: model.id, api: model.api, input: Object.freeze([...model.input]) }),
         signal, profilePrompt: scope.taskKind === "pi.generation", assertCurrent: current });
-      accountBindings.set(operation, { accountRef, provider: accountProvider });
+      // Generation task IDs change each tool round. The admitted operation is the
+      // logical turn; Delegate conversation IDs and maintenance work remain separate.
+      const turnId = captured ? captured.operation.operationId : maintenanceRequests.get(scope.signal)!.workId;
+      accountBindings.set(operation, { turnId, accountRef, provider: accountProvider });
       if (captured) outputBindings.set(operation, createHostCodexArtifactStore(root, operation, {
         hostOperationId: captured.operation.operationId, chatJid: captured.operation.chatJid, assertCurrent: current,
         write(body) { return root.transaction(() => { current(); const value = body(); current(); return value; }).immediate(); },
       }));
       return operation;
+    },
+    routingScope(operation) {
+      operation.assertCurrent();
+      const binding = accountBindings.get(operation);
+      if (!binding) throw Error("Codex routing authority unavailable");
+      // A compaction summarizer has no tool loop. Retire its hint even if the
+      // task fails before maintenance settlement can close its accounting hold.
+      return { ...binding, requestOnly: operation.profilePrompt === false };
     },
     assertAccount(operation) {
       operation.assertCurrent();
@@ -535,7 +546,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     provider: { registrations: codexProviderRegistrations, assertCurrent() { assertCodex(); providerBinding!.check(); } },
   }) : undefined;
-  async function closeCodex() { codexGroup?.dispose(); await flushCodexOutputs(); }
+  async function closeCodex() { codexServices?.dispose(); codexGroup?.dispose(); await flushCodexOutputs(); }
   async function flushCodexOutputs() {
     const entries = [...outputs];
     const results = await Promise.allSettled(entries.map(async ([id, output]) => { try { await output.finish(); outputs.delete(id); }
@@ -1092,8 +1103,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         assertAdmission: input => processControls!.assertAdmission(input),
         assertInputAdmission(chat) { assertAdmission(); ensureLiveWatch(chat); },
         materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
-    onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
+    onMaintenanceSettled(workId) { codexServices?.releaseTurn(workId); assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId, processExit) {
+      codexServices?.releaseTurn(operationId);
       assert();
       if (processExit || processControls!.ownsOperation(operationId)) {
         try { reconcileOperationBudgetWork(root, operationId); }
@@ -1273,7 +1285,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle.bindInputProjection(undefined);
       resumePending = undefined;
       terminalBroadcast = undefined; pendingTerminalEvents.clear(); publishedTerminalEvents.clear();
-      widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure();
+      widgetPublisher = undefined; workspaceFileOpener = undefined; codexServices?.dispose(); lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure();
       // close seals routing synchronously; final close below joins owned cleanup.
       void closeRemote().catch(() => {});
       codexGroup?.dispose();

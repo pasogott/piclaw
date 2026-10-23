@@ -18,6 +18,8 @@
     "native-process-exit.test.ts",
     "native-admission-boundary.test.ts",
     "default-application-runtime.test.ts",
+    "host-codex-model-services.test.ts",
+    "host-codex-turn-routing.test.ts",
     "../../runtime/src/types/gifenc.d.ts",
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
