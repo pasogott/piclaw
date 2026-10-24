@@ -572,26 +572,52 @@ function productionScheduledRunStore(): { store: ScheduledRunStore & Interrupted
   }
 }
 
+/** Repair only exact canonical completion receipts; never reclaim/execute work
+ * or fabricate a lease. Native-owned/cancelled operations keep their own owner. */
+async function reconcileCompletedScheduledAgentSources(store: ScheduledRunStore, mayPoll: () => boolean): Promise<void> {
+  const db = getDb();
+  const proof = `FROM service_effect_s01_operations o
+    JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq AND s.kind='scheduled_agent'
+    JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id AND r.operation_id=o.operation_id AND r.accepted_source_seq=s.source_seq
+    JOIN service_effect_s07_source_bindings b ON b.run_id=r.run_id AND b.operation_id=o.operation_id AND b.source_seq=s.source_seq AND b.chat_jid=o.chat_jid
+    WHERE r.state='completed' AND o.phase IN ('claimed','executing') AND s.state NOT IN ('consumed','disposed')
+      AND o.cancellation_source_seq IS NULL AND o.harness_session_id IS NULL AND o.harness_lane IS NULL
+      AND o.harness_operation_id IS NULL AND o.harness_state IS NULL AND o.harness_watch_generation IS NULL`;
+  const rows = db.query(`SELECT o.operation_id,o.chat_jid,o.primary_source_seq,o.version,r.run_id ${proof} ORDER BY r.settled_at,r.run_id LIMIT 100`)
+    .all() as { operation_id: string; chat_jid: string; primary_source_seq: number; version: number; run_id: string }[];
+  for (const row of rows) {
+    if (!mayPoll() || getDb() !== db) return;
+    const observed = await store.get(row.run_id);
+    if (!mayPoll() || getDb() !== db) return;
+    if (!observed.ok || observed.value?.state !== "completed" || !observed.value.settledAt
+      || (observed.value.status !== "success" && observed.value.status !== "error")
+      || observed.value.operationId !== row.operation_id || observed.value.acceptedSourceSeq !== row.primary_source_seq) continue;
+    const record = observed.value;
+    db.transaction(() => {
+      if (!db.query(`SELECT 1 ${proof} AND o.operation_id=? AND o.version=? AND r.run_id=? AND r.result_status=? AND r.settled_at=?`)
+        .get(row.operation_id, row.version, row.run_id, record.status, record.settledAt)) return;
+      settleScheduledAgentSource(row.chat_jid, { operationId: row.operation_id, sourceSeq: row.primary_source_seq },
+        record.status!, record.settledAt!, record.errorCode ?? "scheduled_task_failed");
+    }).immediate();
+  }
+}
+
 function reconcileExpiredScheduledAgentSources(now: string): void {
   const db = getDb();
-  const rows = db.query(
-    `SELECT o.operation_id,o.chat_jid,o.primary_source_seq,r.state,r.lease_expires_at
-     FROM service_effect_s01_operations o
-     JOIN service_effect_s01_sources s
-       ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq AND s.kind='scheduled_agent'
-     LEFT JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id
-     WHERE o.phase<>'terminal'`,
-  ).all() as Array<{
-    operation_id: string;
-    chat_jid: string;
-    primary_source_seq: number;
-    state: string | null;
-    lease_expires_at: string | null;
-  }>;
-
   db.transaction(() => {
+    const rows = db.query(
+      `SELECT o.operation_id,o.chat_jid,o.primary_source_seq,r.state,r.lease_expires_at
+       FROM service_effect_s01_operations o
+       JOIN service_effect_s01_sources s
+         ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq AND s.kind='scheduled_agent'
+       LEFT JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id
+       WHERE o.phase<>'terminal'`,
+    ).all() as { operation_id: string; chat_jid: string; primary_source_seq: number; state: string | null; lease_expires_at: string | null }[];
     for (const row of rows) {
-      const terminalRun = row.state === "completed" || row.state === "abandoned";
+      // Completed authority is never reinterpreted as an interruption, even
+      // when its receipt probe is temporarily unavailable or has another owner.
+      if (row.state === "completed") continue;
+      const terminalRun = row.state === "abandoned";
       const expiredRun = row.lease_expires_at !== null && row.lease_expires_at <= now;
       if (!terminalRun && !expiredRun) continue;
       db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=? AND active_operation_id=?").run(row.chat_jid, row.operation_id);
@@ -711,27 +737,28 @@ function acceptScheduledAgentSource(lease: ScheduledRunLease, acceptedAt: string
 }
 
 function settleScheduledAgentSource(
-  lease: ScheduledRunLease,
+  chatJid: string,
   source: ScheduledAgentSource,
   status: "success" | "error",
   settledAt: string,
+  errorCode = "scheduled_task_failed",
 ): void {
   const db = getDb();
   db.transaction(() => {
-    db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=? AND active_operation_id=?").run(lease.task.chatJid, source.operationId);
+    db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=? AND active_operation_id=?").run(chatJid, source.operationId);
     db.query(
       `UPDATE service_effect_s01_operations
        SET version=version+1,phase='terminal',terminal_disposition=?,terminal_error_code=?,terminal_committed_at=?
        WHERE operation_id=? AND phase<>'terminal'`,
-    ).run(status === "success" ? "completed" : "failed", status === "success" ? null : "scheduled_task_failed", settledAt, source.operationId);
+    ).run(status === "success" ? "completed" : "failed", status === "success" ? null : errorCode, settledAt, source.operationId);
     db.query(
       `UPDATE service_effect_s01_sources SET state=?,disposition_reason=?
        WHERE chat_jid=? AND source_seq=?`,
-    ).run(status === "success" ? "consumed" : "disposed", status === "success" ? null : "scheduled_task_failed", lease.task.chatJid, source.sourceSeq);
+    ).run(status === "success" ? "consumed" : "disposed", status === "success" ? null : errorCode, chatJid, source.sourceSeq);
     if (status === "success") {
       db.query(
         "UPDATE service_effect_s01_chats SET consumed_through_source_seq=MAX(consumed_through_source_seq,?) WHERE chat_jid=?",
-      ).run(source.sourceSeq, lease.task.chatJid);
+      ).run(source.sourceSeq, chatJid);
     }
   }).immediate();
 }
@@ -829,7 +856,7 @@ async function abandonClaimedRun(
   });
   const abandoned = await store.abandon(abandonRequest);
   if (!canRunLegacyScheduledWork()) return;
-  if (source) settleScheduledAgentSource(lease, source, "error", now);
+  if (source) settleScheduledAgentSource(lease.task.chatJid, source, "error", now);
   if (abandoned.ok) applyScheduledRunToTask(abandoned.value, `Skipped: ${reasonTag}`);
   else log.error("Failed to abandon scheduled run", { operation: "abandon_scheduled_run", runId: lease.record.runId, errorTag: abandoned.error._tag });
 }
@@ -943,14 +970,14 @@ async function runClaimedScheduledTask(
         errorTag: completed.error._tag,
         certainty: completionMayHaveCommitted ? "unknown" : completed.error.certainty,
       });
-      if (source && !completionMayHaveCommitted) settleScheduledAgentSource(finalLease, source, "error", completedAt);
+      if (source && !completionMayHaveCommitted) settleScheduledAgentSource(finalLease.task.chatJid, source, "error", completedAt);
       return;
     }
     const summary = outcome.status === "error"
       ? `Error: ${outcome.error || "Unknown"}`
       : (outcome.result?.slice(0, 200) || "Completed");
     applyScheduledRunToTask(completed.value, summary);
-    if (source) settleScheduledAgentSource(finalLease, source, outcome.status, completedAt);
+    if (source) settleScheduledAgentSource(finalLease.task.chatJid, source, outcome.status, completedAt);
     if (outcome.budgetBlocked) await drainScheduledBudgetNotifications(deps);
     log.info("Scheduled run settled", {
       operation: "complete_scheduled_run",
@@ -988,6 +1015,8 @@ async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore & 
   if (!mayPoll()) return;
   const now = new Date().toISOString();
   schedulerMetrics.lastPollAt = now;
+  await reconcileCompletedScheduledAgentSources(store, mayPoll);
+  if (!mayPoll()) return;
   reconcileExpiredScheduledAgentSources(now);
   await reconcileInterruptedScheduledAgentRuns(store,now);
   claimSequence += 1;

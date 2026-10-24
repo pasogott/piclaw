@@ -25,7 +25,7 @@ The production adapter owns the write inside `completeRun`:
 2. Commit canonical S07 transitions, log and decision.
 3. Write/repair the linked payload/history row before the same transaction commits.
 
-Statement failure rolls back the whole transaction. A lost acknowledgment retries the identical sealed completion request, never task execution. Any earlier uncertain commit remains uncertain across a later retry's `not_applied` failure. It may be resolved only by success or a matching canonical completed record. Unresolved uncertainty does not become a false source-error settlement.
+Statement failure rolls back the whole transaction. A lost acknowledgment retries the identical sealed completion request, never task execution. Any earlier uncertain commit remains uncertain across a later retry's `not_applied` failure. It may be resolved only by success or a matching canonical completed record. Unresolved uncertainty does not become a false source-error settlement. A later poll validates completed S07 receipts, exact source bindings and current source version/ownership before repairing settlement. Completed runs are never reclassified as interrupted; an unavailable probe or a native-owned/cancelled source remains protected.
 
 `projectScheduledHistory(database, runId)` rebuilds cache metadata using committed S07 detail and retained, hash-verified bytes. Restoring missing bytes additionally requires the original closed completion request and its matching persisted completion-decision hash. A caller-supplied body alone cannot create another result authority.
 
