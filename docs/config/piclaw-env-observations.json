@@ -1287,6 +1287,7 @@
             "docs/configuration.md",
             "docs/design/local-note-retrieval-lifecycle-tests.md",
             "docs/development.md",
+            "docs/development/attachment-index-retirement.md",
             "docs/development/auth-contention.md",
             "docs/development/auth-legacy-repair.md",
             "docs/development/db-startup-performance.md",
