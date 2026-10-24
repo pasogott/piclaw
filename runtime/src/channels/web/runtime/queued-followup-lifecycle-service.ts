@@ -72,7 +72,6 @@ export interface QueuedFollowupStateItem {
 export interface RemoveQueuedFollowupForActionOptions {
   /** Host-selected, explicit DELETE action only. Never supplied by steer/drain. */
   withdrawAcceptedSource?: QueuedInputSourceAdmission;
-  removeQueuedFollowupMessage?: (chatJid: string, queuedContent?: string) => Promise<boolean> | boolean;
 }
 
 export interface RemoveQueuedFollowupForActionResult {
@@ -349,10 +348,6 @@ export class QueuedFollowupLifecycleService {
 
     if (removed.rowId > 0) {
       deleteMessageByRowId(chatJid, removed.rowId);
-    }
-
-    if (source === "placeholder" && typeof options.removeQueuedFollowupMessage === "function") {
-      await options.removeQueuedFollowupMessage(chatJid, removed.queuedContent);
     }
 
     return { removed: cloneQueuedFollowupItem(removed), source };

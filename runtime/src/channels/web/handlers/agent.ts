@@ -632,10 +632,6 @@ function fallbackAgentHandle(chatJid: string): string {
     .replace(/^-+|-+$/g, "") || "agent";
 }
 
-function shouldPersistSteerRequest(req: Request, payload: { persist_steer?: boolean } | undefined): boolean {
-  return payload?.persist_steer === true || req.headers.get("X-Piclaw-Persist-Steer") === "1";
-}
-
 // Only in-process forwarding can share the original guarded request authority.
 // No request body/header can supply or replace this capability.
 function captureInputAuthority(channel: WebChannelLike, req: Request): () => void {
@@ -684,6 +680,10 @@ async function handleAgentMessageInScope(
   catch { return channel.json({ error: 'Input authority is unavailable.' }, 403); }
   // Pin the trusted host selection to this route before any body read/await.
   // Request contents cannot select an engine or replace this SQL-only callback.
+  const nativeRuntime = channel.agentPool?.isDurableRuntime?.() === true;
+  const selectSteering = channel.getAcceptedQueuedSteering?.bind(channel);
+  const admitQueuedInput = channel.admitQueuedFollowupItem?.bind(channel);
+  const admitUserInput = channel.admitUserMessage?.bind(channel);
   const prepareAdmission = channel.prepareInputSourceAdmission?.bind(channel);
   const prepareInputText = channel.prepareInputText?.bind(channel);
   const lookupAdmission = channel.getInputSourceAdmission?.bind(channel);
@@ -728,8 +728,6 @@ async function handleAgentMessageInScope(
   if (!hasPayload) return channel.json({ error: "Missing 'content' field" }, 400);
 
   let requestMode = normalized.mode ?? "auto";
-  // Native admission always owns persistence, including requests from older browser bundles.
-  const persistSteer = !prepareInputText && shouldPersistSteerRequest(req, parsed.payload);
   const mention = content.trim().length > 0 ? parseLeadingAgentMention(content) : null;
   const mentionTarget = mention
     ? (typeof (channel.agentPool as { findChatByAgentName?: (name: string) => { chat_jid: string; agent_name: string } | null }).findChatByAgentName === "function"
@@ -751,8 +749,6 @@ async function handleAgentMessageInScope(
     return channel.json({ error: "Missing 'content' field" }, 400);
   }
 
-  cancelScheduledIdleAutoCompaction(chatJid);
-
   let command = parseControlCommand(content, getRoutingConfig().triggerPattern);
   // Operator process controls precede session/queue/Goal inspection. A wedged
   // harness or missing conversation must not prevent the host from stopping.
@@ -761,10 +757,11 @@ async function handleAgentMessageInScope(
     const result = await channel.agentPool.applyControlCommand(chatJid, command);
     return channel.json({ thread_id: null, command: result, ui_only: true, immediate: true }, 200);
   }
-  if (prepareInputText && command?.type === "queue_all") return channel.json({ error: "Native inputs use FIFO operation settlement. Batch /queue-all is unavailable; use /queue." }, 400);
+  const manualQueue = command?.type === "queue";
+  if (command?.type === "queue_all") return channel.json({ error: "Native inputs use FIFO operation settlement. Batch /queue-all is unavailable; use /queue." }, 400);
   // Native queued commands are accepted input, not display-only controls or
   // legacy session.prompt calls. Use the same preparation/admission as modes.
-  if (prepareInputText && (command?.type === "queue" || command?.type === "steer")) {
+  if (command?.type === "queue" || command?.type === "steer") {
     const message = command.message?.trim();
     if (!message || isSlashCommandInvocation(message)) {
       return channel.json({ error: "Native /queue and /steer require message text, not another slash command." }, 400);
@@ -777,6 +774,11 @@ async function handleAgentMessageInScope(
   const themeCommand = handleUiThemeCommand(trimmed);
   const metersCommand = handleUiMetersCommand(trimmed);
   const isSettingsCommand = /^\/settings\s*$/i.test(trimmed);
+  const ordinaryInput = !command && !themeCommand && !metersCommand && !isSettingsCommand && !isSlashCommandInvocation(content);
+  if (nativeRuntime && ordinaryInput && (!lookupAdmission || !lookupQueuedAdmission
+    || !admitUserInput || !admitQueuedInput || !selectSteering)) {
+    return channel.json({ error: "Native input admission is unavailable." }, 503);
+  }
   if (prepareAdmission) {
     try {
       revalidateInputAuthority();
@@ -814,7 +816,12 @@ async function handleAgentMessageInScope(
       return channel.json({ error: "Input preparation could not be confirmed." }, 503);
     }
   }
-  const nativeSteering = channel.getAcceptedQueuedSteering?.(chatJid, revalidateInputAuthority);
+  if (nativeRuntime && ordinaryInput && (typeof acceptSource !== "function" || typeof acceptQueuedSource !== "function"))
+    return channel.json({ error: "Native input admission is unavailable." }, 503);
+  let nativeSteering: ReturnType<NonNullable<WebChannelLike["getAcceptedQueuedSteering"]>>;
+  try { nativeSteering = selectSteering?.(chatJid, revalidateInputAuthority); }
+  catch { return channel.json({ error: "Native steering authority is unavailable." }, 503); }
+  cancelScheduledIdleAutoCompaction(chatJid);
   const isStreaming = Boolean(nativeSteering) || (typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false);
@@ -865,7 +872,7 @@ async function handleAgentMessageInScope(
     const forwardBody = JSON.stringify({
       content: forwardedContent, media_ids: normalized.mediaIds, content_blocks: normalized.contentBlocks,
       link_previews: normalized.linkPreviews, mode: requestMode,
-      ...(persistSteer ? { persist_steer: true } : {}), screen_hint: normalized.screenHint,
+      screen_hint: normalized.screenHint,
     });
     const forwardReq = new Request(`http://internal/agent/${agentId}/message?chat_jid=${encodeURIComponent(mentionTarget.chat_jid)}`, {
       method: "POST",
@@ -933,11 +940,16 @@ async function handleAgentMessageInScope(
     }];
     let queuedRowId: number;
     try {
-      const accept = (extras.steering || (!command && !themeCommand && !metersCommand && !isSettingsCommand
-        && !isSlashCommandInvocation(trimmed))) && (extras.source === 'web.compose' || extras.source === 'web.steer_startup_fallback') ? acceptQueuedSource : undefined;
-      if (accept && !channel.admitQueuedFollowupItem) throw Error('Atomic queued admission is unavailable.');
-      queuedRowId = channel.admitQueuedFollowupItem
-        ? await channel.admitQueuedFollowupItem(args, revalidateQueuedAdmission, req.signal, accept)
+      const acceptedInput = (extras.steering || ordinaryInput)
+        && (extras.source === "web.compose" || extras.source === "web.steer_startup_fallback");
+      const accept = acceptedInput ? acceptQueuedSource : undefined;
+      if ((nativeRuntime && acceptedInput) || extras.steering) {
+        if (!accept || !admitQueuedInput || (extras.steering && !selectSteering))
+          throw Error("Atomic native queue admission is unavailable.");
+      }
+      if (accept && !admitQueuedInput) throw Error("Atomic queued admission is unavailable.");
+      queuedRowId = admitQueuedInput
+        ? await admitQueuedInput(args, revalidateQueuedAdmission, req.signal, accept)
         : channel.enqueueQueuedFollowupItem(...args);
     } catch (error) {
       if (isSqliteContention(error)) return channel.json({ error: 'Queue storage is busy; this input was not accepted.' }, 503);
@@ -945,7 +957,7 @@ async function handleAgentMessageInScope(
       return channel.json({ error: 'Queued input could not be accepted.' }, 403);
     }
     if (extras.steering) {
-      const host = channel.getAcceptedQueuedSteering?.(chatJid, revalidateInputAuthority);
+      const host = nativeSteering;
       if (host) {
         try {
           const accepted = await host.accept(queuedRowId);
@@ -958,7 +970,8 @@ async function handleAgentMessageInScope(
         // Publication cannot revoke committed native input.
         log.warn("Native steering publication deferred", { operation: "handle_agent_message.native_steer_publication", chatJid, err: error });
       }
-          return channel.json({ queued: "steer", thread_id: null, steering_delivery: "pending" }, 201);
+          return channel.json({ queued: "steer", user_message: accepted.interaction,
+            thread_id: accepted.interaction.data?.thread_id ?? null, steering_delivery: "pending" }, 201);
         } catch (error) {
           // Admission already committed. Preserve the accepted follow-up if the
           // selected operation ended; never reject it or send it through legacy.
@@ -978,29 +991,10 @@ async function handleAgentMessageInScope(
     const stillActive = isChatActive();
     // Manual /queue remains deferred even while idle. Compose admission opts
     // in so a turn ending during an asynchronous lock wait cannot strand input.
-    if (extras.wakeIfIdle && !stillActive) {
+    if (extras.wakeIfIdle && !manualQueue && !stillActive) {
       channel.resumeChat(chatJid);
     }
     return channel.json({ queued: "followup", thread_id: queuedThreadId }, 201);
-  };
-
-  const queueDeferredSteer = async (steerContent: string, source?: string): Promise<Response | null> => {
-    if (!isStreaming) return null;
-    if (nativeSteering) return queueDeferredFollowup(steerContent, { source: "web.compose", steering: true,
-      browserContext: browserObservability, wakeIfIdle: true, mediaIds: normalized.mediaIds,
-      contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint });
-    const steerResult = await channel.agentPool.queueStreamingMessage(chatJid, steerContent, "steer",
-      internalAuthority ? { validate: revalidateInputAuthority, signal: req.signal } : undefined);
-    if (!steerResult.queued) return null;
-    const queuedAt = new Date().toISOString();
-    channel.broadcastEvent("agent_steer_queued", {
-      chat_jid: chatJid,
-      thread_id: null,
-      source,
-      timestamp: queuedAt,
-      content: steerContent,
-    });
-    return channel.json({ queued: "steer", thread_id: null }, 201);
   };
 
   log.info("Handling agent message", {
@@ -1015,29 +1009,10 @@ async function handleAgentMessageInScope(
     contentPreview: content.slice(0, 60),
   });
 
-  if (!persistSteer && !command && !themeCommand && !metersCommand && !isSettingsCommand && isStreaming && requestMode === "steer") {
-    const steerResponse = await queueDeferredSteer(content, "compose");
-    if (steerResponse) return steerResponse;
-    return queueDeferredFollowup(content, {
-      source: 'web.steer_startup_fallback', browserContext: browserObservability, wakeIfIdle: true,
-      mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
-      linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
-    });
-  }
-
-  if ((command?.type === "queue" || command?.type === "queue_all") && isStreaming) {
-    const queuedText = (command.message || "").trim();
-    if (queuedText) {
-      return queueDeferredFollowup(queuedText, { source: "web.queue_command", browserContext: browserObservability });
-    }
-  }
-
-  if (command?.type === "steer" && isStreaming) {
-    const steerText = (command.message || "").trim();
-    if (steerText) {
-      const steerResponse = await queueDeferredSteer(steerText, "command");
-      if (steerResponse) return steerResponse;
-    }
+  if (ordinaryInput && isStreaming && requestMode === "steer") {
+    return queueDeferredFollowup(content, { source: "web.compose", steering: true,
+      browserContext: browserObservability, wakeIfIdle: true, mediaIds: normalized.mediaIds,
+      contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint });
   }
 
   if (themeCommand) {
@@ -1185,7 +1160,7 @@ async function handleAgentMessageInScope(
     !themeCommand &&
     !metersCommand &&
     !isSlashCommandInvocation(trimmed) &&
-    (isActive || hasQueuedBacklog) &&
+    (manualQueue || isActive || hasQueuedBacklog) &&
     (requestMode === "queue" || requestMode === "auto" || (requestMode === "steer" && !isStreaming));
 
   if (shouldDeferQueuedFollowup) {
@@ -1221,10 +1196,9 @@ async function handleAgentMessageInScope(
   let interaction: ReturnType<typeof storeAgentUserMessage>;
   // Ordinary input admitted while idle can become a follow-up while waiting
   // for storage. Decide against fresh in-memory state inside the same commit.
-  if (channel.admitUserMessage && !command && !themeCommand && !metersCommand && !isSettingsCommand
-    && !content.trimStart().startsWith('/') && (!persistSteer || requestMode !== 'steer' || !isStreaming)) {
+  if (admitUserInput && ordinaryInput) {
     try {
-      interaction = await channel.admitUserMessage(chatJid, content, normalized.mediaIds, {
+      interaction = await admitUserInput(chatJid, content, normalized.mediaIds, {
         contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews,
         threadId: normalized.threadId, screenHint: normalized.screenHint, acceptSource,
       }, revalidateQueuedAdmission, req.signal, () => {
@@ -1240,7 +1214,7 @@ async function handleAgentMessageInScope(
               ...(browserObservability.sessionId ? { sessionId: browserObservability.sessionId } : {}),
               ...(browserObservability.clientId ? { clientId: browserObservability.clientId } : {}) },
           });
-        if (deferredSource === 'web.compose' && acceptQueuedSource)
+        if (acceptQueuedSource)
           acceptQueuedInputSource(chatJid, deferredRowId, getDb(), acceptQueuedSource);
         return true;
       });
@@ -1261,7 +1235,7 @@ async function handleAgentMessageInScope(
   if (queuedDuringAdmission) {
     channel.broadcastEvent('agent_followup_queued', { chat_jid: chatJid, row_id: deferredRowId, content,
       thread_id: normalized.threadId ?? null, timestamp: deferredAt, source: deferredSource });
-    if (!isChatActive()) channel.resumeChat(chatJid);
+    if (!manualQueue && !isChatActive()) channel.resumeChat(chatJid);
     return channel.json({ thread_id: normalized.threadId ?? null, queued: 'followup' }, 201);
   }
   if (!interaction) return channel.json({ error: "Failed to store message" }, 500);
@@ -1412,51 +1386,6 @@ async function handleAgentMessageInScope(
     );
   };
 
-  const queueSteerMessage = async (source?: string): Promise<Response | null> => {
-    const steerResult = await channel.agentPool.queueStreamingMessage(chatJid, content, "steer");
-    if (!steerResult.queued) {
-      return null;
-    }
-
-    if (persistSteer && interaction.id) {
-      getDb().prepare("UPDATE messages SET is_steering_message = 1 WHERE rowid = ?").run(interaction.id);
-    }
-
-    const inflightMessageId = getInflightMessageId(chatJid);
-    const rootRowId = inflightMessageId ? getMessageRowIdById(chatJid, inflightMessageId) : null;
-    if (rootRowId && rootRowId !== interaction.id) {
-      getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, interaction.id);
-      interaction.data.thread_id = rootRowId;
-      threadId = rootRowId;
-      const currentIdentity = getIdentityConfig();
-      broadcastInteractionUpdated(
-        channel,
-        interaction,
-        currentIdentity.assistantName,
-        resolveAvatarUrl("agent", currentIdentity.assistantAvatar),
-        currentIdentity.userName || null,
-        resolveAvatarUrl("user", currentIdentity.userAvatar),
-        currentIdentity.userAvatarBackground || null
-      );
-    }
-
-    channel.queuePendingSteering(chatJid, interaction.timestamp);
-    channel.broadcastEvent("agent_steer_queued", {
-      chat_jid: chatJid,
-      thread_id: threadId ?? null,
-      source,
-    });
-
-    return channel.json(
-      {
-        user_message: interaction,
-        thread_id: threadId,
-        queued: "steer",
-      },
-      201
-    );
-  };
-
   if (command) {
     broadcastNewPost();
     const commandTurnId = createUuid("turn");
@@ -1532,8 +1461,6 @@ async function handleAgentMessageInScope(
       await resolveAndBroadcastModelStateForCommand(channel, chatJid, result);
     }
     const formatted = formatOutbound(result.message, "web");
-    const isQueueCommand = command.type === "queue" || command.type === "queue_all";
-    const isSteerCommand = command.type === "steer";
 
     const rollupTargetChatJid = command.type === "rollup" && result.status === "success" && typeof (result as { rolled_up_to?: unknown }).rolled_up_to === "string"
       ? String((result as { rolled_up_to?: string }).rolled_up_to || "").trim()
@@ -1542,39 +1469,23 @@ async function handleAgentMessageInScope(
     let responseDelivery: "not_needed" | "persisted" | "failed" = "not_needed";
 
     if (formatted || result.contentBlocks?.length) {
-      if (isQueueCommand && result.queued_followup) {
-        return queueDeferredFollowup(((command as { message?: string }).message || content).trim(), { source: "web.queue_command", browserContext: browserObservability });
-      } else if (isSteerCommand && (result as { queued_steer?: boolean }).queued_steer) {
-        const steerResponse = await queueSteerMessage("command");
-        if (steerResponse) {
-          return steerResponse;
-        }
-      } else if (isSteerCommand && (result as { queued_followup?: boolean }).queued_followup) {
-        return queueDeferredFollowup(((command as { message?: string }).message || content).trim(), { source: "web.steer_command", browserContext: browserObservability });
-      } else if (isSteerCommand && result.status === "error" && result.retry_as_followup) {
-        return queueDeferredFollowup(
-          ((command as { message?: string }).message || content).trim(),
-          { source: "web.steer_retry", browserContext: browserObservability },
-        );
-      } else {
-        const sendOptions: Record<string, unknown> = { threadId: interaction.id };
-        if (result.mediaIds?.length) {
-          sendOptions.mediaIds = result.mediaIds;
-        }
-        if (result.contentBlocks?.length) {
-          sendOptions.contentBlocks = result.contentBlocks;
-        }
-        if (prepareInputText) sendOptions.requirePersistence = true;
-        try {
-          await channel.sendMessage(responseChatJid, formatted || "", sendOptions);
-          responseDelivery = "persisted";
-        } catch (error) {
-          if (!prepareInputText) throw error;
-          // Execution already completed. Do not turn publication failure into
-          // permission to repeat a non-idempotent command or open a legacy session.
-          responseDelivery = "failed";
-          log.error("Native command reply could not be persisted", { operation: "native_command.reply_delivery", chatJid, command: command.type, err: error });
-        }
+      const sendOptions: Record<string, unknown> = { threadId: interaction.id };
+      if (result.mediaIds?.length) {
+        sendOptions.mediaIds = result.mediaIds;
+      }
+      if (result.contentBlocks?.length) {
+        sendOptions.contentBlocks = result.contentBlocks;
+      }
+      if (prepareInputText) sendOptions.requirePersistence = true;
+      try {
+        await channel.sendMessage(responseChatJid, formatted || "", sendOptions);
+        responseDelivery = "persisted";
+      } catch (error) {
+        if (!prepareInputText) throw error;
+        // Execution already completed. Do not turn publication failure into
+        // permission to repeat a non-idempotent command or open a legacy session.
+        responseDelivery = "failed";
+        log.error("Native command reply could not be persisted", { operation: "native_command.reply_delivery", chatJid, command: command.type, err: error });
       }
     }
 
@@ -1637,10 +1548,6 @@ async function handleAgentMessageInScope(
       source: result.contextUsage.source,
       phase: result.contextUsage.phase,
     } } : result;
-    if (isSteerCommand && (result as { queued_steer?: boolean }).queued_steer) {
-      return channel.json({ user_message: interaction, thread_id: threadId, command: commandResult, queued: "steer" }, 201);
-    }
-
     return channel.json(
       { user_message: interaction, thread_id: threadId, command: commandResult, ...(prepareInputText ? { response_delivery: responseDelivery } : {}) },
       201
@@ -1704,16 +1611,6 @@ async function handleAgentMessageInScope(
       { user_message: interaction, thread_id: threadId, command: cmdResult },
       201
     );
-  }
-
-  if (requestMode === "steer" && !prepareInputText) {
-    // Native steering was already admitted above, or is idle ordinary input.
-    // Never hydrate a legacy session or mutate its accepted message row here.
-    if (persistSteer) broadcastNewPost();
-    const steerResponse = await queueSteerMessage("compose");
-    if (steerResponse) {
-      return steerResponse;
-    }
   }
 
   if (requestMode === "queue" || requestMode === "auto") {

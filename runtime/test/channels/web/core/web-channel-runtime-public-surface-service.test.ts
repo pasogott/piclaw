@@ -91,131 +91,39 @@ describe("web channel runtime public surface service", () => {
     });
   });
 
-  test("enqueues targeted runtime agent messages through storage, broadcast, and chat resume", async () => {
-    const calls: string[] = [];
-    const stored = interaction(9);
-    stored.data.thread_id = 9;
-
-    const service = createWebChannelRuntimePublicSurfaceService({
-      agentPool: {
-        isStreaming: (chatJid) => {
-          calls.push(`streaming:${chatJid}`);
-          return false;
-        },
-        isActive: (chatJid) => {
-          calls.push(`active:${chatJid}`);
-          return false;
-        },
-      },
-      runtimeFollowupFacade: {
-        getQueuedFollowupCount: (chatJid) => {
-          calls.push(`count:${chatJid}`);
-          return 0;
-        },
-        resumeChat: (chatJid, threadRootId) => {
-          calls.push(`resume:${chatJid}:${threadRootId ?? "null"}`);
-        },
-      } as any,
-      messageProcessingStorageService: {
-        storeMessage: (chatJid, content, isBot, mediaIds, options) => {
-          calls.push(`store:${chatJid}:${content}:${isBot ? 1 : 0}:${mediaIds.join(",")}:${options?.threadId ?? "undefined"}:${options?.screenHint ?? ""}`);
-          return stored;
-        },
-      } as any,
-      sessionBroadcast: {
-        sse: {},
-        uiBridge: {},
-        broadcastEvent: (eventType, data) => {
-          calls.push(`broadcast:${eventType}:${(data as InteractionRow).id ?? ""}`);
-        },
-      } as any,
+  test("runtime input pins its trusted handler before admission validation", async () => {
+    await withTempWorkspaceEnv("runtime-handler-capture-", {}, async () => {
+      initDatabase();
+      try {
+        let original = 0, redirected = 0;
+        const channel: any = { async handleAgentMessage() {
+          expect(this).toBe(channel); original++;
+          return Response.json({ queued: "followup", thread_id: null }, { status: 201 });
+        } };
+        const service = createWebChannelRuntimePublicSurfaceService(channel);
+        const result = await service.enqueueAgentMessage({ chatJid: "web:goal", content: "captured input", mode: "queue",
+          admission: { validate() { channel.handleAgentMessage = async () => { redirected++; throw Error("replacement must not run"); }; } } });
+        expect(result.queued).toBe("followup"); expect(original).toBe(1); expect(redirected).toBe(0);
+      } finally { closeDatabase(); }
     });
-
-    const result = await service.enqueueAgentMessage({
-      chatJid: "web:goal",
-      content: "🎯 Continue goal: Ship it",
-      mediaIds: [3],
-      threadId: null,
-      screenHint: "goal",
-      source: "goal.continuation",
-    });
-
-    expect(result.status).toBe("ok");
-    expect(result.chat_jid).toBe("web:goal");
-    expect(result.row_id).toBe(9);
-    expect(result.thread_id).toBe(9);
-    expect(result.created).toBe(true);
-    expect(calls).toEqual([
-      "streaming:web:goal",
-      "active:web:goal",
-      "count:web:goal",
-      "store:web:goal:🎯 Continue goal: Ship it:0:3:undefined:goal",
-      "broadcast:new_post:9",
-      "resume:web:goal:9",
-    ]);
   });
 
-  test("queues targeted runtime agent messages behind active chats without HTTP", async () => {
-    const calls: string[] = [];
-    const service = createWebChannelRuntimePublicSurfaceService({
-      agentPool: {
-        isStreaming: (chatJid) => {
-          calls.push(`streaming:${chatJid}`);
-          return false;
-        },
-        isActive: (chatJid) => {
-          calls.push(`active:${chatJid}`);
-          return true;
-        },
-      },
-      runtimeFollowupFacade: {
-        getQueuedFollowupCount: (chatJid) => {
-          calls.push(`count:${chatJid}`);
-          return 0;
-        },
-        enqueueQueuedFollowupItem: (chatJid, rowId, queuedContent, threadId, queuedAt, extras) => {
-          calls.push(`enqueue:${chatJid}:${rowId}:${queuedContent}:${threadId ?? "null"}:${typeof queuedAt}:${extras?.source ?? ""}`);
-          return 44;
-        },
-      } as any,
-      messageProcessingStorageService: {
-        storeMessage: () => {
-          calls.push("store-unexpected");
-          return null;
-        },
-      } as any,
-      sessionBroadcast: {
-        sse: {},
-        uiBridge: {},
-        broadcastEvent: (eventType, data) => {
-          calls.push(`broadcast:${eventType}:${(data as { row_id?: number }).row_id ?? ""}`);
-        },
-      } as any,
+  for (const mode of ["auto","queue","steer"] as const) {
+    test("missing host input handler rejects without legacy queue/storage effects: " + mode, async () => {
+      const calls:string[]=[];
+      const unexpected=()=>{calls.push("unexpected");throw Error("must not touch a fallback");};
+      const service=createWebChannelRuntimePublicSurfaceService({
+        get agentPool(){return unexpected();},
+        get runtimeFollowupFacade(){return unexpected();},
+        get messageProcessingStorageService(){return unexpected();},
+        get sessionBroadcast(){return unexpected();},
+      } as any);
+      await expect(service.enqueueAgentMessage({chatJid:"web:goal",content:"preserved input",mode,
+        mediaIds:[3],threadId:5,source:"goal.continuation"}))
+        .rejects.toThrow("Runtime agent messages require the host input handler.");
+      expect(calls).toEqual([]);
     });
-
-    const result = await service.enqueueAgentMessage({
-      chatJid: "web:goal",
-      content: "Continue",
-      mode: "auto",
-      source: "goal.continuation",
-    });
-
-    expect(result).toEqual({
-      status: "ok",
-      chat_jid: "web:goal",
-      row_id: 44,
-      thread_id: null,
-      queued: "followup",
-      created: false,
-    });
-    expect(calls).toEqual([
-      "streaming:web:goal",
-      "active:web:goal",
-      "count:web:goal",
-      "enqueue:web:goal:0:Continue:null:string:goal.continuation",
-      "broadcast:agent_followup_queued:44",
-    ]);
-  });
+  }
 
   test("delegates runtime/session/storage surfaces to the extracted collaborators", async () => {
     const calls: string[] = [];

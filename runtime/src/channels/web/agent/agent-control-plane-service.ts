@@ -80,9 +80,6 @@ type StoreMessageOptions = {
 };
 
 type ControlPlaneAgentPool = AgentPool & {
-  removeQueuedFollowupMessage?: (chatJid: string, queuedContent?: string) => Promise<boolean> | boolean;
-  isStreaming?: (chatJid: string) => boolean;
-  queueStreamingMessage?: (chatJid: string, content: string, mode: "steer") => Promise<{ queued: boolean }>;
   createForkedChatBranch?: (chatJid: string, options?: { agentName?: string | null }) => Promise<unknown>;
   createRootChatSession?: (agentName: string) => Promise<unknown>;
   renameChatBranch?: (chatJid: string, options?: { agentName?: string | null }) => Promise<unknown>;
@@ -98,7 +95,7 @@ type ControlPlaneAgentPool = AgentPool & {
 
 type ControlPlaneQueuedLifecycle = Pick<
   QueuedFollowupLifecycleService,
-  "getQueuedFollowupCount" | "listQueuedStateItems" | "prependQueuedFollowupItem" | "removeQueuedFollowupForAction" | "reorderQueuedFollowupItems"
+  "getQueuedFollowupCount" | "listQueuedStateItems" | "removeQueuedFollowupForAction" | "reorderQueuedFollowupItems"
 >;
 
 export interface WebAgentControlPlaneServiceOptions {
@@ -287,7 +284,6 @@ export class WebAgentControlPlaneService {
       const withdrawAcceptedSource = selectWithdrawal?.(chatJid);
       const { removed } = await this.options.queuedFollowupLifecycle.removeQueuedFollowupForAction(chatJid, rowId, {
         withdrawAcceptedSource,
-        removeQueuedFollowupMessage: (jid, content) => this.options.agentPool.removeQueuedFollowupMessage?.(jid, content) ?? false,
       });
       if (!removed) {
         return this.options.json({ status: "ok", removed: false, count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
@@ -344,9 +340,10 @@ export class WebAgentControlPlaneService {
         return this.options.json({ error: "Missing or invalid row_id" }, 400);
       }
 
-      // Detect protected accepted input before any legacy removal or SDK call.
+      // Only already-accepted input may enter the host intent path. Reads never
+      // adopt historical/manual rows or remove them to resubmit their text.
       const queued = getDeferredQueuedFollowups(chatJid).find(item => item.rowId === rowId);
-      if (queued?.source_accepted) {
+      if (queued?.source_accepted && queued.source_id) {
         acceptedSteering = true;
         const host = selectSteering?.(chatJid);
         if (!host) {
@@ -370,100 +367,18 @@ export class WebAgentControlPlaneService {
           queued: 'steer', steering_delivery: 'pending', user_message: interaction,
           count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 201);
       }
-      const { removed } = await this.removeQueuedFollowupForAction(chatJid, rowId);
-      if (!removed) {
-        return this.options.json({ status: "ok", removed: false, count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
+      const exists = queued || this.options.queuedFollowupLifecycle.listQueuedStateItems(chatJid)
+        .some(item => item.row_id === rowId);
+      if (exists) {
+        return this.options.json({ error: "Queued input is not accepted for steering." }, 409);
       }
-
-      this.options.broadcastEvent("agent_followup_removed", {
-        chat_jid: chatJid,
-        row_id: removed.rowId,
-        thread_id: removed.threadId ?? null,
-      });
-
-      const steerContent = typeof removed.queuedContent === "string" ? removed.queuedContent.trim() : "";
-      if (!steerContent) {
-        return this.options.json({ status: "ok", removed: true, queued: false, count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
-      }
-
-      const isStreaming = typeof this.options.agentPool.isStreaming === "function"
-        ? this.options.agentPool.isStreaming(chatJid)
-        : false;
-      const inflightMessageId = (this.options.getInflightMessageId ?? getInflightMessageId)(chatJid);
-      const activeThreadRootId = inflightMessageId
-        ? (this.options.getMessageThreadRootIdById ?? getMessageThreadRootIdById)(chatJid, inflightMessageId)
-        : null;
-      const steerThreadId = removed.threadId ?? activeThreadRootId ?? null;
-
-      const interaction = this.options.storeMessage(
-        chatJid,
-        steerContent,
-        false,
-        removed.mediaIds ?? [],
-        {
-          contentBlocks: Array.isArray(removed.contentBlocks) ? removed.contentBlocks : undefined,
-          linkPreviews: Array.isArray(removed.linkPreviews) ? removed.linkPreviews : undefined,
-          threadId: steerThreadId ?? undefined,
-          screenHint: removed.screenHint,
-          isSteeringMessage: isStreaming,
-        }
-      );
-      if (!interaction) {
-        this.options.queuedFollowupLifecycle.prependQueuedFollowupItem(chatJid, removed);
-        this.options.broadcastEvent("agent_followup_queued", {
-          chat_jid: chatJid,
-          thread_id: removed.threadId ?? null,
-          row_id: removed.rowId,
-          content: removed.queuedContent,
-          timestamp: removed.queuedAt,
-        });
-        return this.options.json({ error: "Failed to store message" }, 500);
-      }
-
-      this.options.broadcastEvent("new_post", interaction);
-
-      if (isStreaming && typeof this.options.agentPool.queueStreamingMessage === "function") {
-        const steerResult = await this.options.agentPool.queueStreamingMessage(chatJid, steerContent, "steer");
-        if (steerResult.queued) {
-          this.options.queuePendingSteering(chatJid, interaction.timestamp);
-          const queuedAt = new Date().toISOString();
-          this.options.broadcastEvent("agent_steer_queued", {
-            chat_jid: chatJid,
-            thread_id: interaction.data?.thread_id ?? steerThreadId ?? null,
-            source: "queued-item",
-            timestamp: queuedAt,
-            content: steerContent,
-          });
-          return this.options.json({
-            status: "ok",
-            removed: true,
-            row_id: removed.rowId,
-            user_message: interaction,
-            thread_id: interaction.data?.thread_id ?? steerThreadId ?? null,
-            queued: "steer",
-            count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid),
-          }, 201);
-        }
-      }
-
-      this.options.queue.enqueue(async () => {
-        await this.options.processChat(chatJid, this.options.defaultAgentId, interaction.data?.thread_id ?? interaction.id);
-      }, `chat:${chatJid}:${interaction.id}`, `chat:${chatJid}`);
-
-      return this.options.json({
-        status: "ok",
-        removed: true,
-        row_id: removed.rowId,
-        user_message: interaction,
-        thread_id: interaction.data?.thread_id ?? interaction.id ?? null,
-        count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid),
-      }, 201);
+      return this.options.json({ status: "ok", removed: false,
+        count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
     } catch (error) {
       if (acceptedSteering) {
         log.warn('Accepted queued steering rejected', { stage: acceptedSteeringStage, reason: queuedSteeringRejectionReason(error) });
       }
-      const message = acceptedSteering ? 'Accepted steering is unavailable.' : error instanceof Error ? error.message : String(error);
-      return this.options.json({ error: message }, 500);
+      return this.options.json({ error: 'Accepted steering is unavailable.' }, 500);
     }
   }
 
@@ -587,6 +502,12 @@ export class WebAgentControlPlaneService {
     const chatJid = this.resolveRequiredChatJid(payload.chat_jid);
     if (!chatJid) return this.options.json({ error: "Missing chat_jid" }, 400);
     const items = this.options.queuedFollowupLifecycle.listQueuedStateItems(chatJid) as Array<{ rowId?: unknown; row_id?: unknown }>;
+    // Preflight the whole selection against authoritative rows before deleting
+    // anything. Drain is not an accepted-source withdrawal operation.
+    const selected = new Set(items.map(item => this.parseRowId((item.rowId ?? item.row_id) as number | string | undefined)));
+    if (getDeferredQueuedFollowups(chatJid).some(item => item.source_accepted && selected.has(item.rowId))) {
+      return this.options.json({ error: "Accepted input cannot be drained." }, 409);
+    }
     let removedCount = 0;
     for (const item of items) {
       const rowId = this.parseRowId((item.rowId ?? item.row_id) as number | string | undefined);
@@ -843,9 +764,6 @@ export class WebAgentControlPlaneService {
     chatJid: string,
     rowId: number,
   ): Promise<{ removed: QueuedFollowupItem | null; source: "deferred" | "placeholder" | null }> {
-    return await this.options.queuedFollowupLifecycle.removeQueuedFollowupForAction(chatJid, rowId, {
-      removeQueuedFollowupMessage: (queuedChatJid, queuedContent) =>
-        this.options.agentPool.removeQueuedFollowupMessage?.(queuedChatJid, queuedContent) ?? false,
-    });
+    return await this.options.queuedFollowupLifecycle.removeQueuedFollowupForAction(chatJid, rowId);
   }
 }

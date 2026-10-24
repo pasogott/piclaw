@@ -1,12 +1,63 @@
 import { describe, expect, test } from "bun:test";
 
-import "../../../helpers.js";
-import { beginChatRun, getDb, getInflightRuns, initDatabase } from "../../../../src/db.js";
+import { withTempWorkspaceEnv } from "../../../helpers.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { beginChatRun, closeDatabase, getDb, getDeferredQueuedFollowups, setDeferredQueuedFollowups, getMessageByRowId, storeMessage, storeChatMetadata, getInflightRuns, initDatabase } from "../../../../src/db.js";
 import {
   buildStalledWorkDiagnostic,
   WebAgentControlPlaneService,
 } from "../../../../src/channels/web/agent/agent-control-plane-service.js";
-import type { QueuedFollowupLifecycleService } from "../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
+import { QueuedFollowupLifecycleService, type QueuedInputSourceAdmission } from "../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
+
+import { installServiceWorkSchema } from "../../../../src/service-effects/current-piclaw/service-work-schema.js";
+import { createCurrentPiclawServiceWorkStore } from "../../../../src/service-effects/current-piclaw/service-work-store.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../../src/service-effects/contracts/common.js";
+import { createDurableQueuedSteering } from "../../../../src/agent-pool/durable-queued-steering.js";
+import { createDurableConversationAdapter, type DurableAcceptedInput } from "../../../../src/agent-pool/durable-runtime-adapter.js";
+import { storeWebMessage } from "../../../../src/channels/web/messaging/message-store.js";
+
+function seal<T extends { effect: { requestHash: string } }>(request: T): T {
+  request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+  return request;
+}
+
+async function nativeQueueFixture() {
+  initDatabase();
+  const database = getDb();
+  installServiceWorkSchema(database);
+  const lifecycle = new QueuedFollowupLifecycleService();
+  const made = createCurrentPiclawServiceWorkStore(database, {
+    hitFault: () => false, recordTrace() {}, validateAcceptance: () => true,
+  });
+  if (!made.ok) throw Error("work fixture");
+  const work = made.value;
+  const effect = (key: string) => ({ idempotencyKey: key, requestHash: "", operationId: null, sourceSeq: null,
+    provenanceRef: "host:queue", redactionClass: "private" as const });
+  const digest = (item: Record<string, unknown>) => {
+    const { source_accepted, materializeRetries, ...immutable } = item;
+    return hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)) as CanonicalJsonValue);
+  };
+  const accept: QueuedInputSourceAdmission = ({ chatJid, item, database }) => {
+    work.acceptSourceInTransaction(seal({ effect: { ...effect(`accept:${item.source_id}`), provenanceRef: digest(item) },
+      chatJid, sourceId: item.source_id, kind: "message", payloadRef: `queued-source:${item.source_id}`,
+      targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), database);
+  };
+  const enqueue = (chat: string, content: string) => lifecycle.admitQueuedFollowupItem([chat, 0, content],
+    () => {}, new AbortController().signal, accept);
+  const snapshot = () => ["sources", "chats", "operations", "operation_sources", "intents", "queued_inputs", "decisions", "wake_intents"]
+    .map(table => database.query(`SELECT * FROM service_effect_s01_${table}`).all())
+    .concat([database.query("SELECT * FROM messages").all(), database.query("SELECT * FROM router_state").all()]);
+  return { database, lifecycle, work, effect, digest, enqueue, snapshot };
+}
+
+async function withQueueFixture(run: (fixture: Awaited<ReturnType<typeof nativeQueueFixture>>) => Promise<void>) {
+  await withTempWorkspaceEnv("control-plane-queue-", {}, async ws => {
+    mkdirSync(join(ws.workspace, ".piclaw"), { recursive: true });
+    writeFileSync(join(ws.workspace, ".piclaw/config.json"), JSON.stringify({ domains: { access: { mode: "single-user" } } }));
+    try { await run(await nativeQueueFixture()); } finally { closeDatabase(); }
+  });
+}
 
 function abortRequest(payload: unknown): Request {
   return new Request("https://example.com/agent/runs/abort", {
@@ -23,14 +74,14 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 type QueueLifecycleStub = Pick<
   QueuedFollowupLifecycleService,
-  "getQueuedFollowupCount" | "listQueuedStateItems" | "prependQueuedFollowupItem" | "removeQueuedFollowupForAction"
+  "getQueuedFollowupCount" | "listQueuedStateItems" | "removeQueuedFollowupForAction" | "reorderQueuedFollowupItems"
 >;
 
 function createService(overrides: Partial<ConstructorParameters<typeof WebAgentControlPlaneService>[0]> = {}) {
   const queueLifecycle: QueueLifecycleStub = {
     getQueuedFollowupCount: () => 0,
     listQueuedStateItems: () => [],
-    prependQueuedFollowupItem: () => {},
+    reorderQueuedFollowupItems: () => false,
     removeQueuedFollowupForAction: async () => ({ removed: null, source: null }),
   };
 
@@ -160,7 +211,7 @@ describe("WebAgentControlPlaneService", () => {
     const queueLifecycle: QueueLifecycleStub = {
       getQueuedFollowupCount: (chatJid: string) => (chatJid === "web:branch" ? 1 : 0),
       listQueuedStateItems: () => [{ row_id: 7, content: "queued followup", timestamp: "2024-01-01T00:00:00.000Z", thread_id: 11 }],
-      prependQueuedFollowupItem: () => {},
+      reorderQueuedFollowupItems: () => false,
       removeQueuedFollowupForAction: async () => ({
         removed: {
           rowId: 7,
@@ -206,6 +257,176 @@ describe("WebAgentControlPlaneService", () => {
     ]);
   });
 
+  test("manual, historical and placeholder steering conflicts preserve visibility, identity and FIFO", async () => {
+    await withQueueFixture(async f => {
+      const chat = "web:unaccepted";
+      storeChatMetadata(chat, "2026-08-14T09:00:00.000Z", "Fixture");
+      const manual = f.lifecycle.enqueueQueuedFollowupItem(chat, 0, "  unchanged input  ");
+      const historical = -100;
+      setDeferredQueuedFollowups(chat, [...getDeferredQueuedFollowups(chat), {
+        rowId: historical, queuedContent: "historical input", queuedAt: "2024-01-01T00:00:00.000Z",
+      }]);
+      const placeholder = storeMessage({ id: "local-placeholder", chat_jid: chat, sender: "agent", sender_name: "Pi",
+        content: "\u2063", timestamp: "2026-08-14T09:00:00.000Z", is_from_me: false, is_bot_message: true });
+      f.lifecycle.enqueuePlaceholder(chat, placeholder, "  unchanged input  ");
+      const before = f.snapshot(), queued = f.lifecycle.getQueuedFollowupItems(chat);
+      let effects = 0;
+      const forbidden = () => { effects++; throw Error("must not enter submission/removal/publication"); };
+      const service = createService({ queuedFollowupLifecycle: f.lifecycle,
+        getAcceptedQueuedSteering: forbidden, getQueuedInputSourceWithdrawal: forbidden,
+        broadcastEvent: forbidden, queuePendingSteering: forbidden, storeMessage: forbidden,
+        processChat: forbidden, queue: { enqueue: forbidden },
+      });
+      for (const rowId of [manual, historical, placeholder]) {
+        const response = await service.handleAgentQueueSteer(abortRequest({ chat_jid: chat, row_id: rowId, source_accepted: true, source_id: "forged" }));
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: "Queued input is not accepted for steering." });
+        expect(f.snapshot()).toEqual(before);
+        expect(f.lifecycle.getQueuedFollowupItems(chat)).toEqual(queued);
+      }
+      expect(effects).toBe(0);
+      const missing = await service.handleAgentQueueSteer(abortRequest({ chat_jid: chat, row_id: -999 }));
+      expect(missing.status).toBe(200);
+      expect(await missing.json()).toEqual({ status: "ok", removed: false, count: 3 });
+      expect(f.lifecycle.listQueuedStateItems(chat).map(item => item.row_id)).toEqual([manual, historical, placeholder]);
+      expect(f.lifecycle.consumeQueuedFollowupItem(chat)).toEqual(queued[0]);
+      expect(f.lifecycle.consumeQueuedFollowupItem(chat)).toEqual(queued[1]);
+      expect(f.lifecycle.consumeQueuedFollowupPlaceholder(chat)).toBe(placeholder);
+      expect(f.database.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+    });
+  });
+
+  for (const failure of ["none", "lost-ack", "publication", "fenced", "missing-port"] as const) {
+    test(`accepted steering uses captured native intent port and the same source identity; ${failure}`, async () => {
+      await withQueueFixture(async f => {
+        const chat = "web:native-steer";
+        storeChatMetadata(chat, "2026-08-14T09:00:00.000Z", "Fixture");
+        await f.enqueue(chat, "primary");
+        const primary = f.lifecycle.consumeQueuedFollowupItem(chat)!;
+        const claim = await f.work.claimNext(seal({ effect: f.effect("claim"), chatJid: chat, expectedFrontier: 0,
+          newOperationId: "running-operation", claimedAt: "2026-08-14T09:00:00.000Z" }));
+        expect(claim.ok && claim.value?.source.sourceId).toBe(primary.source_id);
+        expect((await f.work.bindHarness(seal({ effect: { ...f.effect("bind"), operationId: "running-operation", sourceSeq: 1 },
+          expectedVersion: 1, sessionId: "owned-session", lane: "main", harnessOperationId: "native-operation",
+          state: "running", watchGeneration: 1 }))).ok).toBe(true);
+        const rowId = await f.enqueue(chat, "  accepted input stays exact  ");
+        const siblingRowId = await f.enqueue(chat, "sibling");
+        const [queued, sibling] = getDeferredQueuedFollowups(chat);
+        const originalSource = f.work.getAcceptedSource(chat, queued!.source_id!)!;
+        const originalSibling = f.work.getAcceptedSource(chat, sibling!.source_id!)!;
+        const events: string[] = [], submitted: DurableAcceptedInput[] = [], pending: unknown[] = [];
+        let forbiddenCalls = 0, selected = 0, accepted = 0, dispatches = 0;
+        const forbidden = () => { forbiddenCalls++; throw Error("legacy/withdrawal/resubmission forbidden"); };
+        const adapter = createDurableConversationAdapter({ incarnation: "test-owner", manifest: [{ chatJid: chat, branchId: "main", conversationId: 1 }],
+          runtime: { submit: forbidden, reconcile: forbidden, cancel: forbidden, resume: forbidden, settle: forbidden, close: async () => {},
+            async submitIntent(input) {
+              dispatches++;
+              submitted.push(input);
+              if (failure === "lost-ack") throw Error("private lost ACK");
+              return 1;
+            } },
+        });
+        const coordinator = createDurableQueuedSteering({ work: f.work, adapter, chatJid: chat, branchId: "main",
+          runningBinding: { sessionId: "owned-session", lane: "main", watchGeneration: 1 },
+          assertCurrentWriter() { if (failure === "fenced") throw Error("PRIVATE_FENCED_ENGINE"); },
+          readQueued: id => getDeferredQueuedFollowups(chat).find(item => item.rowId === id),
+          validatePayload: ({ item }) => expect(f.work.getAcceptedSource(chat, item.source_id)?.provenanceRef).toBe(f.digest(item)),
+          materialize: (item, accept) => storeWebMessage({} as any, { chatJid: chat, content: item.queuedContent, isBot: false,
+            mediaIds: item.mediaIds ?? [], agentId: "default", agentName: "Pi" }, {
+            threadId: item.threadId, contentBlocks: item.contentBlocks, linkPreviews: item.linkPreviews, screenHint: item.screenHint,
+            isSteeringMessage: true, consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept,
+          }),
+          onPendingIntent: input => { pending.push(input); },
+        });
+        const options: ConstructorParameters<typeof WebAgentControlPlaneService>[0] = {
+          defaultChatJid: chat, defaultAgentId: "default", json: jsonResponse, agentPool: {} as any,
+          queuedFollowupLifecycle: f.lifecycle, queue: { enqueue: forbidden }, storeMessage: forbidden, processChat: forbidden,
+          getQueuedInputSourceWithdrawal: forbidden,
+          getAcceptedQueuedSteering(jid) {
+            selected++; expect(jid).toBe(chat);
+            if (failure === "missing-port") return undefined;
+            return { async accept(id) { accepted++; expect(id).toBe(rowId); return coordinator.accept(id); } };
+          },
+          broadcastEvent(type) {
+            events.push(type);
+            if (failure === "publication") throw Error("PRIVATE_PUBLICATION_DETAIL");
+          }, queuePendingSteering: () => {},
+        };
+        // Replacement while the body is awaited must not redirect trusted selection.
+        const request = abortRequest({ chat_jid: chat, row_id: rowId, source_id: "forged", engine: "forged" });
+        request.json = async () => {
+          options.getAcceptedQueuedSteering = forbidden;
+          return { chat_jid: chat, row_id: rowId, source_id: "forged", engine: "forged" };
+        };
+        const service = new WebAgentControlPlaneService(options);
+        const before = f.snapshot();
+        const response = await service.handleAgentQueueSteer(request);
+        const body = await response.json();
+        await Bun.sleep(0);
+        expect(selected).toBe(1);
+        expect(forbiddenCalls).toBe(0);
+        expect(JSON.stringify(body)).not.toContain("PRIVATE_");
+        if (failure === "missing-port" || failure === "fenced") {
+          expect(response.status).toBe(500);
+          expect(f.snapshot()).toEqual(before);
+          expect(getDeferredQueuedFollowups(chat)).toEqual([queued, sibling]);
+          expect(events).toEqual([]); expect(dispatches).toBe(0);
+          expect(accepted).toBe(failure === "missing-port" ? 0 : 1);
+          return;
+        }
+        expect(response.status).toBe(failure === "publication" ? 500 : 201);
+        if (failure !== "publication") expect(body).toMatchObject({ removed: true, row_id: rowId, queued: "steer", steering_delivery: "pending" });
+        expect(accepted).toBe(1); expect(dispatches).toBe(1);
+        expect(submitted).toEqual([expect.objectContaining({ sourceId: originalSource.sourceId, sourceSeq: originalSource.sourceSeq,
+          operationId: "running-operation", payloadRef: originalSource.payloadRef, requestId: `queued-steer:${originalSource.sourceId}` })]);
+        expect(pending).toHaveLength(failure === "lost-ack" ? 1 : 0);
+        expect(getDeferredQueuedFollowups(chat)).toEqual([sibling]);
+        expect(sibling!.rowId).toBe(siblingRowId);
+        expect(f.work.getAcceptedSource(chat, sibling!.source_id!)).toEqual(originalSibling);
+        expect(f.work.getAcceptedSource(chat, queued!.source_id!)).toEqual({ ...originalSource, state: "claimed", targetOperationId: "running-operation" });
+        expect(f.database.query("SELECT id, content FROM messages WHERE id=?").get(originalSource.sourceId))
+          .toEqual({ id: originalSource.sourceId, content: queued!.queuedContent });
+        expect(f.database.query("SELECT kind, payload_ref FROM service_effect_s01_intents").all())
+          .toEqual([{ kind: "queue_input", payload_ref: originalSource.payloadRef }]);
+        expect(f.database.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(3);
+        const committed = f.snapshot(), published = [...events];
+        const duplicate = await service.handleAgentQueueSteer(abortRequest({ chat_jid: chat, row_id: rowId }));
+        expect(duplicate.status).toBe(200); expect((await duplicate.json()).removed).toBe(false);
+        expect(f.snapshot()).toEqual(committed); expect(events).toEqual(published);
+        expect(dispatches).toBe(1); expect(forbiddenCalls).toBe(0);
+      });
+    });
+  }
+
+  test("mixed queue drain rejects accepted input before any partial local deletion or withdrawal", async () => {
+    await withQueueFixture(async f => {
+      const chat = "web:mixed-drain";
+      storeChatMetadata(chat, "2026-08-14T09:00:00.000Z", "Fixture");
+      const manual = f.lifecycle.enqueueQueuedFollowupItem(chat, 0, "manual first");
+      const placeholder = storeMessage({ id: "drain-placeholder", chat_jid: chat, sender: "agent", sender_name: "Pi",
+        content: "\u2063", timestamp: "2026-08-14T09:00:00.000Z", is_from_me: false, is_bot_message: true });
+      f.lifecycle.enqueuePlaceholder(chat, placeholder, "placeholder first");
+      const accepted = await f.enqueue(chat, "accepted last");
+      const before = f.snapshot(), queued = f.lifecycle.getQueuedFollowupItems(chat);
+      let effects = 0;
+      const forbidden = () => { effects++; throw Error("no drain effects"); };
+      const service = createService({
+        queuedFollowupLifecycle: {
+          getQueuedFollowupCount: jid => f.lifecycle.getQueuedFollowupCount(jid),
+          // Public state has no source_accepted; order both local rows ahead of it.
+          listQueuedStateItems: () => [manual, placeholder, accepted].map(row_id => ({ row_id, content: "public", timestamp: "now", thread_id: null })),
+          removeQueuedFollowupForAction: forbidden, reorderQueuedFollowupItems: () => false,
+        }, getQueuedInputSourceWithdrawal: forbidden, broadcastEvent: forbidden,
+      });
+      const response = await service.handleAgentRunDrainQueue(abortRequest({ chat_jid: chat }));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "Accepted input cannot be drained." });
+      expect(effects).toBe(0);
+      expect(f.snapshot()).toEqual(before); expect(f.lifecycle.getQueuedFollowupItems(chat)).toEqual(queued);
+      expect(getMessageByRowId(chat, placeholder)).toBeDefined();
+    });
+  });
+
   test("lists active runs and supports targeted abort, stale marker clear, and queue drain", async () => {
     initDatabase();
     const events: Array<{ type: string; data: unknown }> = [];
@@ -222,7 +443,7 @@ describe("WebAgentControlPlaneService", () => {
         { rowId: 41, content: "first" },
         { row_id: 42, content: "second" },
       ],
-      prependQueuedFollowupItem: () => {},
+      reorderQueuedFollowupItems: () => false,
       removeQueuedFollowupForAction: async (_chatJid, rowId) => {
         removedRows.push(rowId);
         return {

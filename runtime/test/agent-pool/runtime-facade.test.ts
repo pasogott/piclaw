@@ -6,6 +6,7 @@ import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { clearProviderUsageCache, peekProviderUsage } from "../../src/agent-pool/provider-usage.js";
 import { AgentSessionManager } from "../../src/agent-pool/session-manager.js";
 import { waitFor } from "../helpers.js";
+import { AgentPool } from "../../src/agent-pool.js";
 import { AgentRuntimeFacade } from "../../src/agent-pool/runtime-facade.js";
 import { buildSessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
 import { SESSIONS_DIR } from "../../src/core/config.js";
@@ -874,118 +875,29 @@ test("AgentRuntimeFacade does not block getAvailableModels on a cold provider-us
   }
 });
 
-test("AgentRuntimeFacade compacts and retries context pressure while queueing follow-up", async () => {
-  let promptCalls = 0;
-  let compactCalls = 0;
-  const prompts: Array<{ text: string; behavior: string }> = [];
-  const listeners: Array<(event: any) => void> = [];
-  const session = {
-    isStreaming: true,
-    subscribe: (listener: (event: any) => void) => {
-      listeners.push(listener);
-      return () => {
-        const index = listeners.indexOf(listener);
-        if (index >= 0) listeners.splice(index, 1);
-      };
-    },
-    compact: async () => {
-      compactCalls += 1;
-    },
-    prompt: async (text: string, options?: { streamingBehavior?: string }) => {
-      promptCalls += 1;
-      prompts.push({ text, behavior: options?.streamingBehavior ?? "" });
-      if (promptCalls === 1) {
-        for (const listener of listeners) {
-          listener({
-            type: "message_end",
-            message: {
-              role: "assistant",
-              stopReason: "error",
-              errorMessage: "OpenAI API error (400): 400 Your input exceeds the context window of this model. Please adjust your input and try again.",
-              content: [],
-            },
-          });
-        }
-      }
-    },
-  };
-
-  const fixture = createFacade();
-  fixture.pool.set("web:default", { runtime: createRuntime(session), lastUsed: Date.now() });
-
-  await expect(fixture.facade.queueStreamingMessage("web:default", "continue", "followUp")).resolves.toEqual({ queued: true });
-  expect(promptCalls).toBe(2);
-  expect(compactCalls).toBe(1);
-  expect(prompts).toEqual([
-    { text: "continue", behavior: "followUp" },
-    { text: "continue", behavior: "followUp" },
-  ]);
+test("native pool/facade expose no SDK queue mutation API", () => {
+  const { facade } = createFacade();
+  for (const target of [facade, AgentPool.prototype]) {
+    expect("queueStreamingMessage" in target).toBe(false);
+    expect("removeQueuedFollowupMessage" in target).toBe(false);
+  }
 });
 
-test("AgentRuntimeFacade removes one queued follow-up and replays the remaining queue", async () => {
-  const prompts: Array<{ text: string; behavior: string }> = [];
-  const session = {
-    isStreaming: true,
-    getFollowUpMessages: () => ["first", "second", "third"],
-    clearQueue: () => ({ steering: ["keep steer"], followUp: ["first", "second", "third"] }),
-    prompt: async (text: string, options?: { streamingBehavior?: string }) => {
-      prompts.push({ text, behavior: options?.streamingBehavior ?? "" });
-    },
-  };
-
-  const fixture = createFacade();
-  fixture.pool.set("web:default", { runtime: createRuntime(session), lastUsed: Date.now() });
-
-  await expect(fixture.facade.removeQueuedFollowupMessage("web:default", "second")).resolves.toBe(true);
-  expect(prompts).toEqual([
-    { text: "keep steer", behavior: "steer" },
-    { text: "first", behavior: "followUp" },
-    { text: "third", behavior: "followUp" },
-  ]);
-});
-
-test("AgentRuntimeFacade restores the original queue when queued follow-up removal replay fails", async () => {
-  const prompts: Array<{ text: string; behavior: string }> = [];
-  let thirdFollowupAttempts = 0;
-  let queue = {
-    steering: ["keep steer"],
-    followUp: ["first", "second", "third"],
-  };
-
-  const session = {
-    isStreaming: true,
-    getFollowUpMessages: () => [...queue.followUp],
-    clearQueue: () => {
-      const cleared = {
-        steering: [...queue.steering],
-        followUp: [...queue.followUp],
-      };
-      queue = { steering: [], followUp: [] };
-      return cleared;
-    },
-    prompt: async (text: string, options?: { streamingBehavior?: string }) => {
-      prompts.push({ text, behavior: options?.streamingBehavior ?? "" });
-      if (text === "third" && options?.streamingBehavior === "followUp" && thirdFollowupAttempts++ === 0) {
-        throw new Error("requeue failed");
-      }
-      if (options?.streamingBehavior === "steer") {
-        queue.steering.push(text);
-      } else if (options?.streamingBehavior === "followUp") {
-        queue.followUp.push(text);
-      }
-    },
-  };
-
-  const fixture = createFacade();
-  fixture.pool.set("web:default", { runtime: createRuntime(session), lastUsed: Date.now() });
-
-  await expect(fixture.facade.removeQueuedFollowupMessage("web:default", "second")).resolves.toBe(false);
-  expect(queue).toEqual({
-    steering: ["keep steer"],
-    followUp: ["first", "second", "third"],
+for (const raw of ["/queue queued", "/queue-all queued", "/steer queued"]) {
+  test("native direct queue command rejects before lookup/factory/protection: " + raw, async () => {
+    let lookups=0, legacy=0, protectedCalls=0;
+    const { facade } = createFacade({
+      getDurableSession() { lookups++; throw Error("queue must not resolve a session"); },
+      async getOrCreateRuntime() { legacy++; throw Error("legacy must not open"); },
+      acquireCommandProtection() { protectedCalls++; return () => {}; },
+    });
+    const command = parseControlCommand(raw);
+    expect(command).not.toBeNull();
+    expect(await facade.applyControlCommand("web:queue-boundary",command!))
+      .toMatchObject({status:"error",message:"Native queue commands require host input admission. No legacy session was opened."});
+    expect([lookups,legacy,protectedCalls]).toEqual([0,0,0]);
   });
-  expect(fixture.warnings).toContain("Failed to remove queued follow-up");
-});
+}
 
 test("AgentRuntimeFacade normalizes session-tree user prompts for display while keeping raw detail", () => {
   const session = {
@@ -1360,17 +1272,6 @@ for (const kind of ["slash", "control"] as const) {
     }
   });
 }
-
-test('lifetime-bound streaming input refuses unfenced SDK injection', async () => {
-  let prompts = 0;
-  let validations = 0;
-  const runtime = createRuntime({ isStreaming: true, prompt: async () => { prompts++; } });
-  const fixture = createFacade();
-  fixture.pool.set('web:default', { runtime, lastUsed: Date.now() });
-  expect(await fixture.facade.queueStreamingMessage('web:default', 'peer input', 'steer', { validate: () => { validations++; } })).toEqual({ queued: false });
-  expect(prompts).toBe(0);
-  expect(validations).toBe(2);
-});
 
 test("durable compact captures one port for the whole command without legacy fallback", async () => {
   let lookups = 0, compactions = 0, legacyCalls = 0, releases = 0;

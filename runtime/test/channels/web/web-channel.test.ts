@@ -8,6 +8,9 @@
 import { createHmac } from "node:crypto";
 import { expect, test, afterEach } from "bun:test";
 import { createTempWorkspace, setEnv, waitFor } from "../../helpers.js";
+import { installNativeQueuePorts } from "./helpers/native-queue-port-fixture.js";
+
+type NativeQueueIntent = { chatJid: string; text: string; behavior: "steer"; sourceId: string; rowId: number };
 
 let restoreEnv: (() => void) | null = null;
 let cleanupWorkspace: (() => void) | null = null;
@@ -410,7 +413,7 @@ test("web channel persists peer-message steering rows when the target session is
     { chat_jid: "web:target", agent_name: "target", session_id: null, session_name: null, model: null, is_active: true, has_side_session: false },
   ];
   const events: Array<{ type: string; data: any }> = [];
-  const queuedSteers: Array<{ chatJid: string; text: string; behavior: string }> = [];
+  const queuedSteers: NativeQueueIntent[] = [];
 
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
@@ -421,13 +424,10 @@ test("web channel persists peer-message steering rows when the target session is
       getAgentHandleForChat: (chatJid: string) => activeChats.find((chat) => chat.chat_jid === chatJid)?.agent_name ?? null,
       isStreaming: (chatJid: string) => chatJid === "web:target",
       isActive: (chatJid: string) => chatJid === "web:target",
-      queueStreamingMessage: async (chatJid: string, text: string, behavior: string) => {
-        queuedSteers.push({ chatJid, text, behavior });
-        return { queued: true };
-      },
       getContextUsageForChat: async () => null,
     },
   });
+  installNativeQueuePorts(web, { onIntent: input => queuedSteers.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -452,7 +452,7 @@ test("web channel persists peer-message steering rows when the target session is
   expect(json.user_message?.data?.content).toContain("Please adjust the active run.");
 
   expect(queuedSteers).toHaveLength(1);
-  expect(queuedSteers[0]).toEqual({
+  expect(queuedSteers[0]).toMatchObject({
     chatJid: "web:target",
     text: "from: @source <jid:web:source>\n\nPlease adjust the active run.",
     behavior: "steer",
@@ -462,6 +462,7 @@ test("web channel persists peer-message steering rows when the target session is
 
   const timeline = db.getTimeline("web:target", 10);
   expect(timeline).toHaveLength(1);
+  expect(json.user_message).toEqual(timeline[0]);
   expect(timeline[0].data.content).toContain("from: @source <jid:web:source>");
   expect(timeline[0].data.content).toContain("Please adjust the active run.");
   expect(timeline[0].data.content_blocks?.[0]).toMatchObject({
@@ -471,6 +472,15 @@ test("web channel persists peer-message steering rows when the target session is
     body: "Please adjust the active run.",
   });
   expect(db.getMessagesSince("web:target", "", "PiClaw")).toHaveLength(0);
+  expect(timeline[0].data.thread_id).toBe(timeline[0].id);
+  expect(queuedSteers[0].text).toBe(timeline[0].data.content);
+  expect(queuedSteers[0].rowId).toBeLessThan(0);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(timeline[0].id)).toEqual({ id: queuedSteers[0].sourceId });
+  expect(db.getTimeline("web:source", 10)).toEqual([]);
+  expect(web.getQueuedFollowupCount("web:target")).toBe(0);
+  expect(events.filter(event => event.type === "queue")).toEqual([]);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
 });
 
 test("web channel still processes persisted peer-message steer normally when the target is idle", async () => {
@@ -499,10 +509,11 @@ test("web channel still processes persisted peer-message steer normally when the
       getAgentHandleForChat: (chatJid: string) => activeChats.find((chat) => chat.chat_jid === chatJid)?.agent_name ?? null,
       isStreaming: () => false,
       isActive: () => false,
-      queueStreamingMessage: async () => ({ queued: false }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = () => {};
 
   const res = await (web as any).handleRequest(new Request("http://test/agent/peer-message", {
@@ -523,6 +534,7 @@ test("web channel still processes persisted peer-message steer normally when the
   const pending = db.getMessagesSince("web:target", "", "PiClaw");
   expect(pending).toHaveLength(1);
   expect(pending[0].content).toContain("Please start normally.");
+  expect(intents).toEqual([]);
 });
 
 test("direct chat tool relay persists steering rows when the target session is streaming", async () => {
@@ -541,7 +553,7 @@ test("direct chat tool relay persists steering rows when the target session is s
     { branch_id: "branch-target", chat_jid: "web:target", root_chat_jid: "web:source", parent_branch_id: "branch-source", agent_name: "target" },
   ];
   const events: Array<{ type: string; data: any }> = [];
-  const queuedSteers: Array<{ chatJid: string; text: string; behavior: string }> = [];
+  const queuedSteers: NativeQueueIntent[] = [];
 
   const webMod = await import("../../../src/channels/web.js");
   const agentPool = {
@@ -551,16 +563,13 @@ test("direct chat tool relay persists steering rows when the target session is s
     getAgentHandleForChat: (chatJid: string) => knownChats.find((chat) => chat.chat_jid === chatJid)?.agent_name ?? null,
     isStreaming: (chatJid: string) => chatJid === "web:target",
     isActive: (chatJid: string) => chatJid === "web:target",
-    queueStreamingMessage: async (chatJid: string, text: string, behavior: string) => {
-      queuedSteers.push({ chatJid, text, behavior });
-      return { queued: true };
-    },
     getContextUsageForChat: async () => null,
   };
   const web = new (webMod.WebChannel as any)({
     queue: { enqueue: (_task: unknown, key: string) => events.push({ type: "queue", data: { key } }) },
     agentPool,
   });
+  installNativeQueuePorts(web, { onIntent: input => queuedSteers.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -592,6 +601,7 @@ test("direct chat tool relay persists steering rows when the target session is s
 
   const timeline = db.getTimeline("web:target", 10);
   expect(timeline).toHaveLength(1);
+  expect(result.row_id).toBe(timeline[0].id);
   expect(timeline[0].data.content).toContain("Please adjust the active direct run.");
   expect(timeline[0].data.content_blocks?.[0]).toMatchObject({
     type: "peer_message",
@@ -601,6 +611,15 @@ test("direct chat tool relay persists steering rows when the target session is s
     body: "Please adjust the active direct run.",
   });
   expect(db.getMessagesSince("web:target", "", "PiClaw")).toHaveLength(0);
+  expect(timeline[0].data.thread_id).toBe(timeline[0].id);
+  expect(queuedSteers[0].text).toBe(timeline[0].data.content);
+  expect(queuedSteers[0].rowId).toBeLessThan(0);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(timeline[0].id)).toEqual({ id: queuedSteers[0].sourceId });
+  expect(db.getTimeline("web:source", 10)).toEqual([]);
+  expect(web.getQueuedFollowupCount("web:target")).toBe(0);
+  expect(events.filter(event => event.type === "queue")).toEqual([]);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
 });
 
 test("web channel lists known chat branches for a root chat", async () => {
@@ -1032,6 +1051,8 @@ test("web channel defers /queue command into queue-state without placeholder row
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
   const req = new Request("http://test/agent/default/message", {
     method: "POST",
@@ -1049,8 +1070,8 @@ test("web channel defers /queue command into queue-state without placeholder row
   expect(queueState.items[0].content).toBe("do this");
 
   const timeline = db.getTimeline("web:default", 10);
-  expect(timeline.length).toBe(1);
-  expect(timeline[0].data.content).toBe("/queue do this");
+  expect(timeline).toHaveLength(0);
+  expect(intents).toEqual([]);
 });
 
 test("web channel queues normal message as follow-up when no mode is provided", async () => {
@@ -1096,6 +1117,8 @@ test("web channel queues normal message as follow-up when no mode is provided", 
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
   const req = new Request("http://test/agent/default/message", {
     method: "POST",
@@ -1124,6 +1147,7 @@ test("web channel queues normal message as follow-up when no mode is provided", 
   const timeline = db.getTimeline("web:default", 10);
   expect(timeline.length).toBe(1);
   expect(timeline[0].data.content).toBe("root turn");
+  expect(intents).toEqual([]);
 });
 
 test("web channel queues normal message as follow-up when session is active for compaction but not streaming", async () => {
@@ -1151,6 +1175,8 @@ test("web channel queues normal message as follow-up when session is active for 
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
   const req = new Request("http://test/agent/default/message", {
     method: "POST",
@@ -1172,6 +1198,7 @@ test("web channel queues normal message as follow-up when session is active for 
 
   const timeline = db.getTimeline("web:default", 10);
   expect(timeline).toHaveLength(0);
+  expect(intents).toEqual([]);
 });
 
 test("web channel processes messages normally when a turn is inflight but not actively streaming", async () => {
@@ -1258,6 +1285,8 @@ test("web channel defers new auto submissions behind deferred backlog and wakes 
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
   web.enqueueQueuedFollowupItem("web:default", 0, "older deferred");
 
@@ -1283,6 +1312,7 @@ test("web channel defers new auto submissions behind deferred backlog and wakes 
 
   const timeline = db.getTimeline("web:default", 10);
   expect(timeline.length).toBe(0);
+  expect(intents).toEqual([]);
 });
 
 test("web channel exposes queued follow-up items from queue-state", async () => {
@@ -1304,10 +1334,11 @@ test("web channel exposes queued follow-up items from queue-state", async () => 
         message: "Queued as a follow-up (one-at-a-time).",
         queued_followup: true,
       }),
-      removeQueuedFollowupMessage: async () => true,
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
   const reqOne = new Request("http://test/agent/default/message", {
     method: "POST",
@@ -1333,10 +1364,23 @@ test("web channel exposes queued follow-up items from queue-state", async () => 
   expect(payload.items[0].content).toContain("first followup");
   expect(payload.items[1].content).toContain("second followup");
 
+  const acceptedSources = db.getDeferredQueuedFollowups("web:default");
+  expect(acceptedSources.every(item => item.source_accepted && item.source_id)).toBe(true);
+  const rejectedRemoval = await web.handleRequest(new Request("http://test/agent/queue-remove", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ row_id: payload.items[0].row_id }),
+  }));
+  // No host cancellation port: never delete or resubmit accepted source data.
+  expect(rejectedRemoval.status).toBe(500);
+  expect(db.getDeferredQueuedFollowups("web:default")).toEqual(acceptedSources);
+  expect(await (await web.handleRequest(new Request("http://test/agent/queue-state"))).json()).toEqual(payload);
+
+  // Manual (unaccepted) queue removal remains supported and keeps both siblings.
+  const manualRowId = web.enqueueQueuedFollowupItem("web:default", 0, "manual removable item");
   const removeReq = new Request("http://test/agent/queue-remove", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ row_id: payload.items[0].row_id }),
+    body: JSON.stringify({ row_id: manualRowId }),
   });
   const removeRes = await (web as any).handleRequest(removeReq);
   const removeJson = await removeRes.json();
@@ -1346,8 +1390,11 @@ test("web channel exposes queued follow-up items from queue-state", async () => 
 
   const queueStateAfter = await (web as any).handleRequest(new Request("http://test/agent/queue-state"));
   const payloadAfter = await queueStateAfter.json();
-  expect(payloadAfter.count).toBe(1);
-  expect(payloadAfter.items[0].content).toContain("second followup");
+  expect(payloadAfter).toEqual(payload);
+  expect(db.getDeferredQueuedFollowups("web:default")).toEqual(acceptedSources);
+  expect(db.getTimeline("web:default", 10)).toEqual([]);
+  expect(intents).toEqual([]);
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
 });
 
 test("web channel queue removal respects explicit branch chat_jid", async () => {
@@ -1489,7 +1536,7 @@ test("web channel queues steering without advancing cursor", async () => {
     queue: { enqueue: () => {} },
     agentPool: {
       setSessionBinder: () => {},
-      queueStreamingMessage: async () => ({ queued: true }),
+      isStreaming: () => true,
       runAgent: async () => ({ status: "success", result: "ok" }),
       getContextUsageForChat: async () => null,
       applyControlCommand: async (_chatJid, command) => ({
@@ -1499,6 +1546,8 @@ test("web channel queues steering without advancing cursor", async () => {
       }),
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -1515,7 +1564,19 @@ test("web channel queues steering without advancing cursor", async () => {
   expect(json.queued).toBe("steer");
   expect(db.getChatCursor("web:default")).toBe("");
   const pending = (web as any).consumePendingSteering("web:default");
-  expect(pending).toHaveLength(1);
+  expect(pending).toEqual([]);
+  expect(intents).toHaveLength(1);
+  expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "this", behavior: "steer" });
+  const accepted = db.getTimeline("web:default", 10);
+  expect(accepted).toHaveLength(1);
+  expect(accepted[0].data.content).toBe("this");
+  expect(json.user_message).toEqual(accepted[0]);
+  expect(accepted[0].data.thread_id).toBe(accepted[0].id);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(accepted[0].id)).toEqual({ id: intents[0].sourceId });
+  expect(db.getMessagesSince("web:default", "", "PiClaw")).toEqual([]);
+  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
   expect(events.some((event) => event.type === "agent_steer_queued")).toBe(true);
 });
 
@@ -1539,6 +1600,8 @@ test("web channel defers active /queue without creating a timeline message", asy
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -1562,9 +1625,10 @@ test("web channel defers active /queue without creating a timeline message", asy
   const timeline = db.getTimeline("web:default", 10);
   expect(timeline.length).toBe(0);
   expect(events.some((event) => event.type === "agent_followup_queued")).toBe(true);
+  expect(intents).toEqual([]);
 });
 
-test("web channel defers active /steer command without creating a timeline message", async () => {
+test("web channel materializes active /steer as one accepted timeline message", async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -1582,7 +1646,6 @@ test("web channel defers active /steer command without creating a timeline messa
     queue: { enqueue: () => {} },
     agentPool: {
       isStreaming: () => true,
-      queueStreamingMessage: async () => ({ queued: true }),
       applyControlCommand: async () => {
         applyCalls += 1;
         return { status: "success", message: "unexpected" };
@@ -1590,6 +1653,8 @@ test("web channel defers active /steer command without creating a timeline messa
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -1607,12 +1672,22 @@ test("web channel defers active /steer command without creating a timeline messa
   expect(applyCalls).toBe(0);
   expect((web as any).consumePendingSteering("web:default")).toEqual([]);
 
-  const timeline = db.getTimeline("web:default", 10);
-  expect(timeline.length).toBe(0);
+  expect(intents).toHaveLength(1);
+  expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "now", behavior: "steer" });
+  const accepted = db.getTimeline("web:default", 10);
+  expect(accepted).toHaveLength(1);
+  expect(accepted[0].data.content).toBe("now");
+  expect(json.user_message).toEqual(accepted[0]);
+  expect(accepted[0].data.thread_id).toBe(accepted[0].id);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(accepted[0].id)).toEqual({ id: intents[0].sourceId });
+  expect(db.getMessagesSince("web:default", "", "PiClaw")).toEqual([]);
+  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
   expect(events.some((event) => event.type === "agent_steer_queued")).toBe(true);
 });
 
-test("web channel atomically converts a queued item into steering when active", async () => {
+for (const chatJid of ["web:default", "web:branch"]) test(`web channel atomically converts an accepted queued item into steering when active in ${chatJid}`, async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -1620,13 +1695,13 @@ test("web channel atomically converts a queued item into steering when active", 
   const db = await import("../../../src/db.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
-  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeChatMetadata(chatJid, new Date().toISOString(), "Web");
 
   const rootMessageId = `msg-${Math.random()}`;
   const rootTimestamp = new Date().toISOString();
   const rootRowId = db.storeMessage({
     id: rootMessageId,
-    chat_jid: "web:default",
+    chat_jid: chatJid,
     sender: "web-user",
     sender_name: "You",
     content: "root turn",
@@ -1635,7 +1710,7 @@ test("web channel atomically converts a queued item into steering when active", 
     is_bot_message: false,
   });
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
-  db.beginChatRun("web:default", rootTimestamp, {
+  db.beginChatRun(chatJid, rootTimestamp, {
     prevTs: "",
     messageId: rootMessageId,
     startedAt: new Date().toISOString(),
@@ -1648,18 +1723,28 @@ test("web channel atomically converts a queued item into steering when active", 
     agentPool: {
       isStreaming: () => true,
       setSessionBinder: () => {},
-      queueStreamingMessage: async () => ({ queued: true }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
 
-  const queueReq = new Request("http://test/agent/default/message", {
+  const otherChat = chatJid === "web:default" ? "web:branch" : "web:default";
+  db.storeChatMetadata(otherChat, new Date().toISOString(), "Other branch");
+  web.enqueueQueuedFollowupItem(otherChat, 0, "other branch sibling");
+  const otherSources = db.getDeferredQueuedFollowups(otherChat);
+  const siblingRowId = web.enqueueQueuedFollowupItem(chatJid, 0, "untouched sibling");
+  const sibling = db.getDeferredQueuedFollowups(chatJid)[0];
+  const mediaId = db.createMedia("correction.txt", "text/plain", new TextEncoder().encode("correction"), null);
+  const blocks = [{ type: "text", text: "queued structured correction" }];
+  const previews = [{ url: "https://fixture.invalid", title: "Correction" }];
+  const queueReq = new Request(`http://test/agent/default/message?chat_jid=${encodeURIComponent(chatJid)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content: "queued steer me" }),
+    body: JSON.stringify({ content: "queued steer me", media_ids: [mediaId], content_blocks: blocks, link_previews: previews, screen_hint: "tablet" }),
   });
   const queueRes = await (web as any).handleRequest(queueReq);
   const queueJson = await queueRes.json();
@@ -1667,15 +1752,20 @@ test("web channel atomically converts a queued item into steering when active", 
   expect(queueJson.queued).toBe("followup");
   expect(queueJson.thread_id).toBe(null);
 
-  const queueStateRes = await (web as any).handleRequest(new Request("http://test/agent/queue-state"));
+  const queueStateRes = await (web as any).handleRequest(new Request(`http://test/agent/queue-state?chat_jid=${encodeURIComponent(chatJid)}`));
   const queueState = await queueStateRes.json();
-  expect(queueState.items[0].thread_id).toBe(null);
-  const rowId = queueState.items[0].row_id;
+  const queuedStateItem = queueState.items.find((item: any) => item.content === "queued steer me");
+  expect(queuedStateItem.thread_id).toBe(null);
+  const rowId = queuedStateItem.row_id;
+  const source = db.getDeferredQueuedFollowups(chatJid).find(item => item.rowId === rowId)!;
+  expect(source.source_accepted).toBe(true);
+  expect(source.source_id).toBeTruthy();
+  expect(source.threadId).toBe(null);
 
   const res = await (web as any).handleRequest(new Request("http://test/agent/queue-steer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ row_id: rowId }),
+    body: JSON.stringify({ chat_jid: chatJid, row_id: rowId }),
   }));
   const json = await res.json();
 
@@ -1683,15 +1773,31 @@ test("web channel atomically converts a queued item into steering when active", 
   expect(json.status).toBe("ok");
   expect(json.queued).toBe("steer");
   expect(json.user_message?.data?.content).toBe("queued steer me");
-  expect(json.thread_id).toBe(rootRowId);
-  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
+  expect(json.user_message.data.thread_id).toBe(json.user_message.id);
+  expect(json.user_message.id).not.toBe(rootRowId);
+  expect(web.getQueuedFollowupCount(chatJid)).toBe(1);
+  expect(db.getDeferredQueuedFollowups(chatJid)).toEqual([sibling]);
+  expect(sibling.rowId).toBe(siblingRowId);
   expect(events.some((event) => event.type === "agent_followup_removed")).toBe(true);
   expect(events.some((event) => event.type === "new_post" && event.data?.data?.content === "queued steer me")).toBe(true);
-  expect(events.some((event) => event.type === "agent_steer_queued" && event.data?.thread_id === rootRowId)).toBe(true);
+  expect(events.some((event) => event.type === "agent_steer_queued" && event.data?.thread_id === json.user_message.id)).toBe(true);
 
-  const timeline = db.getTimeline("web:default", 10);
+  const timeline = db.getTimeline(chatJid, 10);
   const steerMessage = timeline.find((item: any) => item.data.content === "queued steer me");
-  expect(steerMessage?.data?.thread_id).toBe(rootRowId);
+  expect(timeline).toHaveLength(2);
+  expect(steerMessage?.id).toBe(json.user_message.id);
+  expect(steerMessage?.data?.thread_id).toBe(steerMessage?.id);
+  expect(steerMessage?.data?.media_ids).toEqual(source.mediaIds);
+  expect(steerMessage?.data?.content_blocks).toEqual(source.contentBlocks);
+  expect(steerMessage?.data?.link_previews).toEqual(source.linkPreviews);
+  expect(steerMessage?.data?.screen_hint).toBe(source.screenHint);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(steerMessage!.id)).toEqual({ id: source.source_id });
+  expect(intents).toEqual([{ chatJid: chatJid, text: source.queuedContent, behavior: "steer", sourceId: source.source_id!, rowId }]);
+  expect(db.getMessagesSince(chatJid, "", "PiClaw").map(item => item.id)).toEqual([rootMessageId]);
+  expect(db.getDeferredQueuedFollowups(otherChat)).toEqual(otherSources);
+  expect(db.getTimeline(otherChat, 10)).toEqual([]);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
 });
 
 test("web channel emits queue removal before steer enqueue when converting a queued item while active", async () => {
@@ -1730,15 +1836,25 @@ test("web channel emits queue removal before steer enqueue when converting a que
     agentPool: {
       isStreaming: () => true,
       setSessionBinder: () => {},
-      queueStreamingMessage: async () => ({ queued: true }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
 
-  const rowId = web.enqueueQueuedFollowupItem("web:default", 0, "queued ordering check");
+  const admitted = await web.handleRequest(new Request("http://test/agent/default/message", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "queued ordering check" }),
+  }));
+  expect(admitted.status).toBe(201);
+  expect((await admitted.json()).queued).toBe("followup");
+  const source = db.getDeferredQueuedFollowups("web:default")[0];
+  expect(source.source_accepted).toBe(true);
+  const rowId = source.rowId;
+  events.length = 0;
 
   const res = await (web as any).handleRequest(new Request("http://test/agent/queue-steer", {
     method: "POST",
@@ -1747,13 +1863,19 @@ test("web channel emits queue removal before steer enqueue when converting a que
   }));
 
   expect(res.status).toBe(201);
+  const json = await res.json();
+  expect(intents).toEqual([{ chatJid: "web:default", text: source.queuedContent, behavior: "steer", sourceId: source.source_id!, rowId }]);
+  expect(json.user_message.data.thread_id).toBe(json.user_message.id);
+  expect(json.user_message.id).not.toBe(rootRowId);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(json.user_message.id)).toEqual({ id: source.source_id });
+  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
   const orderedTypes = events
     .map((event) => event.type)
     .filter((type) => ["agent_followup_removed", "new_post", "agent_steer_queued"].includes(type));
   expect(orderedTypes).toEqual(["agent_followup_removed", "new_post", "agent_steer_queued"]);
 });
 
-test("web channel atomically converts a queued item into an immediate send when inactive", async () => {
+for (const streaming of [false, true]) for (const placeholder of [false, true]) test(`web channel rejects unaccepted ${placeholder ? "placeholder" : "manual queue"} steering unchanged; streaming ${streaming}`, async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -1763,19 +1885,28 @@ test("web channel atomically converts a queued item into an immediate send when 
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
 
+  let enqueued = 0;
+  const events: string[] = [];
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
-    queue: { enqueue: async (fn: () => Promise<void>) => fn() },
+    queue: { enqueue: () => { enqueued++; } },
     agentPool: {
-      isStreaming: () => false,
+      isStreaming: () => streaming,
       setSessionBinder: () => {},
-      queueStreamingMessage: async () => ({ queued: false }),
       runAgent: async () => ({ status: "success", result: "ok", attachments: [] }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
-  const rowId = web.enqueueQueuedFollowupItem("web:default", 0, "queued send me now");
+  web.broadcastEvent = (type: string) => events.push(type);
+  const historical = placeholder ? web.queueFollowupPlaceholder("web:default", "\u2063", undefined, "queued send me now") : null;
+  const rowId = placeholder ? historical.id : web.enqueueQueuedFollowupItem("web:default", 0, "queued send me now");
+  web.enqueueQueuedFollowupItem("web:default", 0, "keep sibling");
+  const beforeQueue = await (await web.handleRequest(new Request("http://test/agent/queue-state"))).json();
+  const beforeDeferred = db.getDeferredQueuedFollowups("web:default");
+  const beforeTimeline = db.getTimeline("web:default", 10);
   const res = await (web as any).handleRequest(new Request("http://test/agent/queue-steer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1783,15 +1914,15 @@ test("web channel atomically converts a queued item into an immediate send when 
   }));
   const json = await res.json();
 
-  expect(res.status).toBe(201);
-  expect(json.status).toBe("ok");
-  expect(json.user_message?.data?.content).toBe("queued send me now");
-  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
-
-  const timeline = db.getTimeline("web:default", 10);
-  const contents = timeline.map((item: any) => item.data.content);
-  expect(contents).toContain("queued send me now");
-  expect(contents).toContain("ok");
+  expect(res.status).toBe(409);
+  expect(json.user_message).toBeUndefined();
+  expect(web.getQueuedFollowupCount("web:default")).toBe(2);
+  expect(await (await web.handleRequest(new Request("http://test/agent/queue-state"))).json()).toEqual(beforeQueue);
+  expect(db.getDeferredQueuedFollowups("web:default")).toEqual(beforeDeferred);
+  expect(db.getTimeline("web:default", 10)).toEqual(beforeTimeline);
+  expect(enqueued).toBe(0);
+  expect(events).toEqual([]);
+  expect(intents).toEqual([]);
 });
 
 test("web channel queue steering respects explicit branch chat_jid", async () => {
@@ -1805,21 +1936,27 @@ test("web channel queue steering respects explicit branch chat_jid", async () =>
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
   db.storeChatMetadata("web:branch", new Date().toISOString(), "Branch");
 
+  let enqueued = 0;
+  const events: string[] = [];
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
-    queue: { enqueue: async (fn: () => Promise<void>) => fn() },
+    queue: { enqueue: () => { enqueued++; } },
     agentPool: {
       isStreaming: () => false,
       setSessionBinder: () => {},
-      queueStreamingMessage: async () => ({ queued: false }),
       runAgent: async () => ({ status: "success", result: "ok", attachments: [] }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
 
+  web.broadcastEvent = (type: string) => events.push(type);
   const defaultRowId = web.enqueueQueuedFollowupItem("web:default", 0, "default queued send");
   const branchRowId = web.enqueueQueuedFollowupItem("web:branch", 0, "branch queued send");
 
+  const beforeDefault = db.getDeferredQueuedFollowups("web:default");
+  const beforeBranch = db.getDeferredQueuedFollowups("web:branch");
   const steerRes = await (web as any).handleRequest(new Request("http://test/agent/queue-steer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1827,20 +1964,26 @@ test("web channel queue steering respects explicit branch chat_jid", async () =>
   }));
   const steerJson = await steerRes.json();
 
-  expect(steerRes.status).toBe(201);
-  expect(steerJson.status).toBe("ok");
-  expect(steerJson.user_message?.chat_jid).toBe("web:branch");
-  expect(steerJson.user_message?.data?.content).toBe("branch queued send");
-  expect(web.getQueuedFollowupCount("web:branch")).toBe(0);
+  expect(steerRes.status).toBe(409);
+  expect(steerJson.user_message).toBeUndefined();
+  expect(web.getQueuedFollowupCount("web:branch")).toBe(1);
   expect(web.getQueuedFollowupCount("web:default")).toBe(1);
+  expect(db.getDeferredQueuedFollowups("web:default")).toEqual(beforeDefault);
+  expect(db.getDeferredQueuedFollowups("web:branch")).toEqual(beforeBranch);
+  expect(db.getTimeline("web:branch", 10)).toEqual([]);
+  expect(db.getTimeline("web:default", 10)).toEqual([]);
+  expect(intents).toEqual([]);
+  expect(events).toEqual([]);
+  expect(enqueued).toBe(0);
 
-  const branchTimeline = db.getTimeline("web:branch", 10).map((item: any) => item.data.content);
-  expect(branchTimeline).toContain("branch queued send");
-  expect(branchTimeline).toContain("ok");
-
-  const defaultTimeline = db.getTimeline("web:default", 10).map((item: any) => item.data.content);
-  expect(defaultTimeline).not.toContain("branch queued send");
-  expect(defaultTimeline).not.toContain("ok");
+  // A missing row does not grant permission to adopt or resubmit anything.
+  const wrongScope = await web.handleRequest(new Request("http://test/agent/queue-steer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_jid: "web:branch", row_id: -999999 }),
+  }));
+  expect(wrongScope.status).toBe(200);
+  expect((await wrongScope.json()).removed).toBe(false);
+  expect(db.getDeferredQueuedFollowups("web:branch")).toEqual(beforeBranch);
 
   const defaultQueueState = await (web as any).handleRequest(new Request("http://test/agent/queue-state?chat_jid=web%3Adefault"));
   const defaultPayload = await defaultQueueState.json();
@@ -1848,7 +1991,7 @@ test("web channel queue steering respects explicit branch chat_jid", async () =>
   expect(defaultPayload.items[0].row_id).toBe(defaultRowId);
 });
 
-test("web channel defers active compose steer without creating a timeline message", async () => {
+for (const persistSteer of [undefined, false, true]) test(`web channel materializes active compose steer as one accepted timeline message; persist_steer ${persistSteer}`, async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -1865,10 +2008,11 @@ test("web channel defers active compose steer without creating a timeline messag
     queue: { enqueue: () => {} },
     agentPool: {
       isStreaming: () => true,
-      queueStreamingMessage: async () => ({ queued: true }),
       getContextUsageForChat: async () => null,
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.broadcastEvent = (type: string, data: unknown) => {
     events.push({ type, data });
   };
@@ -1876,7 +2020,7 @@ test("web channel defers active compose steer without creating a timeline messag
   const req = new Request("http://test/agent/default/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content: "steer now", mode: "steer" }),
+    body: JSON.stringify({ content: "steer now", mode: "steer", persist_steer: persistSteer }),
   });
 
   const res = await (web as any).handleRequest(req);
@@ -1886,8 +2030,18 @@ test("web channel defers active compose steer without creating a timeline messag
   expect(db.getChatCursor("web:default")).toBe("");
   expect((web as any).consumePendingSteering("web:default")).toEqual([]);
 
-  const timeline = db.getTimeline("web:default", 10);
-  expect(timeline.length).toBe(0);
+  expect(intents).toHaveLength(1);
+  expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "steer now", behavior: "steer" });
+  const accepted = db.getTimeline("web:default", 10);
+  expect(accepted).toHaveLength(1);
+  expect(accepted[0].data.content).toBe("steer now");
+  expect(json.user_message).toEqual(accepted[0]);
+  expect(accepted[0].data.thread_id).toBe(accepted[0].id);
+  expect(db.getDb().query("SELECT id FROM messages WHERE rowid = ?").get(accepted[0].id)).toEqual({ id: intents[0].sourceId });
+  expect(db.getMessagesSince("web:default", "", "PiClaw")).toEqual([]);
+  expect(web.getQueuedFollowupCount("web:default")).toBe(0);
+  expect(web.agentPool.queueStreamingMessage).toBeUndefined();
+  expect(web.agentPool.removeQueuedFollowupMessage).toBeUndefined();
   expect(events.some((event) => event.type === "agent_steer_queued")).toBe(true);
 });
 
@@ -1920,6 +2074,8 @@ test("web channel defers /steer without active stream into queue-state", async (
       }),
     },
   });
+  const intents: NativeQueueIntent[] = [];
+  installNativeQueuePorts(web, { onIntent: input => intents.push(input) });
   web.sendMessage = async () => {
     sendCalls += 1;
   };
@@ -1944,6 +2100,7 @@ test("web channel defers /steer without active stream into queue-state", async (
   expect(queueState.count).toBe(1);
   expect(queueState.items[0].content).toBe("this");
   expect(events.some((event) => event.type === "agent_followup_queued")).toBe(true);
+  expect(intents).toEqual([]);
 });
 
 test("processChat does not advance cursor to pending steering timestamps or skip later persisted messages", async () => {
