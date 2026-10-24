@@ -1,6 +1,12 @@
-# Native qualification evidence
+# Native qualification
 
-Current assessment: [#1650 acceptance — 22 October 2026](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261022.md). It records current native controls, family retirement, qualification repairs and explicit remaining acceptance. Dated checkpoints and aggregate counts below retain their original source and scope.
+`make ci-native` runs the required offline native gate; `make ci-full` requires both host and native qualification. See [Native validation](../../docs/native-validation.md) for exact preparation and all five required exports.
+
+The shared [gate contract](../../scripts/native-gate-contract.json) pins two add-on checkouts and all 109 native files, including Goal. ADDONS/CORE/GOAL use one native checkout; CONTRACT uses separate historical source. Catalogue dependencies come from frozen `qualification/pi-durable-130/node_modules`, never a live profile. Root Pi 1.2.0 and the private engine's Pi 1.3.0 graph stay isolated. The runner verifies existing provenance, runs both private type projects and required accepted-source integration, then requires terminal Bun reports for the complete native inventory. No skip, filter, empty run or missing fixture can qualify this gate. It performs no source acquisition or dependency installation.
+
+## Historical checkpoints
+
+The [#1650 acceptance checkpoint — 22 October 2026](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261022.md) records native controls, family retirement, qualification repairs and remaining acceptance at that date. The receipts below retain their original dates, source revisions and scope. References to an inactive or source-only engine, older fixture roots and partial file inventories describe historical checkpoints; the application-owned native engine now has a required gate. These counts do not qualify a later revision.
 
 ## Historical Native MCP transport close admission — targeted hardening
 
@@ -616,7 +622,7 @@ parent cancellation gap in HC-009/PC-004/PC-015. No activation or migration ran.
 This documentation refresh runs no tests, network requests or service operations
 and changes no code, tests, CI, source pins, commits or pushes.
 
-# Current native Code Review: all nine model-tool actions — published `4e1ffe2fe`
+# Historical native Code Review: all nine model-tool actions — published `4e1ffe2fe`
 
 The actual default factory admits all nine registered Code Review actions:
 `dispatches`, `dispatch`, `thread`, `threads`, `reply`, `edit`, `deleteMessage`,
@@ -697,7 +703,7 @@ owner or stale source denies the write; post-callback revocation rolls back nest
 store transactions, including messages, versions, events and request receipts.
 An existing request receipt cannot bypass renewed authority checks.
 
-## Current source and supplied receipts
+## Historical source and supplied receipts
 
 Core HEAD is `2641f073f` with native-write WIP. Add-on PR #208 source and the
 qualification CI checkout select
@@ -773,7 +779,7 @@ capture fix and missing-case coverage.
 
 ## Exact source and existing receipts
 
-CI now uses one merged add-ons snapshot, `08746aa3f114d49f954c1dff712d9f74acca460f`,
+At this historical checkpoint, CI used one merged add-ons snapshot, `08746aa3f114d49f954c1dff712d9f74acca460f`,
 through `DURABLE_ADDONS_ROOT` for every fixture. It replaces the five earlier
 checkout sources and per-feature root variables described in historical receipts
 below. Code Review, editable table, Office Viewer and Draw.io directories are
@@ -1095,7 +1101,7 @@ separates source qualification from fixture-only and unresolved acceptance work.
 
 **Candidate in-place prototype qualification, not production integration or completion of #1650.**
 Base: Piclaw `4e08281bb6d3942e7560edabca8581acf556b138`; root still targets Pi 1.2.0.
-The inactive source-only engine owns the candidate manifest, lock and node_modules
+At this historical checkpoint, the source-only engine owned the candidate manifest, lock and node_modules
 under `runtime/durable-engine`. This qualification package has only test/tooling
 dependencies. Its public re-export files in the engine's `qualification/` directory
 share the engine's physical candidate graph, including types; they contain no
@@ -1103,28 +1109,9 @@ compatibility or wrapper logic. Do not mix handles, contexts or TypeBox objects
 with the root Pi 1.2.0 graph. The candidate API may
 change without notice; exact 1.3.0 byte evidence does not qualify future versions.
 
-## Run
+## Historical execution setup
 
-From the worktree root, install the engine first, then the qualification tooling:
-
-```sh
-cd runtime/durable-engine
-bun install --frozen-lockfile --ignore-scripts
-bun run typecheck
-cd ../../qualification/pi-durable-130
-bun install --frozen-lockfile --ignore-scripts
-bun run typecheck
-bun run test # isolated launcher: test.ts sqlite.test.ts host-handoff.test.ts migration.test.ts
-```
-
-Installation may access npm; normal tests are offline. The preload requires the
-existing disposable-filesystem launcher and isolated HOME/workspace/store/agent
-paths; direct `bun test` fails closed. Fetch/WebSocket and credential lookups
-throw; environment credentials are sanitized. These are JS regression guards,
-**not an OS security sandbox**. Only a keyless synthetic provider/local stream and
-synthetic tools run; no real providers, accounts, filesystem or shell tools.
-Typecheck uses TypeScript 7.0.2, @types/bun 1.3.14 (bun-types 1.4.2), and
-`skipLibCheck` for external declarations; no bunx download/root dependency symlink.
+This first slice installed and typechecked the private engine before qualification tooling and ran a four-file candidate inventory. Use the [native gate runbook](../../docs/native-validation.md) for the complete required inventory and offline preparation. The original fixture preload used disposable HOME/workspace/store/agent paths and rejected direct test execution, network requests and credential lookups. Those JavaScript regression guards did not provide an OS security sandbox.
 
 ## Exact candidate identity and provenance
 
@@ -1189,7 +1176,7 @@ Version checks read package.json by file URL, not an unexported package subpath.
 Host imports resolve to this worktree's `runtime/`: canonical request hashing,
 EffectIdentity, real service-work/terminal adapters and InMemoryEffectPayloadResolver.
 Host and candidate graphs remain separate; only JSON data crosses that boundary.
-The engine is source-only and inactive, not shipped by the root package's file list.
+At this historical checkpoint, the engine was source-only, inactive and absent from the root package's file list.
 Importing its entrypoint may read host configuration, but does not open storage,
 spawn processes, register an engine or access the network. The root terminal runtime has the
 optional guard described below; no schema, root dependency/pin, production flag
@@ -1610,7 +1597,7 @@ Production schema/correlation setup, exact running-task cancellation, general
 multimedia settlement and engine bootstrap remain inactive/unqualified. This is
 an implemented reusable integration seam, not completion or deployment of #1650.
 
-## Controlled inactive cutover
+## Historical controlled cutover
 
 `host-cutover.ts` records one explicit writer choice in a caller-owned manifest.
 Initialization is separate; no production schema, engine bootstrap or admission
@@ -1681,7 +1668,7 @@ are rejected, not silently flattened. The combined suite passes 314 tests / 4,93
 assertions across eighteen files plus strict types. Source review cleared this
 inactive rich-output path; no production materializer is registered.
 
-## Application-owned inactive engine package
+## Historical application-owned engine extraction
 
 Reusable modules now live in `runtime/durable-engine`, not the qualification
 fixture directory. That private package owns the exact 1.3.0 dependency graph.

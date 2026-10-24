@@ -27,6 +27,10 @@ coverage/
 **/piclaw-*.tgz
 build/
 
+# Pinned offline qualification fixtures (attested separately by the native gate)
+/.qualification-native-addons/
+/.qualification-addons/
+
 # Session/test artifacts
 *.jsonl
 autoresearch.config.json

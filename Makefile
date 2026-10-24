@@ -11,7 +11,9 @@
 #   portable-mac/windows – Build platform-native portable artifacts on matching runners.
 #   local-install  – Pack and install globally (no restart).
 #   lint/test      – Run Oxlint and bun test suite.
-#   ci-fast        – Run the canonical fast CI guardrails + web build.
+#   ci-fast        – Run host-only fast CI guardrails + web build.
+#   ci-native      – Run required offline native qualification.
+#   ci-full        – Run host + native CI gates.
 #   install-git-hooks – Install local Git hooks that run fast CI before main pushes.
 #   publish-smoke  – Smoke-test a published piclaw image via env-provided args.
 #   up/down/enter  – Docker Compose lifecycle helpers.
@@ -58,7 +60,7 @@ policy-config: ## Print portable project cache/temp paths without creating them
 policy-dirs:
 	@mkdir -p "$(PROJECT_TMP_ROOT)/cache" "$(PROJECT_TMP_ROOT)/build" "$(PROJECT_TMP_ROOT)/tests" "$(PROJECT_TMP_ROOT)/logs" "$(PROJECT_TMP_ROOT)/runs" "$(BUN_INSTALL_CACHE_DIR)" "$(npm_config_cache)"
 
-vendor build-web build-ts build-piclaw pack portable portable-linux portable-linux-baseline portable-mac portable-windows local-install lint test test-coverage ci-fast ci-integration pre-push-ci: | policy-dirs
+vendor build-web build-ts build-piclaw pack portable portable-linux portable-linux-baseline portable-mac portable-windows local-install lint test test-coverage ci-fast ci-native ci-full ci-integration pre-push-ci: | policy-dirs
 
 IMAGE ?= pibox
 TAG ?= latest
@@ -81,7 +83,7 @@ PI_AGENT_VERSION ?= $(shell jq -r '.dependencies["@earendil-works/pi-coding-agen
 WEB_BUILD_TEST_TIMEOUT_MS ?= 20000
 
 .PHONY: help up down enter build build-piclaw build-web build-ts vendor update-mermaid-vendor pack portable portable-linux portable-linux-baseline portable-mac portable-windows \
-        local-install restart lint test test-coverage ci-fast ci-integration install-git-hooks pre-push-ci publish-smoke \
+        local-install restart lint test test-coverage ci-fast ci-native ci-full ci-integration install-git-hooks pre-push-ci publish-smoke \
         dual-tag tag-ghcr sync-version bump-minor bump-patch push
 
 help: ## Show this help
@@ -267,8 +269,14 @@ test: ## Run piclaw tests
 test-coverage: ## Run piclaw tests with coverage
 	cd runtime && bun run test:coverage
 
-ci-fast: ## Run the canonical fast CI contract used by GitHub Actions
+ci-fast: ## Run host-only fast checks and web build (does not qualify native runtime)
 	bun run ci:fast
+
+ci-native: ## Run required offline native qualification (requires five prepared fixture paths)
+	bun run ci:native
+
+ci-full: ## Run host-only fast checks followed by required native qualification
+	bun run ci:full
 
 pre-push-ci: ## Run the pre-push CI guard against the current HEAD in a clean worktree
 	./scripts/git-pre-push-ci-fast.sh --current
@@ -281,7 +289,7 @@ install-git-hooks: ## Install local Git hooks that run fast CI before main pushe
 	chmod +x .git/hooks/pre-push; \
 	echo "Installed .git/hooks/pre-push"
 
-ci-integration: ## Run the full integration gate (lint + all tests + static analysis + build + Playwright)
+ci-integration: ## Run the full integration gate (required native + lint + all host tests + static analysis + build + Playwright)
 	bun run ci:integration
 
 publish-smoke: ## Smoke-test a published piclaw image (requires IMAGE_REF, PLATFORM, EXPECTED_BUN_VERSION, EXPECTED_RESTIC_VERSION)
