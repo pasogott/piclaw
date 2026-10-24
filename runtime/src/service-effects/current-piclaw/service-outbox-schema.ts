@@ -102,7 +102,9 @@ function hasForeignKeyViolation(database: Database): boolean {
 }
 function preflightCertaintyUpgrade(database: Database): void {
   assertOutboxIndexes(database, false);
-  if (database.query(`SELECT 1 FROM sqlite_temp_schema WHERE lower(name) LIKE 'service_effect_s05_%' OR name='piclaw_schema_migrations' COLLATE NOCASE LIMIT 1`).get()) invalidCertaintyUpgrade();
+  // Reading sqlite_temp_schema would allocate temp on an otherwise main-only root.
+  const hasTemp = (database.query("PRAGMA database_list").all() as {name:string}[]).some(row => row.name === "temp");
+  if (hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema WHERE lower(name) LIKE 'service_effect_s05_%' OR name='piclaw_schema_migrations' COLLATE NOCASE LIMIT 1`).get()) invalidCertaintyUpgrade();
   const sql = outboxSchemaSql(database, `${PREFIX}outbox`);
   if (sql !== null && ![HISTORICAL_OUTBOX_SQL, FINAL_OUTBOX_SQL].some(expected => normaliseOutboxSql(sql) === normaliseOutboxSql(expected))) invalidCertaintyUpgrade();
   if (database.query("SELECT 1 FROM main.sqlite_schema WHERE name=? COLLATE NOCASE").get(`${PREFIX}outbox_upgrade`)) invalidCertaintyUpgrade();
@@ -112,12 +114,12 @@ function preflightCertaintyUpgrade(database: Database): void {
     if (object.type === "table") continue;
     if (object.type !== "index" || !OUTBOX_INDEX_SQL.some(expected => normaliseOutboxSql(object.sql) === normaliseOutboxSql(expected))) invalidCertaintyUpgrade();
   }
-  if (database.query("SELECT 1 FROM sqlite_temp_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE LIMIT 1").get(`${PREFIX}outbox`)) invalidCertaintyUpgrade();
+  if (hasTemp && database.query("SELECT 1 FROM sqlite_temp_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE LIMIT 1").get(`${PREFIX}outbox`)) invalidCertaintyUpgrade();
   // DROP's implicit delete must never execute CASCADE/SET NULL/RESTRICT actions.
   // NO ACTION children stay byte-identical while the same-name parent is rebuilt.
   if (database.query(`SELECT 1 FROM main.sqlite_schema AS s, pragma_foreign_key_list(s.name,'main') AS f
       WHERE s.type='table' AND f."table"=? COLLATE NOCASE AND (f.on_delete<>'NO ACTION' OR f.on_update<>'NO ACTION') LIMIT 1`).get(`${PREFIX}outbox`)
-    || database.query(`SELECT 1 FROM sqlite_temp_schema AS s, pragma_foreign_key_list(s.name,'temp') AS f
+    || hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema AS s, pragma_foreign_key_list(s.name,'temp') AS f
       WHERE s.type='table' AND f."table"=? COLLATE NOCASE LIMIT 1`).get(`${PREFIX}outbox`)) invalidCertaintyUpgrade();
   if (database.query(`SELECT 1 FROM ${PREFIX}outbox WHERE
       state NOT IN ('pending','started','completed','failed','unknown','cancelled')

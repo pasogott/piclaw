@@ -186,6 +186,18 @@ function assertFinalConstraints(db: Database) {
 }
 
 describe("EF-S01 exact queue membership owned upgrade", () => {
+  test("applied queue setup preserves a reopened main-only connection without allocating temp", () => {
+    const seed = new Database(":memory:");
+    installServiceWorkSchema(seed);
+    const db = Database.deserialize(seed.serialize()); seed.close();
+    try {
+      const before = db.query("PRAGMA database_list").all();
+      expect(before).toEqual([{seq:0,name:"main",file:""}]);
+      installServiceWorkSchema(db); installServiceWorkSchema(db);
+      expect(db.query("PRAGMA database_list").all()).toEqual(before);
+    } finally { db.close(); }
+  });
+
   test("valid upgrade preserves every rowid/byte/receipt and parent identity; reopen is idempotent and fresh schema matches", () => {
     const dir = mkdtempSync(join(tmpdir(), "work-schema-upgrade-"));
     const path = join(dir, "fixture.sqlite");

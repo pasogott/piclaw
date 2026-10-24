@@ -80,8 +80,10 @@ function invalidUpgrade(): never {
 
 /** Read-only preflight, before even ledger/base DDL. Never reassign bad history. */
 function preflightQueueUpgrade(database: Database): void {
+  // Inspect an existing temp schema without allocating one on a main-only root.
+  const hasTemp = (database.query("PRAGMA database_list").all() as {name:string}[]).some(row => row.name === "temp");
   // Unqualified installer/helper SQL must not resolve to a temporary shadow.
-  if (database.query(`SELECT 1 FROM sqlite_temp_schema WHERE
+  if (hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema WHERE
       lower(name) LIKE 'service_effect_s01_%' OR name='piclaw_schema_migrations' COLLATE NOCASE LIMIT 1`).get()) invalidUpgrade();
   const parent = schemaSql(database, `${SCHEMA_PREFIX}operation_sources`);
   const queue = schemaSql(database, `${SCHEMA_PREFIX}queued_inputs`);
@@ -102,12 +104,12 @@ function preflightQueueUpgrade(database: Database): void {
   if (database.query(`SELECT 1 FROM sqlite_schema WHERE tbl_name = ? COLLATE NOCASE AND
       (type = 'trigger' OR (type = 'index' AND sql IS NOT NULL AND name <> ? COLLATE NOCASE)) LIMIT 1`)
     .get(`${SCHEMA_PREFIX}queued_inputs`, `${SCHEMA_PREFIX}queued_source`)
-    || database.query("SELECT 1 FROM sqlite_temp_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE LIMIT 1")
+    || hasTemp && database.query("SELECT 1 FROM sqlite_temp_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE LIMIT 1")
       .get(`${SCHEMA_PREFIX}queued_inputs`)) invalidUpgrade();
   // Even empty child tables are unsafe: DROP may cascade, or invalidate their FK.
   const child = database.query(`SELECT 1 FROM sqlite_schema AS s, pragma_foreign_key_list(s.name, 'main') AS f
     WHERE s.type='table' AND f."table"=? COLLATE NOCASE LIMIT 1`).get(`${SCHEMA_PREFIX}queued_inputs`);
-  const tempChild = database.query(`SELECT 1 FROM sqlite_temp_schema AS s, pragma_foreign_key_list(s.name, 'temp') AS f
+  const tempChild = hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema AS s, pragma_foreign_key_list(s.name, 'temp') AS f
     WHERE s.type='table' AND f."table"=? COLLATE NOCASE LIMIT 1`).get(`${SCHEMA_PREFIX}queued_inputs`);
   if (child || tempChild) invalidUpgrade();
   if (database.query(`SELECT 1 FROM ${SCHEMA_PREFIX}queued_inputs AS q WHERE

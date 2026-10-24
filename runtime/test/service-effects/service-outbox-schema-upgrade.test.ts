@@ -71,6 +71,20 @@ function data(db: Database) {
 function snapshot(db: Database) { return [schema(db),data(db),db.query("SELECT * FROM piclaw_schema_migrations ORDER BY owner,id").all()]; }
 function flag(db: Database) { return (db.query("PRAGMA defer_foreign_keys").get() as {defer_foreign_keys:number}).defer_foreign_keys; }
 
+test("applied outbox setup preserves a reopened main-only connection without allocating temp", () => {
+  const seed = new Database(":memory:");
+  installServiceOutboxSchema(seed);
+  // ALTER TABLE allocates SQLite's empty internal temp schema. Reopen the
+  // migrated main to ensure validation alone does not allocate that schema.
+  const db = Database.deserialize(seed.serialize()); seed.close();
+  try {
+    const before = db.query("PRAGMA database_list").all();
+    expect(before).toEqual([{seq:0,name:"main",file:""}]);
+    installServiceOutboxSchema(db); installServiceOutboxSchema(db);
+    expect(db.query("PRAGMA database_list").all()).toEqual(before);
+  } finally { db.close(); }
+});
+
 test("fresh certainty CHECK accepts exactly one certainty for every delivery state", () => {
   const db = new Database(":memory:");
   try {

@@ -25,6 +25,8 @@ The rebuild copies all 28 columns and implicit rowids, retains the same table na
 
 Foreign-key enforcement stays ON. A pending step requires valid FKs in every attached database, including main and temp. The installer temporarily defers checks while replacing the same-name parent. After the copied table, indexes and receipt exist, it checks all those databases again. Only then does it clear SQLite's deferred-DROP bookkeeping before completing the savepoint/transaction. It restores the caller's deferral flag after success or rollback. An unrelated pre-existing deferred violation rejects setup without clearing that violation; a caller catching the error still cannot commit invalid data.
 
+SQLite's ALTER TABLE can allocate its empty internal temp namespace during a rebuild. Native qualification still requires the same sole persistent main file, forbids other attachments and verifies that any temp namespace is empty. Validation of an already-migrated, reopened main-only connection does not allocate temp merely to inspect it.
+
 Already-applied steps keep their receipts and validate the recognised shape. Unsupported historical variants require an explicit reviewed migration; setup has no best-effort rewrite or data-discard path.
 
 ## Regression checks
