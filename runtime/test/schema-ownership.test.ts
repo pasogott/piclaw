@@ -80,6 +80,15 @@ test("an index on an optional retained table remains required whenever its paren
   expect(() => assertSchemaInventory(readSchemaInventory(db), contract, "fixture")).toThrow("Missing required object index:records_state");
 }));
 
+test("partial retained owner components require their declared tables", () => withDatabase((db, contract) => {
+  const expected = contract.objects["table:records"]!;
+  expected.requiredIn = [];
+  expected.requiredWhenOwnerPresent = true;
+  for (const object of Object.values(contract.objects)) if (object.table === "records") object.requiredIn = [];
+  db.exec("DROP TABLE records");
+  expect(() => assertSchemaInventory(readSchemaInventory(db), contract, "fixture")).toThrow("Missing required object table:records");
+}));
+
 test("unowned documents and unsupported contract versions fail closed", () => withDatabase((db, contract) => {
   contract.documents.push({ kind: "orphan", owner: "missing", scope: "conversation", history: "latest", fork: "initial" });
   expect(() => assertSchemaInventory(readSchemaInventory(db), contract, "fixture")).toThrow("Unowned or incomplete document orphan");

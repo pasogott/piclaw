@@ -80,6 +80,9 @@ applicationTest("historical core upgrade classifies its one approved spelling di
     db.exec("SAVEPOINT archive_negative; DROP INDEX idx_piclaw_agent_entries_parent");
     try { expect(() => inventory(db, "core")).toThrow("Missing required object index:idx_piclaw_agent_entries_parent"); }
     finally { db.exec("ROLLBACK TO archive_negative; RELEASE archive_negative"); }
+    db.exec("SAVEPOINT archive_fts_negative; DROP TABLE piclaw_agent_entries_fts");
+    try { expect(() => inventory(db, "core")).toThrow("Missing required object table:piclaw_agent_entries_fts"); }
+    finally { db.exec("ROLLBACK TO archive_fts_negative; RELEASE archive_fts_negative"); }
     const child = Bun.spawnSync([process.execPath, new URL("../../runtime/scripts/schema-inventory.ts", import.meta.url).pathname,
       join(process.env.PICLAW_STORE!, "messages.db"), "core"], { env: process.env, stdout: "pipe", stderr: "pipe" });
     expect(child.exitCode).toBe(0);

@@ -28,6 +28,8 @@ export interface SchemaContract {
     requiredIn: string[];
     /** Exact parent for an index/trigger; required even on a retained optional table. */
     table?: string;
+    /** Atomic optional component: any retained owned object requires this table. */
+    requiredWhenOwnerPresent?: boolean;
     derivedIndexes?: string[];
   }>;
   documents: { kind: string; owner: string; scope: string; history: string; fork: string }[];
@@ -114,6 +116,7 @@ export function classifySchemaInventory(objects: readonly SchemaObject[], contra
     if (!contract.owners[document.owner] || !document.kind || !document.scope || !document.history || !document.fork) errors.push(`Unowned or incomplete document ${document.kind}`);
   }
   const seen = new Set<string>();
+  const seenOwners = new Set<string>();
   const classified = objects.map(object => {
     const key = `${object.kind}:${identity(object.name)}`;
     const parent = contract.objects[`table:${identity(object.table)}`];
@@ -126,12 +129,14 @@ export function classifySchemaInventory(objects: readonly SchemaObject[], contra
     const fingerprints = object.derived ? expected.derivedIndexes ?? [] : expected.fingerprints;
     if (!fingerprints.includes(object.fingerprint)) errors.push(`Unapproved schema drift ${key}`);
     seen.add(key);
+    seenOwners.add(expected.owner);
     return { ...object, owner: expected.owner, category: owner?.category,
       presence: expected.requiredIn.includes(profile) ? "required" : "optional-preserved" };
   });
   for (const [key, expected] of Object.entries(contract.objects)) {
     const parentPresent = expected.table !== undefined && seen.has(`table:${identity(expected.table)}`);
-    if ((expected.requiredIn.includes(profile) || parentPresent) && !seen.has(key)) errors.push(`Missing required object ${key}`);
+    const componentPresent = expected.requiredWhenOwnerPresent === true && seenOwners.has(expected.owner);
+    if ((expected.requiredIn.includes(profile) || parentPresent || componentPresent) && !seen.has(key)) errors.push(`Missing required object ${key}`);
   }
   // Unknown profiles must not silently disable the required-object checks.
   if (!Object.values(contract.objects).some(object => object.requiredIn.includes(profile))) errors.push(`Unknown schema profile ${profile}`);

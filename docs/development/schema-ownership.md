@@ -30,7 +30,7 @@ The qualified profiles use core schema source `3c66c54de0bc4826dc51655bb5f009ce6
 
 The historical fixture seeds the older chat-branch uniqueness and token-usage schema through the existing upgrade paths. It verifies retained chat labels, branch identity, legacy usage, exact imported JSONL rows and owner/checksum receipts. Fresh native startup does not recreate the session archive.
 
-Optional add-on/archive objects may remain when their producer is absent. Their exact declared shapes still apply. An index or trigger declared on a retained table remains required whenever that table is present. This does not qualify a new add-on enable/disable mechanism; add-on lifecycle work remains separately scoped.
+Optional add-on/archive objects may remain when their producer is absent. Their exact declared shapes still apply. The atomic SDK/native/add-on/archive components declare `requiredWhenOwnerPresent`: any retained owned object requires all declared component tables, including FTS roots and shadows. An index or trigger declared on a retained table remains required whenever that table is present. Dropping an archive FTS root while leaving its entries/receipts therefore fails. This does not qualify a new add-on enable/disable mechanism; add-on lifecycle work remains separately scoped.
 
 Remote Peer's separate store is outside this main-schema inventory. Its generic table names are not exemptions in the application database. The other approved add-ons may write existing shared storage or use separate resources; absence of additional main tables does not imply inactivity or obsolescence.
 

@@ -3765,7 +3765,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:document_revisions": {
       "owner": "sdk:storage",
@@ -3778,7 +3779,8 @@
       ],
       "derivedIndexes": [
         "93407ea1c57f5ac3097433605eb62d2150d6f1aa031a99696096af3e99573675"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:documents": {
       "owner": "sdk:storage",
@@ -3789,7 +3791,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:durable_metadata": {
       "owner": "sdk:storage",
@@ -3800,7 +3803,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:durable_schema": {
       "owner": "sdk:storage",
@@ -3811,7 +3815,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:entries": {
       "owner": "sdk:storage",
@@ -3822,7 +3827,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_durable_bindings_v1": {
       "owner": "core:native-bindings",
@@ -3838,7 +3844,8 @@
         "501d8818c09840f296371d6b6003132f7ae067015d807e566b3168ec9169a45c",
         "f9bad2b6cc3b174decddb9e42e03fe76b2b65005ced1165582b0e14b0505d0e7",
         "2cb9886941e26603c1ab5c683f265d22bafc67f3c07df0199b5e253a4de4c88e"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_durable_intent_bindings_v1": {
       "owner": "core:native-bindings",
@@ -3854,7 +3861,8 @@
         "ed09e7fa9eb65d8bd7f765b84d5b8804034c41505d1be2047b65f83ca9fd9f38",
         "f9bad2b6cc3b174decddb9e42e03fe76b2b65005ced1165582b0e14b0505d0e7",
         "2cb9886941e26603c1ab5c683f265d22bafc67f3c07df0199b5e253a4de4c88e"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:qualification_cutover_v1": {
       "owner": "core:native-bindings",
@@ -3867,7 +3875,8 @@
       ],
       "derivedIndexes": [
         "995fd9ed1a55a818dff4a30a9a817d6951c42e6f98787987d056805da21c13f3"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:qualification_cutover_work_v1": {
       "owner": "core:native-bindings",
@@ -3880,7 +3889,8 @@
       ],
       "derivedIndexes": [
         "325f7a07b4ba565734b268fc169cace040f369190ffc6e95f495738a88d916ad"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:record_ids": {
       "owner": "sdk:storage",
@@ -3891,7 +3901,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_media_deletions": {
       "owner": "core:native-timeline-media",
@@ -3904,7 +3915,8 @@
       ],
       "derivedIndexes": [
         "f91ebaf7fbd75b2146f58c4f090cd38141af682fb9e7b48629877cd72eaa467e"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_media_upload_history": {
       "owner": "core:native-timeline-media",
@@ -3919,7 +3931,8 @@
         "1a18781581c32cbb5e5f4758b3d0e8a7e4c86a2ff9ba5134dd83916d0b6ac8b1",
         "32ca961ef1f9d8d790ac8fcf1043bdaf2523479b0c0590ff4dc46fe028b79250",
         "a2058ee6ea87b51105a8cb70631140e569a58b78280c44ba982cef6d238c53fb"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_media_uploads": {
       "owner": "core:native-timeline-media",
@@ -3934,7 +3947,8 @@
         "1a18781581c32cbb5e5f4758b3d0e8a7e4c86a2ff9ba5134dd83916d0b6ac8b1",
         "32ca961ef1f9d8d790ac8fcf1043bdaf2523479b0c0590ff4dc46fe028b79250",
         "a2058ee6ea87b51105a8cb70631140e569a58b78280c44ba982cef6d238c53fb"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_operation_media": {
       "owner": "core:native-timeline-media",
@@ -3948,7 +3962,8 @@
       "derivedIndexes": [
         "1a18781581c32cbb5e5f4758b3d0e8a7e4c86a2ff9ba5134dd83916d0b6ac8b1",
         "20dc1cd8e67ccb78ed70dc37a88a985181549b0ba8f234e92756a93578b8468f"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_outbox_media_refs": {
       "owner": "core:native-timeline-media",
@@ -3961,7 +3976,8 @@
       ],
       "derivedIndexes": [
         "13b23e4e50179204c6d074da5b789783b8e363509350df5544f554e5f6785cad"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_s02_commit_outbox": {
       "owner": "core:native-settlement",
@@ -3975,7 +3991,8 @@
       "derivedIndexes": [
         "1fb3086196a4c800694ff5fe8a24cc1f4244d8d1569d1d0a4d68441ce12e5870",
         "4259fce270113390bf83de30803e39387b3ea5239d3e6ca5134d1a06c13f1577"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_s02_commits": {
       "owner": "core:native-settlement",
@@ -3989,7 +4006,8 @@
       "derivedIndexes": [
         "f91ebaf7fbd75b2146f58c4f090cd38141af682fb9e7b48629877cd72eaa467e",
         "b7db5ffcc31e245aa98a668392a934f4bb9eba9f25730cf2e611058fb90c3bb4"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:service_effect_timeline_writes": {
       "owner": "core:native-timeline-media",
@@ -4002,7 +4020,8 @@
       ],
       "derivedIndexes": [
         "f91ebaf7fbd75b2146f58c4f090cd38141af682fb9e7b48629877cd72eaa467e"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:submissions": {
       "owner": "sdk:storage",
@@ -4013,7 +4032,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:tasks": {
       "owner": "sdk:storage",
@@ -4024,7 +4044,8 @@
         "native",
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "index:addon_code_review_dispatch_by_thread": {
       "owner": "addon:code-review",
@@ -4097,7 +4118,8 @@
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "5c9f94111853a6862b57188a6521a415331886c221733441011a14c2f24235a2"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_blobs": {
       "owner": "addon:code-review",
@@ -4109,7 +4131,8 @@
       ],
       "derivedIndexes": [
         "31a0d83f3f4f13a0827fc2229c2477524f43229b03feb851fdbff45b386fefcc"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_dispatch_items": {
       "owner": "addon:code-review",
@@ -4122,7 +4145,8 @@
       "derivedIndexes": [
         "540ea4e09c2ec2ba06cf69fceaf37f4189926a63d73abe5716866f4199d60f42",
         "7fd5e0b44194acf63c654e101486d5726b6f226369ed7b94e7d9a3702c0f00f5"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_dispatches": {
       "owner": "addon:code-review",
@@ -4135,7 +4159,8 @@
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "b918fe2b073298f880bbfb37ab0038d1bc39817c87bf0548a4a6fab9be3c8cf1"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_drafts": {
       "owner": "addon:code-review",
@@ -4147,7 +4172,8 @@
       ],
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_events": {
       "owner": "addon:code-review",
@@ -4157,7 +4183,8 @@
       "requiredIn": [
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_message_revisions": {
       "owner": "addon:code-review",
@@ -4169,7 +4196,8 @@
       ],
       "derivedIndexes": [
         "d90a32b007fac9ca7389bae7331e3750d6366277f2eb4db0d967d993b7b8d234"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_messages": {
       "owner": "addon:code-review",
@@ -4183,7 +4211,8 @@
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "2845c080423e2b8270ef0f87716dd6c73f74650247619209677f5d7d9396e72a",
         "b918fe2b073298f880bbfb37ab0038d1bc39817c87bf0548a4a6fab9be3c8cf1"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_projections": {
       "owner": "addon:code-review",
@@ -4195,7 +4224,8 @@
       ],
       "derivedIndexes": [
         "604000b8caf273dea0c3605f5eea92d45c01f73bab8d7845031cc260ce4766ff"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_request_receipts": {
       "owner": "addon:code-review",
@@ -4207,7 +4237,8 @@
       ],
       "derivedIndexes": [
         "5ba49dcdf963c0dc89a367ad3f0321e697692352717bb7e90ce94aa976f884ed"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_review_settings": {
       "owner": "addon:code-review",
@@ -4219,7 +4250,8 @@
       ],
       "derivedIndexes": [
         "458f44adfeff0b8a4eeb7021320fe6747d4c2dd9ef4a0da99d3861c72eb69d12"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_reviews": {
       "owner": "addon:code-review",
@@ -4231,7 +4263,8 @@
       ],
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_schema": {
       "owner": "addon:code-review",
@@ -4241,7 +4274,8 @@
       "requiredIn": [
         "native-addons"
       ],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_snapshot_files": {
       "owner": "addon:code-review",
@@ -4254,7 +4288,8 @@
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "b918fe2b073298f880bbfb37ab0038d1bc39817c87bf0548a4a6fab9be3c8cf1"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_snapshots": {
       "owner": "addon:code-review",
@@ -4267,7 +4302,8 @@
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "b918fe2b073298f880bbfb37ab0038d1bc39817c87bf0548a4a6fab9be3c8cf1"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:addon_code_review_threads": {
       "owner": "addon:code-review",
@@ -4280,7 +4316,8 @@
       "derivedIndexes": [
         "1c4aa95d10237d1ffcb34e05fff7c1e284910accf8aecc1a9275fa8c443fa295",
         "b918fe2b073298f880bbfb37ab0038d1bc39817c87bf0548a4a6fab9be3c8cf1"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "index:idx_piclaw_agent_entries_id": {
       "owner": "archive:session-store",
@@ -4330,7 +4367,8 @@
       "requiredIn": [],
       "derivedIndexes": [
         "54fb051fe3a6217312e5555926121bf40802f6b69f859d6bb84a9683a6f95a17"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_entries_fts": {
       "owner": "archive:session-store",
@@ -4338,7 +4376,8 @@
         "3f980a4d4f03a118ff23f8675d088d0f5e6c4c82bc6ab594047c2c943ff59038"
       ],
       "requiredIn": [],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_entries_fts_config": {
       "owner": "archive:session-store",
@@ -4346,7 +4385,8 @@
         "c946c472323c67b253961b9359ffec4325fcfe05c2b2c7e88b902dfec8ea036d"
       ],
       "requiredIn": [],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_entries_fts_data": {
       "owner": "archive:session-store",
@@ -4354,7 +4394,8 @@
         "7388d5d0a9e543132b66edced1e4a24c5927fbaba9e21ee146e7d38ed980ba9c"
       ],
       "requiredIn": [],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_entries_fts_docsize": {
       "owner": "archive:session-store",
@@ -4362,7 +4403,8 @@
         "934ce46a0cb9b6c06aed73a3c5b10c12e2e68bd7ad31d137407471a93d9731a2"
       ],
       "requiredIn": [],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_entries_fts_idx": {
       "owner": "archive:session-store",
@@ -4370,7 +4412,8 @@
         "c4240c0268c3446daee9b9186e03ba9c64586d72507a09068fa7efb830762e5a"
       ],
       "requiredIn": [],
-      "derivedIndexes": []
+      "derivedIndexes": [],
+      "requiredWhenOwnerPresent": true
     },
     "table:piclaw_agent_sessions": {
       "owner": "archive:session-store",
@@ -4380,7 +4423,8 @@
       "requiredIn": [],
       "derivedIndexes": [
         "3604be6720e6c0d074cf5fe9c66b5ca909c0ba7eebab47cbbcbdbbc035d2869f"
-      ]
+      ],
+      "requiredWhenOwnerPresent": true
     },
     "trigger:piclaw_agent_entries_ad": {
       "owner": "archive:session-store",
