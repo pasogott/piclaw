@@ -839,20 +839,6 @@ export class AgentPool {
     return this.branchManager.getAgentHandleForChat(chatJid);
   }
 
-  async queueStreamingMessage(
-    chatJid: string,
-    text: string,
-    behavior: "steer" | "followUp",
-    admission?: { validate: () => void; signal?: AbortSignal },
-  ): Promise<{ queued: boolean; error?: string }> {
-    return this.runtimeFacade.queueStreamingMessage(chatJid, text, behavior, admission);
-  }
-
-  /** Remove one queued follow-up message (first content match) from an active session queue. */
-  async removeQueuedFollowupMessage(chatJid: string, queuedContent?: string): Promise<boolean> {
-    return this.runtimeFacade.removeQueuedFollowupMessage(chatJid, queuedContent);
-  }
-
   /** Execute a raw slash command in the AgentSession (extension commands). */
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
     if (this.hostCommandDispatch) {

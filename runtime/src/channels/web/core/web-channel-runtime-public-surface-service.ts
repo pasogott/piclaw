@@ -63,14 +63,7 @@ type WebChannelRuntimePublicSurfaceAgentMessageEntry = {
 };
 
 type WebChannelRuntimePublicSurfaceAgentPool = {
-  isStreaming?: (chatJid: string) => boolean;
   getSessionGenerationForChat?: (chatJid: string) => string | null;
-  isActive?: (chatJid: string) => boolean;
-  queueStreamingMessage?: (
-    chatJid: string,
-    text: string,
-    behavior: "steer" | "followUp",
-  ) => Promise<{ queued: boolean; error?: string }>;
 };
 
 export type RuntimeAgentMessageMode = "auto" | "queue" | "steer";
@@ -161,11 +154,6 @@ function normalizeRuntimeMessageChatJid(value: unknown): string {
 
 function normalizeRuntimeMessageContent(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function normalizeRuntimeMessageSource(value: unknown): string {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed || "runtime.extension";
 }
 
 function normalizeRuntimeMessageMediaIds(value: unknown): number[] {
@@ -329,6 +317,7 @@ export class WebChannelRuntimePublicSurfaceService {
   }
 
   async enqueueAgentMessage(request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult> {
+    const handleMessage = this.channel.handleAgentMessage?.bind(this.channel);
     const chatJid = normalizeRuntimeMessageChatJid(request?.chatJid);
     if (!chatJid) throw new Error("enqueueAgentMessage requires a target chatJid.");
     if (!chatJid.startsWith("web:")) throw new Error(`enqueueAgentMessage only supports web chats; got ${chatJid}.`);
@@ -342,11 +331,9 @@ export class WebChannelRuntimePublicSurfaceService {
     }
 
     const mode = normalizeRuntimeMessageMode(request?.mode);
-    const source = normalizeRuntimeMessageSource(request?.source);
-    const queuedBy = request?.queuedBy && typeof request.queuedBy === "object" ? { ...request.queuedBy } : undefined;
     const screenHint = normalizeRuntimeMessageScreenHint(request?.screenHint);
 
-    if (typeof this.channel.handleAgentMessage === "function") {
+    if (handleMessage) {
       const body = {
         content,
         mode,
@@ -376,7 +363,7 @@ export class WebChannelRuntimePublicSurfaceService {
         validateTarget(phase);
       });
       let response: Response;
-      try { response = await this.channel.handleAgentMessage(req, "/agent/default/message"); }
+      try { response = await handleMessage(req, "/agent/default/message"); }
       finally { releaseInputRequestAuthority(req); }
       const responsePayload = await response.clone().json().catch(() => null);
       if (!response.ok) {
@@ -386,74 +373,7 @@ export class WebChannelRuntimePublicSurfaceService {
       return normalizeRuntimeHandlerMessageResult(chatJid, responsePayload);
     }
 
-    // Admission-bound callers require the transactional handler, never the legacy fallback.
-    if (request.admission || request.signal) throw new Error("Admission-bound runtime messages require the host input handler.");
-    const agentPool = this.channel.agentPool;
-    const isStreaming = typeof agentPool?.isStreaming === "function" ? agentPool.isStreaming(chatJid) : false;
-    const isActive = typeof agentPool?.isActive === "function" ? agentPool.isActive(chatJid) : isStreaming;
-    const hasQueuedBacklog = this.channel.runtimeFollowupFacade.getQueuedFollowupCount(chatJid) > 0;
-
-    if (mode === "steer" && isStreaming && typeof agentPool?.queueStreamingMessage === "function") {
-      const steerResult = await agentPool.queueStreamingMessage(chatJid, content, "steer");
-      if (steerResult.queued) {
-        const queuedAt = new Date().toISOString();
-        this.channel.sessionBroadcast.broadcastEvent("agent_steer_queued", {
-          chat_jid: chatJid,
-          thread_id: null,
-          source,
-          timestamp: queuedAt,
-          content,
-        });
-        return { status: "ok", chat_jid: chatJid, thread_id: null, queued: "steer", created: false };
-      }
-    }
-
-    if ((mode === "queue" || mode === "auto") && (isActive || hasQueuedBacklog)) {
-      const queuedAt = new Date().toISOString();
-      const rowId = this.channel.runtimeFollowupFacade.enqueueQueuedFollowupItem(chatJid, 0, content, null, queuedAt, {
-        mediaIds,
-        contentBlocks,
-        linkPreviews,
-        ...(screenHint ? { screenHint } : {}),
-        source,
-        ...(queuedBy ? { queuedBy } : {}),
-      });
-      this.channel.sessionBroadcast.broadcastEvent("agent_followup_queued", {
-        chat_jid: chatJid,
-        thread_id: null,
-        row_id: rowId,
-        content,
-        timestamp: queuedAt,
-        source,
-        ...(queuedBy ? { queued_by: queuedBy } : {}),
-      });
-      if (hasQueuedBacklog && !isActive) this.channel.runtimeFollowupFacade.resumeChat(chatJid);
-      return { status: "ok", chat_jid: chatJid, row_id: rowId, thread_id: null, queued: "followup", created: false };
-    }
-
-    const explicitThreadId = normalizeRuntimeMessageThreadId(request?.threadId);
-    const interaction = this.channel.messageProcessingStorageService.storeMessage(chatJid, content, false, mediaIds, {
-      contentBlocks,
-      linkPreviews,
-      threadId: explicitThreadId,
-      screenHint,
-    });
-    if (!interaction) throw new Error("Failed to store runtime agent message.");
-
-    const threadId = typeof interaction.data?.thread_id === "number"
-      ? interaction.data.thread_id
-      : interaction.id ?? null;
-    this.channel.sessionBroadcast.broadcastEvent("new_post", interaction);
-    this.channel.runtimeFollowupFacade.resumeChat(chatJid, threadId);
-
-    return {
-      status: "ok",
-      chat_jid: chatJid,
-      row_id: interaction.id,
-      user_message: interaction,
-      thread_id: threadId,
-      created: true,
-    };
+    throw new Error("Runtime agent messages require the host input handler.");
   }
 
   queueFollowupPlaceholder(chatJid: string, text: string, threadId?: number, queuedContent?: string): InteractionRow | null {

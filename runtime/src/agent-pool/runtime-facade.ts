@@ -2,7 +2,7 @@
  * agent-pool/runtime-facade.ts – Lightweight runtime/status/control helpers for AgentPool.
  *
  * Extracts session-status lookups, model registry access, slash/control routing,
- * and queued-message mutations so AgentPool can remain a thinner orchestrator.
+ * so AgentPool can remain a thinner orchestrator.
  */
 
 import { revokeAddonLocalAgent } from "../addons/local-context.js";
@@ -29,11 +29,10 @@ import { getSessionThinkingPolicy } from './thinking-policy.js';
 import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
 import { executeSlashCommand } from "./slash-command.js";
-import { promptWithContextPressureRetry } from "./context-pressure-retry.js";
 import { peekProviderUsage, peekProviderUsageForRuntime, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
-import { withChatContext, getChatJid } from "../core/chat-context.js";
+import { withChatContext } from "../core/chat-context.js";
 import { sanitiseJid } from "./session-paths.js";
 import type { PoolEntry } from "./session-manager.js";
 import { probeCompactionModel, type CompactionModelProbeResult } from "./compaction-model-probe.js";
@@ -378,6 +377,9 @@ export class AgentRuntimeFacade {
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
+    if (this.options.getDurableSession !== undefined && ["queue", "queue_all", "steer"].includes(command.type)) {
+      return { status: "error", message: "Native queue commands require host input admission. No legacy session was opened." };
+    }
     // Operator process controls must not enter the model/session authority path.
     // The host shutdown handler seals ingress and owns the bounded cleanup deadline.
     if (this.options.getDurableSession && (command.type === "exit" || command.type === "restart")) {
@@ -885,105 +887,6 @@ export class AgentRuntimeFacade {
     const session = this.options.pool.get(chatJid)?.runtime.session;
     if (!session) return false;
     return Boolean(session.isStreaming || session.isCompacting || session.isRetrying || session.isBashRunning);
-  }
-
-  async queueStreamingMessage(
-    chatJid: string,
-    text: string,
-    behavior: "steer" | "followUp",
-    admission?: { validate: () => void; signal?: AbortSignal },
-  ): Promise<{ queued: boolean; error?: string }> {
-    const check = () => { admission?.signal?.throwIfAborted(); admission?.validate(); };
-    check();
-    requireSingleUserDirectExecution("Direct queue mutation");
-    revokeAddonLocalAgent(chatJid);
-    const session = (await this.options.getOrCreateRuntime(chatJid)).session;
-    check();
-    // The SDK awaits input handlers before mutating its steering queue and has
-    // no public admission hook there. Bound requests use the fenced durable
-    // follow-up path rather than injecting into a streaming SDK session.
-    if (admission) return { queued: false };
-    if (!session.isStreaming) return { queued: false };
-
-    const channel = detectChannel(chatJid);
-    try {
-      return await withChatContext(chatJid, channel, async () => {
-        if (behavior === "followUp") {
-          await promptWithContextPressureRetry(session, text, { streamingBehavior: "followUp" });
-        } else {
-          await session.prompt(text, { streamingBehavior: behavior });
-        }
-        return { queued: true };
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { queued: false, error: message };
-    }
-  }
-
-  async removeQueuedFollowupMessage(chatJid: string, queuedContent?: string): Promise<boolean> {
-    requireSingleUserDirectExecution("Direct queue mutation");
-    const session = (await this.options.getOrCreateRuntime(chatJid)).session;
-    if (!session.isStreaming) return false;
-
-    const followups = [...session.getFollowUpMessages()];
-    if (followups.length === 0) return false;
-
-    const normalized = typeof queuedContent === "string" ? queuedContent.trim() : "";
-    let removeIndex = -1;
-    if (normalized) {
-      removeIndex = followups.findIndex((item) => item === queuedContent || item.trim() === normalized);
-    }
-    if (removeIndex < 0) removeIndex = 0;
-
-    const channel = detectChannel(chatJid);
-    try {
-      return await withChatContext(chatJid, channel, async () => {
-        const cleared = session.clearQueue();
-        const nextFollowups = cleared.followUp.filter((_, idx) => idx !== removeIndex);
-
-        try {
-          await this.restoreQueuedMessages(session, cleared.steering, nextFollowups);
-        } catch (err) {
-          try {
-            session.clearQueue();
-            await this.restoreQueuedMessages(session, cleared.steering, cleared.followUp);
-          } catch (restoreErr) {
-            this.options.onWarn?.("Failed to restore queued follow-up after removal error", {
-              operation: "remove_queued_follow_up.restore",
-              chatJid,
-              err: restoreErr,
-              originalError: err,
-            });
-          }
-          throw err;
-        }
-
-        return true;
-      });
-    } catch (err) {
-      this.options.onWarn?.("Failed to remove queued follow-up", {
-        operation: "remove_queued_follow_up",
-        chatJid,
-        err,
-      });
-      return false;
-    }
-  }
-
-  private async restoreQueuedMessages(
-    session: AgentSession,
-    steering: readonly string[],
-    followUp: readonly string[],
-  ): Promise<void> {
-    const chatJid = getChatJid('');
-    if (chatJid && (steering.length || followUp.length)) revokeAddonLocalAgent(chatJid);
-    for (const steer of steering) {
-      await session.prompt(steer, { streamingBehavior: "steer" });
-    }
-    for (const queued of followUp) {
-      await promptWithContextPressureRetry(session, queued, { streamingBehavior: "followUp" });
-    }
   }
 
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {

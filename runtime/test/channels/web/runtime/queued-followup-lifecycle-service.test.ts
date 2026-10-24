@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createTempWorkspace, setEnv } from "../../../helpers.js";
+import { installServiceWorkSchema } from "../../../../src/service-effects/current-piclaw/service-work-schema.js";
+import { createCurrentPiclawServiceWorkStore } from "../../../../src/service-effects/current-piclaw/service-work-store.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../../src/service-effects/contracts/common.js";
+import type { QueuedInputSourceAdmission } from "../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
+
+function seal<T extends { effect: { requestHash: string } }>(request: T, method?: string): T {
+  request.effect.requestHash = hashCanonicalRequest((method ? { method, ...request } : request) as unknown as CanonicalJsonValue);
+  return request;
+}
 
 let restoreEnv: (() => void) | null = null;
 let cleanupWorkspace: (() => void) | null = null;
@@ -175,7 +184,7 @@ describe("queued follow-up lifecycle service", () => {
     ]);
   });
 
-  test("removes placeholder-backed queued follow-ups from both queue stores and timeline", async () => {
+  test("removes only the exact placeholder row and timeline, leaving same-text siblings", async () => {
     const { db, service } = await createServiceFixture();
 
     const placeholderRowId = db.storeMessage({
@@ -191,19 +200,25 @@ describe("queued follow-up lifecycle service", () => {
     });
     service.enqueuePlaceholder("web:default", placeholderRowId, "queued placeholder", 31, "2024-01-01T00:00:00.000Z");
 
-    const sessionRemovals: Array<{ chatJid: string; content: string | undefined }> = [];
-    const result = await service.removeQueuedFollowupForAction("web:default", placeholderRowId, {
-      removeQueuedFollowupMessage: async (chatJid, content) => {
-        sessionRemovals.push({ chatJid, content });
-        return true;
-      },
+    const siblingRowId = db.storeMessage({
+      id: "placeholder-sibling", chat_jid: "web:default", sender: "web-agent", sender_name: "Pi",
+      content: "\u2063", timestamp: "2024-01-01T00:00:01.000Z", is_from_me: false, is_bot_message: true,
     });
+    service.enqueuePlaceholder("web:default", siblingRowId, "queued placeholder", 31);
+    const deferredRowId = service.enqueueQueuedFollowupItem("web:default", 0, "queued placeholder");
+    const siblings = service.getQueuedFollowupItems("web:default").filter(item => item.rowId !== placeholderRowId);
+    const timeline = db.getMessageByRowId("web:default", siblingRowId);
+    const result = await service.removeQueuedFollowupForAction("web:default", placeholderRowId);
 
     expect(result.source).toBe("placeholder");
+    expect(result.removed?.rowId).toBe(placeholderRowId);
     expect(result.removed?.queuedContent).toBe("queued placeholder");
-    expect(service.getQueuedFollowupCount("web:default")).toBe(0);
+    expect(service.getQueuedFollowupCount("web:default")).toBe(2);
+    expect(service.getQueuedFollowupItems("web:default")).toEqual(siblings);
     expect(db.getMessageByRowId("web:default", placeholderRowId)).toBeUndefined();
-    expect(sessionRemovals).toEqual([{ chatJid: "web:default", content: "queued placeholder" }]);
+    expect(db.getMessageByRowId("web:default", siblingRowId)).toEqual(timeline);
+    expect(service.consumeQueuedFollowupItem("web:default")?.rowId).toBe(deferredRowId);
+    expect(service.consumeQueuedFollowupPlaceholder("web:default")).toBe(siblingRowId);
   });
 
   test("persists deferred queued follow-ups with canonical metadata projection and mutation isolation", async () => {
@@ -298,9 +313,6 @@ describe("queued follow-up lifecycle service", () => {
       queue: { enqueue: () => { sideEffects++; } },
       agentPool: {
         setSessionBinder: () => {},
-        removeQueuedFollowupMessage: () => { sideEffects++; return true; },
-        isStreaming: () => true,
-        queueStreamingMessage: async () => { sideEffects++; return { queued: true }; },
       },
       queuePendingSteering: () => { sideEffects++; },
       storeMessage: () => { sideEffects++; return null; }, processChat: () => { sideEffects++; },
@@ -317,6 +329,78 @@ describe("queued follow-up lifecycle service", () => {
     }
     expect(sideEffects).toBe(0);
   });
+
+  for (const outcome of ["success", "missing", "fenced", "async", "post-write-failure"] as const) {
+    test(`accepted withdrawal uses native source CAS and preserves siblings; ${outcome}`, async () => {
+      const { service, db } = await createServiceFixture();
+      const database = db.getDb();
+      installServiceWorkSchema(database);
+      let owner = true;
+      const made = createCurrentPiclawServiceWorkStore(database, {
+        hitFault: () => false, recordTrace() {}, validateAcceptance: () => owner,
+      });
+      if (!made.ok) throw Error("work fixture");
+      const work = made.value;
+      const effect = (id: string) => ({ idempotencyKey: id, requestHash: "", operationId: null, sourceSeq: null,
+        provenanceRef: "host:queue", redactionClass: "private" as const });
+      const accept: QueuedInputSourceAdmission = ({ chatJid, item, database }) => {
+        work.acceptSourceInTransaction(seal({ effect: effect(`accept:${item.source_id}`), chatJid,
+          sourceId: item.source_id, kind: "message", payloadRef: `queued-source:${item.source_id}`,
+          targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), database);
+      };
+      const rowId = db.storeMessage({
+        id: `withdrawal-${outcome}`, chat_jid: "web:default", sender: "web-agent", sender_name: "Pi",
+        content: "original timeline", timestamp: "2024-01-01T00:00:00.000Z", is_from_me: false, is_bot_message: true,
+      });
+      for (const id of [rowId, 0]) {
+        await service.admitQueuedFollowupItem(["web:default", id, "same input"], () => {}, new AbortController().signal, accept);
+      }
+      const [first, sibling] = service.getQueuedFollowupItems("web:default");
+      const siblingSource = work.getAcceptedSource("web:default", sibling!.source_id!)!;
+      const beforeQueue = db.getDeferredQueuedFollowups("web:default");
+      const timeline = db.getMessageByRowId("web:default", rowId);
+      const snapshot = () => ["sources", "chats", "operations", "decisions", "wake_intents"]
+        .map(table => database.query(`SELECT * FROM service_effect_s01_${table}`).all());
+      const before = snapshot();
+      let calls = 0;
+      const withdraw: QueuedInputSourceAdmission = stored => {
+        calls++;
+        expect(stored.database).toBe(database);
+        expect(database.inTransaction).toBe(true);
+        expect(stored.item).toEqual(first);
+        expect(db.getDeferredQueuedFollowups(stored.chatJid)).toEqual(beforeQueue);
+        expect(db.getMessageByRowId(stored.chatJid, rowId)).toEqual(timeline);
+        const sourceHash = (database.query("SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?")
+          .get(stored.chatJid, stored.item.source_id) as { source_hash: string }).source_hash;
+        work.withdrawUnclaimedSourceInTransaction(seal({ effect: effect(`withdraw:${stored.item.source_id}`),
+          chatJid: stored.chatJid, sourceId: stored.item.source_id, sourceHash,
+          payloadRef: `queued-source:${stored.item.source_id}`, actor: "single-user" }, "withdrawUnclaimedSource.v1"), database);
+        if (outcome === "async") return Promise.reject(Error("private async failure")) as never;
+        if (outcome === "post-write-failure") throw Error("private post-write failure");
+      };
+      owner = outcome !== "fenced";
+      const remove = () => service.removeQueuedFollowupForAction("web:default", rowId,
+        outcome === "missing" ? {} : { withdrawAcceptedSource: withdraw });
+      if (outcome === "success") {
+        expect((await remove()).removed).toEqual(first);
+        expect(db.getDeferredQueuedFollowups("web:default")).toEqual([sibling]);
+        expect(db.getMessageByRowId("web:default", rowId)).toBeUndefined();
+        expect(work.getAcceptedSource("web:default", first!.source_id!)?.state).toBe("disposed");
+        expect(work.getAcceptedSource("web:default", sibling!.source_id!)).toEqual(siblingSource);
+        const committed = snapshot();
+        expect((await remove()).removed).toBeNull();
+        expect(snapshot()).toEqual(committed);
+      } else {
+        await expect(remove()).rejects.toThrow(outcome === "missing" ? "host cancellation"
+          : outcome === "fenced" ? "owner_conflict" : outcome === "async" ? "must be synchronous" : "post-write failure");
+        expect(db.getDeferredQueuedFollowups("web:default")).toEqual(beforeQueue);
+        expect(db.getMessageByRowId("web:default", rowId)).toEqual(timeline);
+        expect(snapshot()).toEqual(before);
+      }
+      expect(calls).toBe(outcome === "missing" ? 0 : 1);
+      await Bun.sleep(0); // Rejected async callbacks must not escape as unhandled rejections.
+    });
+  }
 
   test("accepted replacement permits only a retry increment with deeply equal immutable input", async () => {
     const { service, db } = await createServiceFixture();
@@ -388,7 +472,7 @@ describe("queued follow-up lifecycle service", () => {
     ]);
   });
 
-  test("removes deferred queued follow-ups without touching active-session placeholder cleanup", async () => {
+  test("removes deferred queued follow-ups by row with metadata intact", async () => {
     const { db, service } = await createServiceFixture();
 
     const deferredRowId = service.enqueueQueuedFollowupItem(
@@ -400,13 +484,7 @@ describe("queued follow-up lifecycle service", () => {
       { mediaIds: [9], contentBlocks: [{ type: "text" }], linkPreviews: [{ href: "https://example.com" }] }
     );
 
-    let sessionRemovalCalls = 0;
-    const result = await service.removeQueuedFollowupForAction("web:default", deferredRowId, {
-      removeQueuedFollowupMessage: async () => {
-        sessionRemovalCalls += 1;
-        return true;
-      },
-    });
+    const result = await service.removeQueuedFollowupForAction("web:default", deferredRowId);
 
     expect(result.source).toBe("deferred");
     expect(result.removed).toEqual({
@@ -422,6 +500,5 @@ describe("queued follow-up lifecycle service", () => {
     });
     expect(service.getQueuedFollowupCount("web:default")).toBe(0);
     expect(db.getDeferredQueuedFollowups("web:default")).toEqual([]);
-    expect(sessionRemovalCalls).toBe(0);
   });
 });
