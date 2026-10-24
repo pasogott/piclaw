@@ -5,6 +5,7 @@ import { createHostProcessControls, nativeProcessToolNames } from "../../runtime
 import { nativeExitNotice, type NativeExitReceipt } from "../../runtime/durable-engine/src/host-process-receipt.js";
 import type { AcceptedInput, NativeProcessSnapshot } from "../../runtime/durable-engine/src/host-runtime.js";
 import { operationBudgetWorkId } from "../../runtime/durable-engine/src/host-request-accounting.js";
+import { addLogSink, removeLogSink, type LogRecord } from "../../runtime/src/utils/logger.js";
 import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
 
 const databases: Database[] = [];
@@ -35,7 +36,8 @@ function fixture() {
     generationId: 8 as any, assistantId: 12, singleton: true };
   let tasks = [9, 8], submissions = [4], scheduling = "open";
   let owner = true, sourceCurrent = true, scopeError = false, revokeDuringInspect = false;
-  let closed = 0, cleanupRejects = false, inspectCalls = 0;
+  let closed = 0, cleanupError: Error | undefined, shutdownError: Error | undefined, inspectCalls = 0;
+  let duringCleanup: (() => void) | undefined;
   let verified: NativeExitReceipt | undefined;
   let hostBusy: "queue" | "control" | undefined;
   const hostIdleInputs: (AcceptedInput | undefined)[] = [];
@@ -67,8 +69,8 @@ function fixture() {
       hostIdleInputs.push(input);
       if (hostBusy) throw Error(`Host ${hostBusy} is active or uncertain`);
     },
-    async closeNative() { closed++; events.push("cleanup"); if (cleanupRejects) throw Error("uncertain cleanup"); },
-    requestShutdown(reason: string) { shutdowns.push(reason); events.push("shutdown"); },
+    async closeNative() { closed++; events.push("cleanup"); duringCleanup?.(); if (cleanupError) throw cleanupError; },
+    requestShutdown(reason: string) { if (shutdownError) throw shutdownError; shutdowns.push(reason); events.push("shutdown"); },
     defer(run: () => Promise<void>) { deferred.push(run); },
   };
   const controls = createHostProcessControls(options);
@@ -89,7 +91,9 @@ function fixture() {
     sdk(taskIds: number[], submissionIds: number[] = [4]) { tasks = taskIds; submissions = submissionIds; },
     closing() { scheduling = "closing"; }, rejectScope() { scopeError = true; },
     revoke() { owner = false; }, revokeOnInspect() { revokeDuringInspect = true; },
-    revokeSource() { sourceCurrent = false; }, rejectCleanup() { cleanupRejects = true; },
+    revokeSource() { sourceCurrent = false; }, rejectCleanup(error = Error("uncertain cleanup")) { cleanupError = error; },
+    duringCleanup(run: () => void) { duringCleanup = run; },
+    rejectShutdown(error: Error) { shutdownError = error; },
     stats: () => ({ closed, inspectCalls }),
   };
 }
@@ -135,7 +139,7 @@ test("session_status reports native counts read-only, including busy work", asyn
   for (const action of ["list", "check"]) {
     const result = await f.run("session_status", { action });
     expect(JSON.parse(result.output[0].text)).toEqual({ safe_to_restart: false, active_tasks: 3,
-      unsettled_submissions: 2, chat_jid: "chat", current_operation_id: "op" });
+      unsettled_submissions: 2, chat_jid: "chat", current_operation_id: "op", blocker: "sdk_task" });
     expect(result.control).toBeUndefined();
   }
   expect(f.root.serialize()).toEqual(before); expect(f.controls.pending()).toBe(false);
@@ -318,6 +322,43 @@ test("direct exit cancels on final queued input and never retries", async () => 
   expect(f.shutdowns).toEqual([]); expect(f.stats().closed).toBe(0);
   expect(f.deferred).toHaveLength(1);
 });
+
+test("status identifies a bounded blocker without changing admission", async () => {
+  const f = fixture(); f.root.exec("INSERT INTO service_effect_s07_occurrences VALUES ('claimed')");
+  const result = await f.run("session_status", { action: "check" });
+  expect(JSON.parse(result.output[0].text)).toEqual({ safe_to_restart: false, active_tasks: 2,
+    unsettled_submissions: 1, chat_jid: "chat", current_operation_id: "op", blocker: "scheduled_execution" });
+  expect(f.controls.pending()).toBe(false); expect(f.stats().closed).toBe(0);
+  expect(f.shutdowns).toHaveLength(0);
+});
+
+for (const mode of ["inspection", "before_cleanup", "cleanup", "after_cleanup", "shutdown_request"] as const) {
+  test(`bounded refusal diagnostics identify ${mode} without weakening the hold`, async () => {
+    const f = fixture(), records: LogRecord[] = [];
+    const sink = (record: LogRecord) => { if (record.module === "native.process-controls") records.push(record); };
+    addLogSink(sink);
+    try {
+      const result = await f.run(); f.terminal(); f.controls.onOperationSettled("op", result.details);
+      const insert = () => f.root.exec("INSERT INTO service_effect_s07_occurrences VALUES ('source_bound')");
+      if (mode === "inspection") f.sdk([30], []);
+      if (mode === "before_cleanup") insert();
+      if (mode === "cleanup") f.rejectCleanup(Error("synthetic-private-diagnostic-token"));
+      if (mode === "after_cleanup") f.duringCleanup(insert);
+      if (mode === "shutdown_request") f.rejectShutdown(Error("synthetic-private-diagnostic-token"));
+      await f.deferred[0]!();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ operation: "native_exit.refused", phase: mode,
+        blocker: mode === "inspection" ? "sdk_activity" : mode === "cleanup" || mode === "shutdown_request" ? "unclassified" : "scheduled_execution" });
+      expect(JSON.stringify(records)).not.toContain("synthetic-private-diagnostic-token");
+      expect(records[0]!.err).toBeUndefined();
+      expect(f.shutdowns).toHaveLength(0);
+      expect(f.stats().closed).toBe(mode === "cleanup" || mode === "after_cleanup" || mode === "shutdown_request" ? 1 : 0);
+      expect(f.controls.pending()).toBe(mode === "cleanup" || mode === "after_cleanup" || mode === "shutdown_request");
+      f.controls.onOperationSettled("op", result.details);
+      expect(f.deferred).toHaveLength(1); // Never rearm a refused request.
+    } finally { removeLogSink(sink); }
+  });
+}
 
 test("direct exit leaves admission sealed on ownership loss or uncertain cleanup", async () => {
   const lost = fixture(); lost.terminal(); lost.revokeOnInspect();
