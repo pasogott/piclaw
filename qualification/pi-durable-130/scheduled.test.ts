@@ -187,7 +187,7 @@ test("actual root scheduler: duplicate polls -> one EF-S07 occurrence/source -> 
   } finally { renewal.restore(); await h.close(); }
 }, 15000);
 
-for (const lostAcks of [1, 2]) test(`lost completion ACK repairs the same occurrence history without another native execution: ${lostAcks} lost`, async () => {
+for (const lostAcks of [1, 2, "unknown_then_not_applied"] as const) test(`lost completion ACK repairs the same occurrence history without another native execution: ${lostAcks} lost`, async () => {
   const h = await setup();
   const complete = h.store.complete.bind(h.store);
   let calls = 0;
@@ -195,8 +195,9 @@ for (const lostAcks of [1, 2]) test(`lost completion ACK repairs the same occurr
   h.store.complete = async request => {
     calls++;
     if (original) expect(request).toBe(original); else original = request;
+    if (lostAcks === "unknown_then_not_applied" && calls === 2) return { ok: false, error: { _tag: "storage_unavailable", certainty: "not_applied", retryable: true } };
     const result = await complete(request);
-    if (calls <= lostAcks && result.ok) return { ok: false, error: { _tag: "storage_unavailable", certainty: "unknown", retryable: true } };
+    if (calls <= (lostAcks === "unknown_then_not_applied" ? 1 : lostAcks) && result.ok) return { ok: false, error: { _tag: "storage_unavailable", certainty: "unknown", retryable: true } };
     return result;
   };
   try {

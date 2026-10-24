@@ -917,11 +917,13 @@ async function runClaimedScheduledTask(
       outboxIntents: [],
     });
     let completed = await store.complete(completeRequest);
+    // A later not-applied retry cannot disprove an earlier uncertain commit.
+    const completionMayHaveCommitted = !completed.ok && completed.error.certainty === "unknown";
     // Retry persistence with the identical sealed evidence, never task execution.
-    if (!completed.ok && completed.error.certainty === "unknown" && completed.error.retryable && canRunLegacyScheduledWork()) {
+    if (!completed.ok && completionMayHaveCommitted && completed.error.retryable && canRunLegacyScheduledWork()) {
       completed = await store.complete(completeRequest);
     }
-    if (!completed.ok && completed.error.certainty === "unknown" && canRunLegacyScheduledWork()) {
+    if (!completed.ok && completionMayHaveCommitted && canRunLegacyScheduledWork()) {
       const observed = await store.get(finalLease.record.runId);
       if (observed.ok && observed.value?.state === "completed" && observed.value.attempt === finalLease.record.attempt
         && observed.value.taskRevision === finalLease.record.taskRevision && observed.value.status === completeRequest.status
@@ -939,8 +941,9 @@ async function runClaimedScheduledTask(
         taskRevision: finalLease.record.taskRevision,
         attempt: finalLease.record.attempt,
         errorTag: completed.error._tag,
+        certainty: completionMayHaveCommitted ? "unknown" : completed.error.certainty,
       });
-      if (source && completed.error.certainty !== "unknown") settleScheduledAgentSource(finalLease, source, "error", completedAt);
+      if (source && !completionMayHaveCommitted) settleScheduledAgentSource(finalLease, source, "error", completedAt);
       return;
     }
     const summary = outcome.status === "error"
