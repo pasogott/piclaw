@@ -16,7 +16,7 @@ import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
-import { LegacyImportManifest } from "./legacy-import.js";
+import { LegacyImportManifest } from "./legacy-import-schema.js";
 import { projectPublicHistory } from "./session-tree.js";
 import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";

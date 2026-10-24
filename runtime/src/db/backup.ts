@@ -76,7 +76,10 @@ export function verifySqliteBackup(path: string): Omit<SqliteBackupManifest, "so
       migrationLedgers: migrationLedgers(database),
     };
   } finally {
-    database.close();
+    // End the owned snapshot explicitly: close can defer releasing SQLite until
+    // prepared statements are collected, otherwise a verified file stays locked.
+    try { if (database.inTransaction) database.exec("ROLLBACK"); }
+    finally { database.close(); }
   }
 }
 

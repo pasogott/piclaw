@@ -10,15 +10,11 @@ export { createHostTool } from "./host-tools.js";
 export type { HostToolEffectPort } from "./host-tools.js";
 export { createHostBashTool } from "./host-bash.js";
 export { BunSqliteDatabase } from "./bun-sqlite.js";
-export {
-  prepareLegacyImport, prepareLegacyTreeImport, importCopiedLegacy, importCopiedLegacyTree,
-  IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS,
-  LegacyImportManifest, LegacyTreeImportManifest,
-} from "./legacy-import.js";
-export type {
-  CopiedLegacyInput, GetLegacyContext, LegacyImportBinding,
-  CopiedLegacyTreeInput, LegacyTreeHostBinding, LegacyTreeImportBinding,
-} from "./legacy-import.js";
+// Offline migration API compatibility; live history readers use the schema submodule.
+export { prepareLegacyImport, prepareLegacyTreeImport, importCopiedLegacy, importCopiedLegacyTree } from "./legacy-import.js";
+export type { CopiedLegacyInput, GetLegacyContext, CopiedLegacyTreeInput } from "./legacy-import.js";
+export { IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS, LegacyImportManifest, LegacyTreeImportManifest } from "./legacy-import-schema.js";
+export type { LegacyImportBinding, LegacyTreeHostBinding, LegacyTreeImportBinding } from "./legacy-import-schema.js";
 export { observeProjection } from "./host-projection.js";
 export type { ProjectionBinding, ProjectionPorts } from "./host-projection.js";
 export { createScheduledRunDispatch } from "./host-scheduled-run.js";

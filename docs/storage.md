@@ -318,6 +318,10 @@ erDiagram
 - Partial active-handle indexes for the legacy namespace and `(handle_owner_id, lower(agent_name))`
 - Expiry indexes on TOTP enrolments, invitations and passkey registrations
 
+## Imported history and archives
+
+See [import and archive boundaries](development/legacy-import-and-archive-boundaries.md) for persisted native provenance documents and explicit JSONL archive tooling. Harness owns execution storage; the archive importer/benchmark do not supply a live AgentPool backend.
+
 ## Data paths
 
 - `/workspace/.piclaw/store/messages.db` — SQLite database
