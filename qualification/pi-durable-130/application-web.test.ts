@@ -338,6 +338,9 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   });
   __setRuntimeModelExecutorForTests(null);
   resetAddonRuntimeContributionsForTests();
+  const legacyUiBinder = spyOn(AgentPool.prototype, "setSessionBinder").mockImplementation(() => {
+    throw Error("Native channel construction must not install a legacy UI session binder");
+  });
   const running = bootstrapRuntime({ ...runtimeDeps,
     initializeRuntimeEnvironment: () => {}, hydrateMcpCredentials: async () => [], clearMcpCredentials: () => {},
     startBackgroundModelRefresh: () => {}, startOptionalPushoverChannel: async () => null,
@@ -348,8 +351,11 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       await new Promise<void>(resolve => signal!.addEventListener("abort", () => resolve(), { once: true }));
     },
   }, lock);
-  try { await Promise.race([ready.promise, running.then(() => { throw Error("Bootstrap ended before ready"); })]); }
-  finally { openSpy.mockRestore(); startSpy.mockRestore(); }
+  try {
+    await Promise.race([ready.promise, running.then(() => { throw Error("Bootstrap ended before ready"); })]);
+    expect(legacyUiBinder).not.toHaveBeenCalled();
+    expect("bindSession" in channel.uiBridge).toBe(false);
+  } finally { openSpy.mockRestore(); startSpy.mockRestore(); legacyUiBinder.mockRestore(); }
   // Let the existing deferred startup recovery scan finish before new input.
   await Bun.sleep(10);
   lock.assertCurrentOwner();

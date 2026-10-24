@@ -96,6 +96,16 @@ Examples:
 - `extension_ui_status` → `piclaw-extension-ui:status`
 - `extension_ui_editor_text` → `piclaw-extension-ui:editor-text`
 
+### Native runtime ownership
+
+`WebSessionBroadcastService` owns SSE fanout, chat-scoped `UiBridge` requests and provider-usage refresh notifications. Native agent/tool status uses runtime watch projections; history actions use native control routes.
+
+`UiBridge.createUiContext`, `createUiContext` from `channels/web/ui-context.ts`, workspace-file requests, responses, themes, editor state and expiry/shutdown cleanup remain available. SSE construction performs no legacy session lookup or binder installation.
+
+The private `agent-pool-binder.ts` helper, `UiBridge.bindSession`, `bindSessionUiContext` wrapper and `bindSessionBinder` construction option are retired. Their session-bound `waitForIdle`, `newSession`, `fork`, `navigateTree`, `switchSession` and `reload` callbacks are removed. No identified repository or supported add-on consumer requires a compatibility shim.
+
+The separate AgentPool/session-manager binder still exists for the composition cleanup tracked by #1672. Native SSE does not install it. Transport, browser controls and event rendering are unchanged; no persisted data or configuration is migrated.
+
 ### Important non-goal
 
 This bridge is **not** currently a general-purpose extension-host framework.

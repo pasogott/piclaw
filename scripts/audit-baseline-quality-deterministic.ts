@@ -141,7 +141,7 @@ function isAppRenderingPaneTest(relativePath: string): boolean {
     && !isAppRemoteWorkspaceTest(relativePath);
 }
 
-const groupDefinitions: GroupDefinition[] = [
+export const groupDefinitions: GroupDefinition[] = [
   {
     id: "root-misc",
     label: "root misc and shell integration",
@@ -159,6 +159,12 @@ const groupDefinitions: GroupDefinition[] = [
     label: "agent pool",
     notes: "Session lifecycle, branch lifecycle, usage accounting, and tool orchestration.",
     match: (relativePath) => relativePath.startsWith("agent-pool/"),
+  },
+  {
+    id: "archive-tools",
+    label: "archive tools",
+    notes: "Byte-preserving JSONL archive import, search and export tooling.",
+    match: (relativePath) => relativePath.startsWith("archive/"),
   },
   {
     id: "agent-memory",
@@ -183,7 +189,6 @@ const groupDefinitions: GroupDefinition[] = [
         "agent-debug.test.ts",
         "agent-message-handler.test.ts",
         "agent-message-store.test.ts",
-        "agent-pool-binder.test.ts",
         "agents-service.test.ts",
         "message-processing-storage-service.test.ts",
         "message-store-atomic-followup.test.ts",
