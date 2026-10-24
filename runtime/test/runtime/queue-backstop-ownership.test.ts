@@ -28,7 +28,7 @@ for (const strict of [false, true]) {
           expect(readFileSync(lockPath, "utf8")).toBe(acquired);
           expect(() => acquireRuntimeLock({ lockPath, disabled: false })).toThrow(/Offline operator cleanup required/);
           if (mode === "queue-timeout") expect(rows.some(row => row.error === "QueueShutdownTimeoutError")).toBe(true);
-          if (mode === "backstop") expect(stdout + stderr).toContain("Forcing shutdown after timeout");
+          if (mode === "backstop" || mode === "queue-timeout") expect(stdout + stderr).toContain("Forcing shutdown after timeout");
         }
       } finally {
         child.kill();

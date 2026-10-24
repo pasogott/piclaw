@@ -96,11 +96,12 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting", "steer-complete", "steer-ordinary"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-complete", "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting", "steer-complete", "steer-ordinary"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const continuation = mode === "continuation";
   const steer = mode === "steer-accounting" || mode === "steer-complete" || mode === "steer-ordinary";
   const terminalSteer = mode === "steer-complete", ordinarySteer = mode === "steer-ordinary";
   const rejectRequestAuthority = mode === true;
+  const snapshotRace = typeof mode === "string" && mode.startsWith("snapshot-");
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
   const stopped = mode === "stop" || mode === "stop-accounting";
@@ -123,6 +124,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const allowedContinuationRequests = new Set<string>();
   let prepareSettlement: import("../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"];
   const f = await acceptedSteerFixture(dir, "before-submit", undefined, true, {
+    withPromptContextGuard: async (assertCurrent, body) => { assertCurrent(); return body(); },
     sharedDatabase: continuation || steer,
     allowRequest: request => allowedContinuationRequests.has(request),
     prepareTerminalEffect: input => prepareSettlement?.(input) ?? Promise.resolve(undefined),
@@ -207,6 +209,17 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     return verified;
   };
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
+    async prepareGoalContext(...args) {
+      if (snapshotRace) await withExtensionKvAuthority({extensionId:"goal",chatJid:f.chatJid,assertCurrent(){},
+        write<T>(body:()=>T){return f.db.transaction(body).immediate();}}, async () => {
+        if (mode === "snapshot-replace") {addon.clearThreadGoal(f.chatJid);addon.createThreadGoal(f.chatJid,"Externally replaced Goal");}
+        else {
+          const terminal = addon.createGoalTools(()=>f.chatJid).find((tool:{name:string})=>tool.name===(mode==="snapshot-stop"?"goal_stop":"goal_complete"))!;
+          await terminal.execute("concurrent-terminal",mode==="snapshot-stop"?{reason:"user_needed",summary:"Concurrent stop"}:{summary:"Concurrent completion",evidence:["external authority"]},undefined,undefined,{});
+        }
+      });
+      return f.runtime!.prepareGoalContext(...args);
+    },
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
       const captured = await f.runtime!.captureRunSource(conversation, task);
@@ -397,6 +410,11 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ status: "complete", lifecycle_generation: 2 });
       return;
     }
+    if (snapshotRace) {
+      expect(requestFenced).toBe(true);expect(modelEntries).toBe(0);expect(captures).toBe(0);
+      expect(extensionKvGet("goal","thread-goal","chat",f.chatJid)).toMatchObject({status:mode==="snapshot-replace"?"active":mode==="snapshot-stop"?"stopped":"complete"});
+      return;
+    }
     if (externalLifecycle) {
       expect(requestFenced).toBe(true);
       expect(modelEntries).toBe(0);
@@ -421,7 +439,9 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     expect(prompts[0]).toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
     expect(prompts[1]).toContain("Active Goal");
-    expect(prompts[2]).not.toContain("Active Goal");
+    // Retain the historical objective, but do not add an active footer after terminal settlement.
+    expect((prompts[2]!.match(/Active Goal/g) ?? []).length).toBe((prompts[1]!.match(/Active Goal/g) ?? []).length);
+    expect(JSON.parse(prompts[2]!).at(-1).content).not.toEqual(JSON.parse(prompts[1]!).at(-1).content);
     const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: terminalStatus, lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
@@ -470,7 +490,9 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     try {
       const conversation = (await reader.conversation(f.base.root.id, context))!;
       const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
-      expect(JSON.stringify(entries.items)).not.toContain("Active Goal");
+      expect(entries.items.filter(entry => entry.kind === "host.goal-context")).toHaveLength(1);
+      const { projectPublicHistory } = await import("../../runtime/durable-engine/src/session-tree.js");
+      expect(JSON.stringify(projectPublicHistory(entries.items, null))).not.toContain("Active Goal");
       const results = entries.items.filter(entry => entry.kind === "pi.tool-result");
       expect(results).toHaveLength(4);
       expect(results[2]!.model?.[0]).toMatchObject({ toolName: "get_goal", isError: true });

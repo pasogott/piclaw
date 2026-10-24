@@ -18,7 +18,7 @@ import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEf
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import.js";
 import { projectPublicHistory } from "./session-tree.js";
-import { materializePlanContext } from "./host-plan-context.js";
+import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
 
 /** Immutable host-persisted intent; never supplied as arbitrary user text. */
@@ -1283,6 +1283,21 @@ export class HostConversationRuntime {
         check();
         if (!conversation) throw Error("Plan conversation unavailable");
         return materializePlanContext(conversation, taskId, inputs[0]!.chatJid, messages, content, check, context);
+      });
+    });
+  }
+  prepareGoalContext(conversationId: ConversationId, taskId: TaskId, inputs: readonly HostInputBinding[],
+    messages: readonly import("@earendil-works/pi-ai").Message[], content: import("@earendil-works/pi-ai").UserMessage["content"],
+    identity: GoalContextIdentity, assertGoalCurrent: () => void, context: Context) {
+    return this.observe(async () => {
+      const guard = this.options.withPromptContextGuard;
+      if (!guard || !inputs.length || !this.options.bindings.assertSourceCurrent) throw Error("Goal context write guard unavailable");
+      const check = () => { context.abortSignal?.throwIfAborted(); assertGoalCurrent(); this.assertCapturedSourceCurrent(inputs); };
+      return guard(check, async () => {
+        const conversation = await this.harness.conversation(conversationId, context);
+        check();
+        if (!conversation) throw Error("Goal conversation unavailable");
+        return materializeGoalContext(conversation, taskId, inputs[0]!.chatJid, messages, content, identity, check, context);
       });
     });
   }

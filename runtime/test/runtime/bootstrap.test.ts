@@ -487,7 +487,7 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     const poolEntered = Promise.withResolvers<void>(), pool = Promise.withResolvers<void>();
     const webEntered = Promise.withResolvers<void>(), web = Promise.withResolvers<void>();
     let shutdown!: (signal: string) => Promise<void>;
-    let stopping: Promise<void> | undefined;
+    let stopped: Promise<unknown> | undefined;
     let settled = false;
     const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
     // Failed shutdown deliberately keeps the real process backstop armed. Own
@@ -533,9 +533,9 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     };
     try {
       await entered.promise;
-      stopping = shutdown("test");
+      const stopping = shutdown("test");
       // Observe rejection immediately, including a producer join failure.
-      const stopped = stopping.catch((error: unknown) => error);
+      stopped = stopping.catch((error: unknown) => error);
       await assertHeld(); // Producer has resolved, scheduler join is still held.
       if (failure === "scheduler" || failure === "producer") {
         if (failure === "scheduler") scheduler.reject(new Error("uncertain scheduler join"));
@@ -569,7 +569,7 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
       }
     } finally {
       scheduler.resolve(); queue.resolve(); pool.resolve(); web.resolve();
-      await stopping?.catch(() => {});
+      await stopped;
       owner.release(); // Offline fixture cleanup only, including fail-closed case.
       for (const timer of backstops) nativeClearTimeout(timer.handle);
       clears.mockRestore();

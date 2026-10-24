@@ -7,7 +7,7 @@ import { createModels, createProvider, Type, type AssistantMessage, type Message
 import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
-import { materializePlanContext, hostPlanContextKind } from "../../runtime/durable-engine/src/host-plan-context.js";
+import { materializePlanContext, hostPlanContextKind, materializeGoalContext, hostGoalContextKind, type GoalContextIdentity } from "../../runtime/durable-engine/src/host-plan-context.js";
 import { projectPublicHistory } from "../../runtime/durable-engine/src/session-tree.js";
 import { context, barrier } from "./src/fixture.js";
 import { awaitWithContext } from "../../runtime/durable-engine/qualification/context.ts";
@@ -30,7 +30,7 @@ const answer = (plan?: string, index = 0): AssistantMessage => ({ role: "assista
   stopReason: plan === undefined ? "stop" : "toolUse", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
     totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 
-async function fixture() {
+async function fixture(variant: {goal?:boolean; mixed?:boolean; identity?:()=>GoalContextIdentity} = {}) {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "plan-context-"));
   const requests: Message[][] = [], failures: unknown[] = [];
   const state = { plan: "- [ ] ORIGINAL", allowed: true, prepared: false, maintenance: false,
@@ -44,8 +44,16 @@ async function fixture() {
     state.prepared = false; state.taskId = api.taskId;
     try {
       const current = (await harness.conversation(api.conversationId, ctx))!;
-      const messages = await database.withAdmissionGuard(assertCurrent, () =>
-        materializePlanContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), assertCurrent, ctx));
+      const messages = await database.withAdmissionGuard(assertCurrent, async () => {
+        const identity = variant.identity?.() ?? {goalId:"goal-owned",generation:1,status:"active" as const};
+        if (variant.mixed) {
+          const goal = await materializeGoalContext(state.wrap(current), api.taskId, "web:plan", request.messages,
+            [{type:"text",text:"Immutable Goal objective"}], identity, assertCurrent, ctx);
+          return materializePlanContext(state.wrap(current), api.taskId, "web:plan", goal, content(state.plan), assertCurrent, ctx);
+        }
+        return variant.goal ? materializeGoalContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), identity, assertCurrent, ctx)
+          : materializePlanContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), assertCurrent, ctx);
+      });
       await state.afterPersist?.(ctx);
       state.prepared = true;
       return { messages };
@@ -256,8 +264,8 @@ test("unknown or truncated request prefixes fail closed without a context write"
   } finally { await f.close(); }
 });
 
-test("actual Codex HTTP bodies retain an exact input-item prefix and stable instructions/tools/cache key", async () => {
-  const f = await fixture();
+for (const goal of [false, true]) test(`${goal ? "Goal" : "Plan"}: actual Codex HTTP bodies retain an exact input-item prefix and stable instructions/tools/cache key`, async () => {
+  const f = await fixture({goal});
   try {
     f.state.replies.push("- [-] UPDATED"); await f.run();
     const bodies: { input: unknown[]; instructions: unknown; tools: unknown; prompt_cache_key: unknown }[] = [];
@@ -299,4 +307,69 @@ test("terminal generations cannot append Plan context and snapshots remain hidde
     const hidden = snapshots(rows)[0]!;
     expect(() => projectPublicHistory([{ ...hidden, data: { owner: "forged" } }], null)).toThrow("Invalid hidden Plan context");
   } finally { await f.close(); }
+});
+
+const goalSnapshots = (rows: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["entries"]>>) => rows.filter(row => row.kind === hostGoalContextKind);
+test("Goal context preserves every prior implicit cache-write ending through tools and later input", async () => {
+  const f = await fixture({goal:true});
+  try {
+    f.state.replies.push(f.state.plan, f.state.plan); await f.run(); await f.run("later accepted input");
+    expect(f.requests).toHaveLength(4);
+    for (let i=1;i<f.requests.length;i++) prefix(f.requests[i-1]!, f.requests[i]!);
+    const rows=await f.entries(); expect(goalSnapshots(rows)).toHaveLength(1);
+    expect(JSON.stringify(projectPublicHistory(rows, null))).not.toContain("Current Plan Sidebar");
+    expect(f.failures).toEqual([]);
+  } finally { await f.close(); }
+});
+test("Goal objective changes append new snapshots and survive reopen without duplicate context", async () => {
+  const f = await fixture({goal:true});
+  try {
+    f.state.replies.push("Changed Goal objective", f.state.plan); await f.run();
+    expect(goalSnapshots(await f.entries())).toHaveLength(3);
+    await f.reopen(); await f.run("continue retained goal");
+    expect(goalSnapshots(await f.entries())).toHaveLength(3);
+    for (let i=1;i<f.requests.length;i++) prefix(f.requests[i-1]!, f.requests[i]!);
+    expect(f.failures).toEqual([]);
+  } finally { await f.close(); }
+});
+test("Goal identity changes append even when prompt bytes are identical", async () => {
+  let identity: GoalContextIdentity={goalId:"original",generation:1,status:"active"};
+  const f = await fixture({goal:true,identity:()=>identity});
+  try {
+    await f.run(); identity={goalId:"replacement",generation:2,status:"active"}; await f.run("new Goal generation");
+    identity={...identity,status:"budget_limited"}; await f.run("budget wrap-up");
+    const rows=goalSnapshots(await f.entries()); expect(rows).toHaveLength(3);
+    expect(rows.map(row=>(row.data as GoalContextIdentity).goalId)).toEqual(["original","replacement","replacement"]);
+    expect(rows.map(row=>(row.data as GoalContextIdentity).status)).toEqual(["active","active","budget_limited"]);
+    for(let i=1;i<f.requests.length;i++)prefix(f.requests[i-1]!,f.requests[i]!);
+  } finally { await f.close(); }
+});
+test("Goal and Plan repair only their shared owned pinned suffix and retain distinct historical positions", async () => {
+  const f = await fixture({mixed:true});
+  try {
+    f.state.replies.push("Changed Plan", "Changed Plan"); await f.run(); await f.reopen(); await f.run("next user");
+    expect(goalSnapshots(await f.entries())).toHaveLength(1); expect(snapshots(await f.entries())).toHaveLength(2);
+    for(let i=1;i<f.requests.length;i++)prefix(f.requests[i-1]!,f.requests[i]!);
+    expect(f.failures).toEqual([]);
+  } finally { await f.close(); }
+});
+test("revoked Goal context authority cannot dispatch or write a snapshot", async () => {
+  const f=await fixture({goal:true});
+  try {
+    f.state.allowed=false; const before=(await f.entries()).length; await f.run();
+    expect(f.requests).toHaveLength(0); expect((await f.entries()).filter(row=>row.kind===hostGoalContextKind)).toHaveLength(0);
+    expect((await f.entries()).length).toBeGreaterThanOrEqual(before); expect(f.failures.length).toBeGreaterThan(0);
+  } finally {await f.close();}
+});
+test("invalid Goal identity fails closed and rolls back the context append", async () => {
+  const f=await fixture({goal:true,identity:()=>({goalId:"",generation:0,status:"active"})});
+  try {await f.run();expect(f.requests).toHaveLength(0);expect(goalSnapshots(await f.entries())).toHaveLength(0);expect(f.failures.length).toBeGreaterThan(0);}
+  finally {await f.close();}
+});
+
+for(const malformed of [["active"],["budget_limited"],{},0,null]) test(`Goal status validator rejects malformed ${JSON.stringify(malformed)} rather than coercing it`,async()=>{
+  const f=await fixture({goal:true});
+  try {await f.run();const row=structuredClone(goalSnapshots(await f.entries())[0]!);(row.data as Record<string,unknown>).status=malformed;
+    expect(()=>projectPublicHistory([row],null)).toThrow("Invalid hidden Goal identity");}
+  finally {await f.close();}
 });
