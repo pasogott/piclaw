@@ -168,6 +168,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
   const terminalFence = createHostGoalTerminalFence(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => f.runtime! });
   f.base.registry.install(terminalFence);
   const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
+  const { createHostGoalInput } = await import("../../runtime/durable-engine/src/host-goal-input.js");
   let requestFenced = false, modelEntries = 0;
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
@@ -283,7 +284,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     if (!rejectRequestAuthority) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
       write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
       addon.createThreadGoal(f.chatJid, "Live Goal source capture", mode === "budget-accounting" ? 3 : undefined);
-      acceptedText = addon.prepareGoalInput("🎯 Continue goal: Live Goal source capture", f.chatJid).decision.text;
+      acceptedText = createHostGoalInput(addon, () => {})(f.chatJid, "🎯 Continue goal: Live Goal source capture").text;
     });
     if (mode === "persisted-budget" || mode === "deadline-checkpoint") {
       const current = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as Record<string, unknown>;
@@ -439,8 +440,13 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     expect(prompts[0]).toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
     expect(prompts[1]).toContain("Active Goal");
-    // Retain the historical objective, but do not add an active footer after terminal settlement.
-    expect((prompts[2]!.match(/Active Goal/g) ?? []).length).toBe((prompts[1]!.match(/Active Goal/g) ?? []).length);
+    // Active Goal rules are system instructions, not historical user messages.
+    const activeMessages = JSON.parse(prompts[1]!);
+    expect(activeMessages.filter((m: any) => m.role === "system")).toEqual(
+      JSON.parse(prompts[0]!).filter((m: any) => m.role === "system"));
+    expect(activeMessages.filter((m: any) => m.role === "system").some((m: any) => m.content.includes("Active Goal"))).toBe(true);
+    expect(activeMessages.filter((m: any) => m.role === "user").some((m: any) => JSON.stringify(m.content).includes("Active Goal"))).toBe(false);
+    expect(prompts[2]).not.toContain("Active Goal");
     expect(JSON.parse(prompts[2]!).at(-1).content).not.toEqual(JSON.parse(prompts[1]!).at(-1).content);
     const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: terminalStatus, lifecycle_generation: 2 });
@@ -490,7 +496,14 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     try {
       const conversation = (await reader.conversation(f.base.root.id, context))!;
       const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
-      expect(entries.items.filter(entry => entry.kind === "host.goal-context")).toHaveLength(1);
+      const snapshots = entries.items.filter(entry => entry.kind === "host.goal-context");
+      // The committed usage update appends a second continuation snapshot.
+      // Neither snapshot contains system rules or rewrites the accepted input.
+      expect(snapshots).toHaveLength(2);
+      for (const snapshot of snapshots) {
+        expect(JSON.stringify(snapshot)).toContain("Continue working toward the active thread goal");
+        expect(JSON.stringify(snapshot)).not.toContain("Active Goal");
+      }
       const { projectPublicHistory } = await import("../../runtime/durable-engine/src/session-tree.js");
       expect(JSON.stringify(projectPublicHistory(entries.items, null))).not.toContain("Active Goal");
       const results = entries.items.filter(entry => entry.kind === "pi.tool-result");
@@ -639,11 +652,15 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
     }));
     expect(response.status).toBe(201);
     const routed = root.query("SELECT content FROM messages WHERE chat_jid=? ORDER BY rowid DESC LIMIT 1").get(chat) as { content: string };
-    expect(routed.content).toContain("Continue working toward the active thread goal");
+    expect(routed.content).toStartWith("🎯 Continue goal: Actual web source fence");
+    expect(routed.content).not.toContain("Continue working toward the active thread goal");
     expect(routed.content).toContain("Actual web source fence");
     expect(routed.content).toContain("<piclaw_goal_input>");
     const reconstructed = createHostGoalInput(addon, () => lock.assertCurrentOwner());
     expect(reconstructed(chat, routed.content).text).toBe(routed.content);
+    const legacy = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Actual web source fence", chat).decision);
+    expect(legacy.text).toContain("Continue working toward the active thread goal");
+    expect(reconstructed(chat, legacy.text).text).toBe(legacy.text);
     scoped(() => { addon.clearThreadGoal(chat); addon.createThreadGoal(chat, "Actual web source fence"); });
     expect(() => reconstructed(chat, routed.content)).toThrow("Goal input is no longer executable");
     scoped(() => addon.clearThreadGoal(chat));

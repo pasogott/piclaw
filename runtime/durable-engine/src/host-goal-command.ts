@@ -1,3 +1,4 @@
+import { compactGoalInput } from "./host-goal-input.js";
 import type Database from "bun:sqlite";
 import type { AgentControlResult } from "../../src/agent-control/index.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
@@ -7,6 +8,7 @@ type GoalCommandState = { goal_id: string; lifecycle_generation: number; updated
  * checks routing and exclusive ownership before and throughout the SQLite write. */
 export function createHostGoalCommand(addon: {
   applyGoalCommand(chat: string, args: string): { text: string; goal: GoalCommandState | null; continuation?: string };
+  goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
   prepareGoalInput(text: string, chat: string): { decision: { action: string; text?: string } };
 }, options: {
   root: Database;
@@ -29,7 +31,7 @@ export function createHostGoalCommand(addon: {
         if (prepared.action !== "transform" || !prepared.text) throw Error("Goal command input no longer executable");
         const goal = result.goal;
         if (options.admit({ sourceId: `goal-command:${goal.goal_id}:${goal.lifecycle_generation}`, chatJid,
-          text: prepared.text, queuedAt: goal.updated_at }) === null) throw Error("Goal command continuation admission unavailable");
+          text: compactGoalInput(addon, result.continuation, prepared), queuedAt: goal.updated_at }) === null) throw Error("Goal command continuation admission unavailable");
       }
       authority.assertCurrent();
       return { status: "success", message: result.text + (result.continuation ? " — continuation queued" : "") };

@@ -1,3 +1,4 @@
+import { goalInputDisplayText } from "../ui/goal-input-display.ts";
 import { bindSvgImageThemes } from '../utils/svg-images.js';
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { useTranslation } from '../utils/i18n.js';
@@ -958,7 +959,7 @@ function LinkPreview({ preview, rewriteImageSrc }) {
  * preview card is shown. Users expect their original text to remain visible.
  */
 export function getDisplayContent(content, _linkPreviews) {
-    return typeof content === 'string' ? content : '';
+    return typeof content === 'string' ? goalInputDisplayText(content) : '';
 }
 
 const CODE_COPY_RESET_MS = 1800;

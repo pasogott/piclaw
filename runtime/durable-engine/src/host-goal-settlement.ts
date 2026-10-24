@@ -1,3 +1,4 @@
+import { compactGoalInput } from "./host-goal-input.js";
 import type Database from "bun:sqlite";
 import { getDeferredQueuedFollowups } from "../../src/db.js";
 import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage.js";
@@ -115,7 +116,7 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
           // Budget wrap-up follows existing human work, using normal source/FIFO
           // admission. It never claims the worker or starts another scheduler.
           if (options.continuation.admit({ sourceId: `goal-budget:${current.goal_id}:${current.lifecycle_generation}`,
-            chatJid: captured.chatJid, text: prepared.text, queuedAt: commit.committedAt }, false) === null)
+            chatJid: captured.chatJid, text: compactGoalInput(addon, prompt, prepared), queuedAt: commit.committedAt }, false) === null)
             throw Error("Goal budget wrap-up admission changed");
           return;
         }
@@ -132,7 +133,7 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
         const prepared = options.continuation.addon.prepareGoalInput(prompt, captured.chatJid).decision;
         if (prepared.action === "handled") throw Error("Goal continuation lifecycle changed");
         const queued = options.continuation.admit({ sourceId: `goal-continuation:${captured.operationId}`,
-          chatJid: captured.chatJid, text: prepared.text ?? prompt, queuedAt: commit.committedAt });
+          chatJid: captured.chatJid, text: compactGoalInput(addon, prompt, prepared), queuedAt: commit.committedAt });
         if (queued === null) throw Error("Goal continuation admission changed");
         authority.assertCurrent();
       });
