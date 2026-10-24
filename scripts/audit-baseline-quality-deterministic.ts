@@ -189,7 +189,6 @@ export const groupDefinitions: GroupDefinition[] = [
         "agent-debug.test.ts",
         "agent-message-handler.test.ts",
         "agent-message-store.test.ts",
-        "agent-pool-binder.test.ts",
         "agents-service.test.ts",
         "message-processing-storage-service.test.ts",
         "message-store-atomic-followup.test.ts",

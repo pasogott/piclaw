@@ -2,41 +2,24 @@
  * test/channels/web/ui-context.test.ts – Tests for the extension UI context.
  *
  * Verifies UiBridge and UIContext handle confirm/input dialogs, timeouts,
- * cancellation, and session binding correctly.
+ * cancellation and chat-scoped state correctly.
  */
 
 import { describe, test, expect, spyOn } from "bun:test";
 import "../../helpers.js";
-import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { UiBridge } from "../../../src/channels/web/theming/ui-bridge.js";
-import { bindSessionUiContext, createUiContext } from "../../../src/channels/web/ui-context.js";
+import { createUiContext } from "../../../src/channels/web/ui-context.js";
 
-function makeChannel(options: { waitForIdleTimeoutMs?: number; chatStateTtlMs?: number } = {}) {
+function makeChannel(options: { chatStateTtlMs?: number } = {}) {
   const events: Array<{ type: string; payload: any }> = [];
   const channel = {
     broadcastEvent: (type: string, payload: any) => events.push({ type, payload }),
   };
   const uiBridge = new UiBridge(channel as any, {
-    ...(options.waitForIdleTimeoutMs == null ? {} : { waitForIdleTimeoutMs: options.waitForIdleTimeoutMs }),
     ...(options.chatStateTtlMs == null ? {} : { chatStateTtlMs: options.chatStateTtlMs }),
   });
   (channel as any).uiBridge = uiBridge;
   return { channel, events, uiBridge };
-}
-
-function createRuntime(session: any): AgentSessionRuntime {
-  return {
-    session,
-    cwd: "/workspace",
-    diagnostics: [],
-    services: {} as any,
-    modelFallbackMessage: undefined,
-    newSession: async () => ({ cancelled: false }),
-    switchSession: async () => ({ cancelled: true }),
-    fork: async () => ({ cancelled: false }),
-    importFromJsonl: async () => ({ cancelled: false }),
-    dispose: async () => {},
-  } as any;
 }
 
 describe("ui-context", () => {
@@ -151,175 +134,12 @@ describe("ui-context", () => {
     expect(uiBridge.pendingUiRequests.size).toBe(0);
   });
 
-  test("bindSessionUiContext wires command actions", async () => {
-    const { channel, events } = makeChannel();
-    let boundArgs: any = null;
-    let reloadCalled = false;
-    let subscribeCalled = false;
-    let unsubscribeCalled = false;
-    let forkArgs: any[] | null = null;
-    let switchArgs: any[] | null = null;
-    let newSessionOptions: any = null;
-
-    const session = {
-      isStreaming: true,
-      subscribe: (cb: (event: any) => void) => {
-        subscribeCalled = true;
-        const timer = setTimeout(() => cb({ type: "agent_end" }), 0);
-        return () => {
-          unsubscribeCalled = true;
-          clearTimeout(timer);
-        };
-      },
-      bindExtensions: async (args: any) => {
-        boundArgs = args;
-      },
-      navigateTree: async () => ({ cancelled: true }),
-      reload: async () => {
-        reloadCalled = true;
-      },
-    } as any;
-
-    const runtime = createRuntime(session) as any;
-    runtime.newSession = async (options: any) => {
-      newSessionOptions = options;
-      return { cancelled: false };
-    };
-    runtime.fork = async (...args: any[]) => {
-      forkArgs = args;
-      return { cancelled: false };
-    };
-    runtime.switchSession = async (...args: any[]) => {
-      switchArgs = args;
-      return { cancelled: true };
-    };
-
-    await bindSessionUiContext(channel as any, runtime, "web:default");
-    expect(boundArgs).toBeDefined();
-
-    const actions = boundArgs.commandContextActions;
-    await actions.waitForIdle();
-    expect(subscribeCalled).toBe(true);
-    expect(unsubscribeCalled).toBe(true);
-    const withSession = async () => {};
-    expect(await actions.newSession({ withSession })).toEqual({ cancelled: false });
-    expect(newSessionOptions).toEqual({ withSession });
-    expect(await actions.fork("abc", { position: "at", withSession })).toEqual({ cancelled: false });
-    expect(forkArgs).toEqual(["abc", { position: "at", withSession }]);
-    expect(await actions.navigateTree("abc", {})).toEqual({ cancelled: true });
-    expect(await actions.switchSession("path", { withSession })).toEqual({ cancelled: true });
-    expect(switchArgs).toEqual(["path", { withSession }]);
-    await actions.reload();
-    expect(reloadCalled).toBe(true);
-
-    const originalError = console.error;
-    console.error = () => {};
-    boundArgs.onError(new Error("boom"));
-    console.error = originalError;
-    const errorEvent = events.find((event) => event.type === "extension_ui_error");
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent?.payload?.chat_jid).toBe("web:default");
-  });
-
-  test("bindSessionUiContext suppresses stale ctx errors from replaced sessions", async () => {
-    const { channel, events } = makeChannel();
-    let currentSession: any;
-    const replacementSession = { isStreaming: false, reload: async () => {} };
-    const staleMessage = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().";
-    const oldSession = {
-      isStreaming: false,
-      bindExtensions: async (args: any) => {
-        currentSession = replacementSession;
-        args.onError({
-          error: staleMessage,
-          event: "session_start",
-          extensionPath: "<inline:6>",
-        });
-      },
-      reload: async () => {},
-    } as any;
-    currentSession = oldSession;
-    const runtime = {
-      get session() { return currentSession; },
-      cwd: "/workspace",
-      diagnostics: [],
-      services: {} as any,
-      modelFallbackMessage: undefined,
-      newSession: async () => ({ cancelled: false }),
-      switchSession: async () => ({ cancelled: false }),
-      fork: async () => ({ cancelled: false }),
-      importFromJsonl: async () => ({ cancelled: false }),
-      dispose: async () => {},
-    } as any;
-
-    await bindSessionUiContext(channel as any, runtime, "web:default");
-
-    expect(events.some((event) => event.type === "extension_ui_error")).toBe(false);
-  });
-
-  test("bindSessionUiContext waitForIdle unsubscribes after a bounded timeout when agent_end never arrives", async () => {
-    const { channel } = makeChannel({ waitForIdleTimeoutMs: 10 });
-    let boundArgs: any = null;
-    let unsubscribeCalled = false;
-
-    const session = {
-      isStreaming: true,
-      subscribe: () => () => {
-        unsubscribeCalled = true;
-      },
-      bindExtensions: async (args: any) => {
-        boundArgs = args;
-      },
-      navigateTree: async () => ({ cancelled: false }),
-      reload: async () => {},
-    } as any;
-
-    await bindSessionUiContext(channel as any, createRuntime(session), "web:default");
-    await boundArgs.commandContextActions.waitForIdle();
-    expect(unsubscribeCalled).toBe(true);
-  });
-
-  test("bindSessionUiContext waitForIdle resolves when streaming stops before agent_end", async () => {
-    const { channel } = makeChannel({ waitForIdleTimeoutMs: 1000 });
-    let boundArgs: any = null;
-    let unsubscribeCalled = false;
-    let listener: ((event: any) => void) | null = null;
-
-    const session = {
-      isStreaming: true,
-      subscribe: (cb: (event: any) => void) => {
-        listener = cb;
-        return () => {
-          unsubscribeCalled = true;
-        };
-      },
-      bindExtensions: async (args: any) => {
-        boundArgs = args;
-      },
-      navigateTree: async () => ({ cancelled: false }),
-      reload: async () => {},
-    } as any;
-
-    await bindSessionUiContext(channel as any, createRuntime(session), "web:default");
-    const waitForIdle = boundArgs.commandContextActions.waitForIdle();
-    session.isStreaming = false;
-    listener?.({ type: "message_end" });
-    await waitForIdle;
-    expect(unsubscribeCalled).toBe(true);
-  });
-
-  test("bindSessionUiContext ignores non-web chats", async () => {
-    const { channel } = makeChannel();
-    let bindCalled = false;
-    const session = {
-      isStreaming: false,
-      bindExtensions: async () => {
-        bindCalled = true;
-      },
-    } as any;
-
-    await bindSessionUiContext(channel as any, createRuntime(session), "whatsapp:123");
-    expect(bindCalled).toBe(false);
+  test("chat-scoped UI contexts expose no mutable legacy session lifecycle", () => {
+    const { channel, uiBridge } = makeChannel();
+    expect("bindSession" in uiBridge).toBe(false);
+    const ui = createUiContext(channel as any, "web:default");
+    for (const retired of ["waitForIdle", "newSession", "fork", "navigateTree", "switchSession", "reload"])
+      expect(retired in ui).toBe(false);
   });
 
   test("UiBridge prunes stale per-chat state and rejects stale pending requests", async () => {

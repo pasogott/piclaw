@@ -90,7 +90,7 @@ for (const [name, engine] of Object.entries({ chromium, webkit })) {
       let latestPost = 0, latestMessage = "";
       const broadcasts: unknown[] = [];
       const broadcast = new WebSessionBroadcastService({ setProviderUsageRefreshListener: () => {} } as any, {
-        bindSessionBinder: () => {}, sse: { broadcast: (type: string, data: unknown) => broadcasts.push({ type, data }) } as any,
+        sse: { broadcast: (type: string, data: unknown) => broadcasts.push({ type, data }) } as any,
       });
       const broadcaster = createInteractionBroadcaster(broadcast, () => ({ agentName: "Agent", userName: "Fixture" }));
       const storage = new WebMessageProcessingStorageService({ pendingLinkPreviews: new Set(), broadcastEvent: (type: string, data: unknown) => broadcast.broadcastEvent(type, data) } as any, {

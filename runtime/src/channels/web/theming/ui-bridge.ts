@@ -9,7 +9,7 @@
  * Consumers: channels/web.ts sets up the UI bridge during agent runs.
  */
 
-import type { AgentSessionRuntime, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 import { setServerUiThemeConfig } from "../ui-state.js";
@@ -58,7 +58,6 @@ export interface UiBridgeChannel {
 }
 
 interface UiBridgeOptions {
-  waitForIdleTimeoutMs?: number;
   chatStateTtlMs?: number;
 }
 
@@ -85,107 +84,6 @@ export class UiBridge {
     private channel: UiBridgeChannel,
     private readonly options: UiBridgeOptions = {},
   ) {}
-
-  async bindSession(runtime: AgentSessionRuntime, chatJid: string): Promise<void> {
-    if (!chatJid.startsWith("web:")) return;
-    this.touchChat(chatJid);
-
-    const boundSession = runtime.session;
-
-    const waitForIdle = async (): Promise<void> => {
-      const session = runtime.session;
-      if (!session.isStreaming) return;
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-      let settled = false;
-      const timeoutMs = this.getWaitForIdleTimeoutMs();
-      let finish = () => {};
-      const unsubscribe = session.subscribe((event) => {
-        if (event.type === "agent_end" || !session.isStreaming) {
-          finish();
-        }
-      });
-
-      try {
-        const waitForSession = new Promise<void>((resolve) => {
-          finish = () => {
-            if (settled) return;
-            settled = true;
-            if (timeoutId) {
-              clearTimeout(timeoutId);
-              timeoutId = null;
-            }
-            resolve();
-          };
-
-          timeoutId = setTimeout(() => {
-            log.warn("Timed out waiting for web session to go idle", {
-              operation: "web_theming_ui_bridge.wait_for_idle_timeout",
-              chatJid,
-              timeoutMs,
-            });
-            finish();
-          }, timeoutMs);
-        });
-
-        await waitForSession;
-      } finally {
-        if (timeoutId) clearTimeout(timeoutId);
-        unsubscribe();
-      }
-    };
-
-    const uiContext = this.createUiContext(chatJid);
-    if (boundSession !== runtime.session) {
-      debugSuppressedError(log, "Skipped binding extension UI context for a replaced session", {
-        operation: "web_theming_ui_bridge.bind_session.replaced_before_bind",
-        chatJid,
-      });
-      return;
-    }
-
-    await boundSession.bindExtensions({
-      uiContext,
-      commandContextActions: {
-        waitForIdle,
-        newSession: async (options) => runtime.newSession(options),
-        fork: async (entryId, options) => runtime.fork(entryId, options),
-        navigateTree: async (targetId, options) => {
-          const result = await runtime.session.navigateTree(targetId, options);
-          return { cancelled: result.cancelled };
-        },
-        switchSession: async (sessionPath, options) => runtime.switchSession(sessionPath, options),
-        reload: () => runtime.session.reload(),
-      },
-      onError: (error) => {
-        const message = typeof error?.error === "string" ? error.error : String(error?.error ?? error);
-        const staleSessionCtx = message.includes("This extension ctx is stale after session replacement or reload");
-        if (staleSessionCtx) {
-          debugSuppressedError(log, "Suppressed stale extension ctx error (always benign after idle/resume)", {
-            operation: "web_theming_ui_bridge.on_error.stale_ctx_suppressed",
-            chatJid,
-            event: error?.event,
-            extensionPath: error?.extensionPath,
-          });
-          return;
-        }
-
-        const formattedError = [
-          error.error || null,
-          error.event ? `during ${error.event}` : null,
-          error.extensionPath ? `in ${error.extensionPath}` : null,
-        ].filter(Boolean).join(" ") || String(error);
-        log.error("Extension UI error", {
-          operation: "web_theming_ui_bridge.on_error",
-          chatJid,
-          err: error,
-        });
-        this.channel.broadcastEvent("extension_ui_error", {
-          chat_jid: chatJid,
-          error: formattedError,
-        });
-      },
-    });
-  }
 
   async openWorkspaceFile(chatJid: string, path: string, label: string): Promise<unknown> {
     const result = await this.requestUiResponse(chatJid, "custom", { title: "Custom UI", options: {
@@ -392,12 +290,6 @@ export class UiBridge {
     this.editorTextByChat.clear();
     this.themeByChat.clear();
     this.chatStateTouchedAtByChat.clear();
-  }
-
-  private getWaitForIdleTimeoutMs(): number {
-    const rawTimeout = this.options.waitForIdleTimeoutMs;
-    if (!Number.isFinite(rawTimeout)) return 15000;
-    return Math.max(1, Math.floor(rawTimeout as number));
   }
 
   private getChatStateTtlMs(): number {
