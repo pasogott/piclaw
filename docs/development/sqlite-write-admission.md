@@ -17,7 +17,7 @@ Callbacks and rollback hooks must be synchronous. Admission callbacks contain SQ
 
 The message store's busy-during-admission routing hook can use the queue allocator inside its transaction. Its existing failure path may leave a gap in the in-memory negative-row seed; it has no queue-seed rollback hook. This change supplies no universal memory-rewind guarantee. SQL/source changes roll back and the callback is not replayed. Negative projection row IDs remain separate from immutable source UUIDs.
 
-The private-engine `BunSqliteDatabase` adapter retains its separate asynchronous transaction queue and acquisition-only retry loop. Its callback error also remains terminal. Root/SDK/scheduler connection policy and checkpoint coordination remain #1696/#1697; this change does not alter their PRAGMAs, ownership or durability.
+The private-engine `BunSqliteDatabase` adapter retains its separate asynchronous transaction queue and acquisition-only retry loop. Its callback error also remains terminal. [Root/SDK/scheduler connection roles and checkpoint coordination](sqlite-connection-roles.md) define their explicit PRAGMAs and lifecycle; acquisition-only admission does not change those ownership boundaries.
 
 ## Verification and compatibility
 

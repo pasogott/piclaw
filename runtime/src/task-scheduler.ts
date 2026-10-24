@@ -32,6 +32,10 @@ import { DREAM_TASK_ID, parseDreamPromptToken, runDreamAgentTurn, runDreamMainte
 import { computeNextRun } from "./task-scheduler-utils.js";
 import type { AgentPool } from "./agent-pool.js";
 import { applyScheduledRunToTask, getDb, getTaskById, logTaskRun, updateTaskAfterRun } from "./db.js";
+import { getDatabaseBinding } from "./db/connection.js";
+import { openSqliteRole } from "./db/sqlite-role-policy.js";
+import { registerSqliteCheckpoint } from "./db/sqlite-checkpoint.js";
+import { RuntimeStartupCleanupError } from "./runtime/startup-cleanup-error.js";
 import { AgentQueue } from "./queue.js";
 import { detectChannel, formatOutbound } from "./router.js";
 import type {
@@ -524,33 +528,43 @@ function productionScheduledRunStore(): { store: ScheduledRunStore & Interrupted
   let database: Database;
   let primaryState = primaryStores.get(primary);
   if (filename) {
-    database = new Database(filename);
-    database.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
+    const binding = getDatabaseBinding();
+    if (!binding) throw Error("Scheduler requires the root database file binding");
+    database = openSqliteRole(filename, { role: "scheduler", create: false,
+      expectedIdentity: binding.identity, expectedPath: binding.path });
   } else {
     if (!primaryState) {
       primaryState = { users: 0, foreignKeysWereEnabled: (primary.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys === 1 };
       primaryStores.set(primary, primaryState);
     }
     primaryState.users++;
-    primary.exec("PRAGMA foreign_keys=ON");
     database = primary;
   }
-  const built = createCurrentPiclawScheduledRunStore(database, {
-    hitFault: () => false,
-    recordTrace: () => undefined,
-  });
+  let stopCheckpoint: (() => void) | undefined;
+  let closed = false;
   const close = () => {
-    if (filename) database.close();
-    else if (primaryState && --primaryState.users === 0) {
-      primaryStores.delete(primary);
-      if (!primaryState.foreignKeysWereEnabled) primary.exec("PRAGMA foreign_keys=OFF");
+    if (closed) return;
+    closed = true;
+    try { stopCheckpoint?.(); }
+    finally {
+      if (filename) database.close();
+      else if (primaryState && --primaryState.users === 0) {
+        primaryStores.delete(primary);
+        if (!primaryState.foreignKeysWereEnabled) primary.exec("PRAGMA foreign_keys=OFF");
+      }
     }
   };
-  if (!built.ok) {
-    close();
-    throw new Error(`Scheduled run store unavailable: ${built.error._tag}`);
+  try {
+    if (!filename) primary.exec("PRAGMA foreign_keys=ON");
+    const built = createCurrentPiclawScheduledRunStore(database, { hitFault: () => false, recordTrace: () => undefined });
+    if (!built.ok) throw new Error(`Scheduled run store unavailable: ${built.error._tag}`);
+    if (filename) stopCheckpoint = registerSqliteCheckpoint(database, filename);
+    return { store: built.value, close };
+  } catch (error) {
+    try { close(); }
+    catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "Scheduler store cleanup uncertain"); }
+    throw error;
   }
-  return { store: built.value, close };
 }
 
 function reconcileExpiredScheduledAgentSources(now: string): void {

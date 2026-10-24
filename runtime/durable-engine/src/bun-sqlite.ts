@@ -1,4 +1,5 @@
 import { registerSqliteCheckpoint } from "../../src/db/sqlite-checkpoint.js";
+import { openSqliteRole } from "../../src/db/sqlite-role-policy.js";
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
@@ -35,15 +36,18 @@ export class BunSqliteDatabase implements SqliteDatabase {
   constructor(private readonly path: string, private readonly guard?: { root: Database; assertOwner(): void; fenceTransactions?: boolean }) {
     guard?.assertOwner();
     this.identity = guard ? statSync(path) : undefined;
+    let expectedPath: string | undefined;
     if (guard) {
       const root = (guard.root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(r => r.name === "main");
       const identity = root?.file ? statSync(root.file) : undefined;
+      expectedPath = root?.file;
       if (!identity || identity.dev !== this.identity!.dev || identity.ino !== this.identity!.ino)
         throw new Error("Shared database identity required");
     }
-    this.db = new Database(path, { create: !guard, strict: true });
-    try { this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0");
-      this.stopCheckpoint = registerSqliteCheckpoint(this.db, path); }
+    this.db = openSqliteRole(path, { role: "sdk", create: !guard, expectedPath,
+      expectedIdentity: this.identity ? `${this.identity.dev}:${this.identity.ino}` : undefined,
+      assertOwner: () => guard?.assertOwner() });
+    try { this.stopCheckpoint = registerSqliteCheckpoint(this.db, path); }
     catch (error) {
       try { this.db.close(); }
       catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "SQLite construction cleanup uncertain"); }
