@@ -367,20 +367,24 @@ for (const mutation of ["owner-before", "owner-after", "abort"] as const) test(`
   expect(f.jobs).toEqual([]);
 });
 
-test("HTTP SQL busy retry retains the selected callback and commits exactly once", async () => {
+test("HTTP callback contention rolls back without replaying admission", async () => {
   let callback: WebUserMessageStoreOptions["acceptSource"], selections = 0, attempts = 0;
   const f = fixture(() => { selections++; return callback; });
   callback = stored => {
     f.accept(stored);
     if (++attempts === 1) {
-      f.channel.getInputSourceAdmission = () => { throw Error("must not reselect on retry"); };
+
       throw Object.assign(Error("retry"), { code: "SQLITE_BUSY" });
     }
   };
+  expect((await f.route()).status).toBe(503);
+  expect(selections).toBe(1); expect(attempts).toBe(1);
+  expect(f.db.query("SELECT * FROM messages").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(f.events).toEqual([]); expect(f.jobs).toEqual([]);
   f.expectSources(1);
   expect((await f.route()).status).toBe(201);
-  expect(selections).toBe(1);
-  expect(attempts).toBe(2);
+  expect(selections).toBe(2); expect(attempts).toBe(2);
   expect(f.db.query("SELECT * FROM messages").all()).toHaveLength(1);
   expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
   expect(f.db.query("SELECT * FROM service_effect_s01_decisions").all()).toHaveLength(1);
@@ -436,12 +440,12 @@ for (const mode of ["active", "backlog", "race"] as const) test(`HTTP queued sou
   for (const job of f.jobs) expect(job.lane).toBe("chat:web:default");
 });
 
-test("idle steer becoming active inside admission remains an unaccepted startup fallback", async () => {
+test("idle steer becoming active inside admission accepts a durable startup fallback", async () => {
   const f = fixture(() => () => { throw Error("ordinary source must not run"); });
   let selections = 0;
   f.channel.getQueuedInputSourceAdmission = () => {
     selections++;
-    return () => { throw Error("steer fallback must not accept a queued source"); };
+    return f.acceptQueued;
   };
   const published: unknown[] = [];
   const broadcast = f.channel.broadcastEvent.bind(f.channel);
@@ -452,6 +456,7 @@ test("idle steer becoming active inside admission remains an unaccepted startup 
     args[4] = phase => { validate(phase); if (phase === "before") f.busy(true); };
     return admit(...args);
   };
+  f.expectSources(1);
   const response = await f.route({ content: "startup steer", mode: "steer" });
   expect(response.status).toBe(201);
   const receipt = await response.json();
@@ -461,10 +466,10 @@ test("idle steer becoming active inside admission remains an unaccepted startup 
   const items = f.channel.getQueuedFollowupItems("web:default");
   expect(items).toHaveLength(1);
   expect(items[0]!.source).toBe("web.steer_startup_fallback");
-  expect(items[0]!.source_accepted).not.toBe(true);
+  expect(items[0]!.source_accepted).toBe(true);
   expect(items[0]!.source_id).toMatch(/^source-[0-9a-f-]{36}$/);
   expect(published).toEqual([expect.objectContaining({ source: "web.steer_startup_fallback" })]);
-  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
   expect(f.db.query("SELECT * FROM service_effect_s01_wake_intents").all()).toEqual([]);
   expect(f.db.query("SELECT * FROM messages").all()).toEqual([]);
   expect(f.jobs).toEqual([]);
@@ -597,7 +602,7 @@ for (const failure of ["throw", "async", "value", "owner-after", "abort"] as con
   expect(f.channel.peekQueuedFollowupItem("web:default")!.rowId).toBe(-1);
 });
 
-test("queued retry captures selector once and preserves intervening queue mutation", async () => {
+test("queued callback contention rolls back once and preserves later queue mutation", async () => {
   const f = fixture(); f.busy(true);
   let selections = 0, attempts = 0;
   const attemptedSourceIds: string[] = [];
@@ -609,9 +614,15 @@ test("queued retry captures selector once and preserves intervening queue mutati
       throw Object.assign(Error("retry"), { code: "SQLITE_BUSY" });
     }
   }; };
+  expect((await f.route({ content: "retried" })).status).toBe(503);
+  expect(selections).toBe(1); expect(attempts).toBe(1);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual([]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(f.events).toEqual([]); expect(f.jobs).toEqual([]);
+  await Bun.sleep(10);
   f.expectSources(1);
   expect((await f.route({ content: "retried" })).status).toBe(201);
-  expect(selections).toBe(1); expect(attempts).toBe(2);
+  expect(selections).toBe(2); expect(attempts).toBe(2);
   expect(new Set(attemptedSourceIds).size).toBe(2);
   expect(f.db.query("SELECT source_id FROM service_effect_s01_sources").all()).toEqual([{ source_id: attemptedSourceIds[1] }]);
   expect(f.channel.getQueuedFollowupItems("web:default").map(item => [item.rowId, item.queuedContent])).toEqual([[-1, "intervening"], [-2, "retried"]]);
@@ -636,11 +647,12 @@ test("queued host callback is captured before body await and cannot be replaced"
   expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
 });
 
-test("manual queue command does not adopt ordinary queued source hook", async () => {
+test("manual queue input is adopted by the durable queued source hook", async () => {
   const f = fixture(); f.busy(true, true);
-  f.channel.getQueuedInputSourceAdmission = () => () => { throw Error("command must not be adopted"); };
+  f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+  f.expectSources(1);
   expect((await f.route({ content: "/queue manual command" })).status).toBe(201);
-  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
 });
 
 for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and recovery marker without legacy`, async () => {
@@ -980,7 +992,7 @@ for (const command of ["queue", "steer"] as const) for (const busy of [false, tr
     expect(response.status).toBe(201);
     expect(prepared).toBe(1);
     expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
-    if (busy) {
+    if (busy || command === "queue") {
       expect(f.channel.getQueuedFollowupItems("web:default").at(-1)?.queuedContent).toBe("prepared:qualified payload");
       expect(f.db.query("SELECT * FROM messages").all()).toHaveLength(0);
     } else {

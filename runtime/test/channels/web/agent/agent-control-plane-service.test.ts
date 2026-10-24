@@ -101,9 +101,10 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
 }
 
 describe("native abort terminal status ownership", () => {
-  for (const scenario of ["idle", "successor", "failure"] as const) {
+  for (const scenario of ["idle", "successor", "failure", "compaction"] as const) {
     test(`${scenario}: only a settled abort may clear its captured status`, async () => {
       let status: Record<string, unknown> = { type: "intent", turn_id: "captured", source: "startup_recovery" };
+      if (scenario === "compaction") status.intent_key = "compaction";
       const updates: unknown[] = [], events: unknown[] = [];
       const service = createService({
         getAgentStatus: () => ({ ...status }), // recovery getters need not preserve object identity
