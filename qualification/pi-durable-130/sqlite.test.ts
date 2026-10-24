@@ -47,6 +47,25 @@ describe("Bun asynchronous database facade", () => {
     }
   }));
 
+  for (const guarded of [false, true]) test(`${guarded ? "guarded" : "unguarded"} SDK callback BUSY is terminal and leaves later transactions usable`, () => disk(async path => {
+    const root = new Database(path);
+    root.exec("PRAGMA journal_mode=WAL; CREATE TABLE sample (n INTEGER)");
+    const db = new BunSqliteDatabase(path, guarded ? { root, assertOwner() {}, fenceTransactions: true } : undefined);
+    const busy = Object.assign(Error("callback busy"), { code: "SQLITE_BUSY" });
+    let callbacks = 0;
+    try {
+      await expect(db.transaction(async tx => {
+        callbacks++;
+        await tx.run("INSERT INTO sample VALUES (1)");
+        if (callbacks === 1) throw busy;
+      })).rejects.toBe(busy);
+      expect(callbacks).toBe(1);
+      expect(await db.all("SELECT n FROM sample")).toEqual([]);
+      await db.transaction(async tx => { await tx.run("INSERT INTO sample VALUES (2)"); });
+      expect(await db.all("SELECT n FROM sample")).toEqual([{ n: 2 }]);
+    } finally { await db.close(); root.close(); }
+  }));
+
   test("async transaction isolates unrelated read/write/transaction and close drains", () => disk(async path => {
     const db = new BunSqliteDatabase(path);
     await db.exec("CREATE TABLE sample (n INTEGER)");

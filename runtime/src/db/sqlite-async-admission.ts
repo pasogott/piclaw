@@ -9,8 +9,9 @@ export function isSqliteContention(error: unknown): boolean {
       && ((value & 0xff) === 5 || (value & 0xff) === 6));
 }
 
-/** Retry an atomic transaction only after confirmed rollback/no admission.
- * Restore connection policy before yielding; revalidate on every attempt. */
+/** Retry writer acquisition only; never replay an entered transaction callback.
+ * Keep operations/authorization synchronous and SQL-only. Restore connection
+ * policy before yielding and run rollback cleanup before returning any failure. */
 export async function admitSqliteWrite<T>(
   database: Database,
   operation: () => T,
@@ -27,9 +28,11 @@ export async function admitSqliteWrite<T>(
     assertBinding();
     const previous = (database.query('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
     let contention: unknown;
+    let callbackEntered = false;
     database.exec('PRAGMA busy_timeout=0');
     try {
       return database.transaction(() => {
+        callbackEntered = true; // Authorization can mutate attempt-local state too.
         authorise('before');
         signal.throwIfAborted();
         const result = operation();
@@ -38,8 +41,8 @@ export async function admitSqliteWrite<T>(
         return result;
       }).immediate();
     } catch (error) {
-      afterRollback(); // Synchronous: restore attempt-local memory before any retry yields.
-      if (!isSqliteContention(error)) throw error;
+      afterRollback(); // Synchronous: restore attempt-local memory on terminal failures too.
+      if (callbackEntered || !isSqliteContention(error)) throw error;
       contention = error;
     } finally {
       database.exec(`PRAGMA busy_timeout=${previous}`);
