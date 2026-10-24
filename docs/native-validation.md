@@ -5,7 +5,7 @@
 | Command | Required work |
 |---|---|
 | `make ci-fast` | Host guardrails, runtime/feature tests and web build |
-| `make ci-native` / `bun run ci:native` | Native preflight, installed-package provenance, two private type projects, accepted-source integration and all 109 native test files |
+| `make ci-native` / `bun run ci:native` | Native preflight, installed-package provenance, two private type projects, accepted-source integration and all 110 native test files |
 | `make ci-full` / `bun run ci:full` | `ci:fast` followed by `ci:native` |
 | `make ci-integration` | Integration stages including required `ci:native`; Docker/Playwright skip flags do not skip native qualification |
 
