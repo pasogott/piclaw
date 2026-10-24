@@ -25,7 +25,12 @@
 - Local repository-owned test processes use minimum effective niceness `10`; override with `PICLAW_LOCAL_TEST_NICE=0..19`. The launcher never raises priority, and hosted CI bypasses niceness.
 - Do not add raw `bun test`/Playwright test entry points outside the central launcher or its documented nested-runner allowlist.
 - Test filesystem isolation is mandatory, including in CI: preserve the Bun preloads and launcher bootstrap. Use owned temporary fixtures, never cached live `/workspace` paths, for mutation/cleanup. An in-memory DB does not protect files. Do not run older worktrees without the isolation harness on a live workspace host.
-- `make ci-fast` — full CI gate
+- `make ci-fast` — host-only fast checks; does not qualify the native runtime
+- `make ci-native` — required offline native gate: provenance, two private type projects, required source integration and all 109 native files including Goal
+- `make ci-full` — host + native gate (`ci:fast && ci:native`); use before pushing
+- `make ci-integration` — integration gate; native qualification is mandatory regardless of Docker/Playwright skips
+- Prepare all five fixture exports from the shared JSON pins before native validation; see [Native validation](docs/native-validation.md). ADDONS/CORE/GOAL share one native checkout, CONTRACT uses the historical checkout, and catalogue dependencies use frozen `qualification/pi-durable-130/node_modules`, never a live profile. The gate performs no acquisition or installation.
+- Keep root Pi 1.2.0 and private-engine Pi 1.3.0 dependency graphs separate. Native exit 0 requires fresh parent-specific JUnit artifacts, terminal positive-pass Bun reports and the printed run receipt. Filtered, empty, skipped-only or interrupted runs and omitted mandatory stages are insufficient.
 
 ### Portable build caches and scratch
 
@@ -39,7 +44,7 @@
 
 ### Local-first CI policy
 
-- Complete iterative validation locally: use focused tests through the isolated launcher, host-independent fixtures for platform/policy variants, relevant package tests, static/workflow-contract checks, and `make ci-fast` before pushing.
+- Complete iterative validation locally: use focused tests through the isolated launcher, host-independent fixtures for platform/policy variants, relevant package tests, static/workflow-contract checks, and `make ci-full` before pushing. Prepare native fixtures separately; missing prerequisites must fail, never trigger an install inside the gate.
 - Do **not** add temporary or per-feature GitHub Actions workflows to obtain development evidence that can be produced locally.
 - Do **not** dispatch GitHub Actions manually or use hosted CI as an iterative/ad-hoc test runner.
 - Push/open a PR only after the candidate is locally complete. The repository's existing automatic PR check is supplementary hosted evidence, not the development loop.
@@ -54,7 +59,7 @@ Releases follow a two-phase tag workflow. **No release ships without passing UX 
 
 ### Phase 1 — Prerelease validation
 
-1. Build, run `make ci-fast` (unit + integration tests) locally.
+1. Prepare pinned fixtures, build and run `make ci-full` (host + required native qualification) locally.
 2. Push a prerelease tag: `v<version>-ux` (e.g. `v2.3.0-ux`).
 3. This tag triggers the **E2E Tests** workflow (Playwright UX regression suite) on CI.
 4. It does **not** trigger Docker builds, the integration gate, or publish workflows.

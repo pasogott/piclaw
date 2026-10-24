@@ -86,7 +86,7 @@ Work items and bug reports are tracked in **[GitHub Issues](https://github.com/r
 - [Ask a question](https://github.com/rcarmo/piclaw/issues/new?template=question.md)
 - [View the project board](https://github.com/users/rcarmo/projects/13)
 
-Use the issue templates when reporting a problem. For code changes, read [development](docs/development.md) and the [repository workflow](AGENTS.md); submit changes through a pull request.
+Use the issue templates when reporting a problem. For code changes, read [development](docs/development.md), [native validation](docs/native-validation.md) and the [repository workflow](AGENTS.md); submit changes through a pull request. `make ci-full` requires host and offline native qualification; `make ci-fast` covers the host only.
 
 ## Credits
 

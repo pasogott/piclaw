@@ -294,10 +294,13 @@ erDiagram
 
 ## Indexes
 
+[Timeline and accepted-payload index setup](development/sqlite-query-indexes.md) describes schema owners, migration guards and query-plan tests.
+
 - `messages(timestamp)` for chronological queries
 - `messages(chat_jid)` for timeline paging
 - `messages(chat_jid, timestamp)` for per-chat time windows
 - `messages(chat_jid, is_bot_message, timestamp)` for pollers and ingestion
+- `piclaw_durable_bindings_v1(incarnation, chat_jid, source_id, payload_ref)` for SDK accepted-payload recovery
 - `token_usage(chat_jid)`, `token_usage(run_at)`, and `token_usage(chat_jid, run_at)` for usage summaries
 - `chats(last_message_time)` for recent chat ordering
 - `scheduled_tasks(next_run)`, `scheduled_tasks(status)`, `scheduled_tasks(created_at)`, and `scheduled_tasks(last_run)` for the scheduler

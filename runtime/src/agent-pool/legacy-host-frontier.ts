@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { nativeBindingRecoveryIndex, nativeBindingRecoveryMigration, nativeBindingRecoveryChecksum } from "../db/native-host-schema-contract.js";
 // Qualified application correlation/journal tables; not another schema installer.
 const hostDurableTableNames = ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1",
   "qualification_cutover_v1", "qualification_cutover_work_v1"] as const;
@@ -13,7 +14,7 @@ const sdkIndexes = ["conversations_by_owner_conversation", "conversations_by_own
   "submissions_by_conversation", "submissions_by_status", "documents_by_address", "documents_by_scope",
   "documents_by_scope_kind", "document_revisions_by_kind"];
 const permittedTables = new Set<string>([...sdkTables, ...hostDurableTableNames]);
-const permittedIndexes = new Set(sdkIndexes);
+const permittedIndexes = new Set([...sdkIndexes, nativeBindingRecoveryIndex]);
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const encode = (value: unknown): unknown => value instanceof Uint8Array
   ? ["blob", Buffer.from(value).toString("hex")]
@@ -58,7 +59,15 @@ export function snapshotLegacyHostFrontier(root: Database): string {
       safeIntegers(enabled: boolean): { values(): unknown[][] };
     };
     const rows = statement.safeIntegers(true).values();
-    return [name, rows.filter(row => name !== "sqlite_sequence" || !permittedTables.has(String(row[0])))
+    // The shared core ledger stays protected. Only this exact, checksummed
+    // candidate-owned step may be appended during the owned upgrade.
+    const candidateLedger = name === "piclaw_schema_migrations" && kind.wr === 1 &&
+      (root.query(`PRAGMA main.table_xinfo(${quote(name)})`).all() as { name: string }[])
+        .map(column => column.name).join(",") === "owner,id,migration_order,checksum,applied_at";
+    const candidateReceipt = (row: unknown[]) => candidateLedger && row.length === 5 &&
+      row[0] === nativeBindingRecoveryMigration.owner && row[1] === nativeBindingRecoveryMigration.id &&
+      row[2] === BigInt(nativeBindingRecoveryMigration.order) && row[3] === nativeBindingRecoveryChecksum && typeof row[4] === "string";
+    return [name, rows.filter(row => (name !== "sqlite_sequence" || !permittedTables.has(String(row[0]))) && !candidateReceipt(row))
       .map(row => JSON.stringify(row.map(encode))).sort()];
   });
   return JSON.stringify([protectedSchema, data]);
