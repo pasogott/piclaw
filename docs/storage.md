@@ -86,13 +86,13 @@ The browser keeps local UI memory that should not become shared backend state ou
 
 ## SQLite on ZFS
 
-File-backed connections keep SQLite's FULL commit durability. ZFS connections disable mmap and use a conventional page cache. The main and native SDK writers share a checkpoint worker for each database file identity.
+Root, native SDK and scheduler file writers use verified WAL/FULL connection policy with deliberate differences in waits, FKs and cache settings. ZFS connections use no mmap. See the [role matrix and checkpoint contract](development/sqlite-connection-roles.md); legacy root FK policy and bootstrap paths remain unchanged.
 
-After the worker opens the existing file, writers disable SQLite's automatic checkpoint inside COMMIT. The worker checks WAL files of at least 4 MiB once per second and runs PASSIVE checkpoints. Readers can keep their snapshots; the worker never waits for their SQLite locks or truncates the WAL. A worker error restores the normal 1,000-page automatic checkpoint. Non-ZFS connections keep SQLite's normal checkpoint policy.
+Eligible ZFS handles share one checkpoint worker for the same canonical file identity, including supported symlinks. Writers disable automatic checkpoints only after readiness. The worker runs PASSIVE checkpoints once per second; readers keep their snapshots and no forced truncation occurs. Failure restores safe built-in checkpointing, including positive custom policies. Non-ZFS, non-WAL and memory handles retain built-in behaviour. Scheduler stop/unregister follows its existing queued-work lifetime.
 
-This reduces checkpoint-related HTTP stalls. Commit fsyncs and uncached reads can still wait for the filesystem on the main thread. Keep ZFS sync enabled and SQLite synchronous=FULL: disabling either weakens accepted-input durability. A WAL file can retain its allocation after a successful checkpoint, so its file size alone does not indicate uncheckpointed data.
+Checkpoint I/O runs off the HTTP thread. Commit fsyncs and uncached reads can still wait on the main thread. FULL remains required. A retained WAL allocation can coexist with complete frame progress; file size alone cannot identify uncheckpointed data or logical retention.
 
-The log operations `sqlite_checkpoint.ready` and `sqlite_checkpoint.fallback` identify worker startup and fallback. An offline database copy still requires stopping all writers; background checkpointing is not a backup.
+Existing log operations `sqlite_checkpoint.ready`, `sqlite_checkpoint.fallback` and `sqlite_checkpoint.progress` report startup, fallback, log/checkpointed/pending frames and registered connection participation, with bounded repeated observations. Background checkpointing is not a backup; use the verified backup/recovery contracts below.
 
 ## Access-state invariants
 
