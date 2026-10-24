@@ -1,9 +1,11 @@
+/** Archive/migration tooling: preserves imported JSONL bytes, search and export.
+ * Native execution belongs to Harness; this store is never an AgentPool backend. */
 import { createHash } from "node:crypto";
 import Database from "bun:sqlite";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { applyOwnedMigrations, type OwnedSchemaMigration } from "../db/migrations.js";
+import { applyOwnedMigrations, type OwnedSchemaMigration } from "../../src/db/migrations.js";
 
 export const SQLITE_SESSION_SCHEMA_OWNER = "piclaw-agent-sessions";
 export const EARENDIL_SQLITE_COMPATIBILITY_COMMIT = "583f153d502aa8e958eefdb9af0fbd3344e68f95";

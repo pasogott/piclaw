@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { assertHostPlanContext, hostPlanContextKind, assertHostGoalContext, hostGoalContextKind } from "./host-plan-context.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RootSessionTreeNode } from "../../src/agent-control/session-tree-snapshot.js";
-import type { LegacyImportBinding } from "./legacy-import.js";
+import type { LegacyImportBinding } from "./legacy-import-schema.js";
 
 export function projectPublicHistory(rows: readonly EntryRecord[], binding: LegacyImportBinding | null): RootSessionTreeNode[] {
   const originals = new Map(binding?.originalEntries.map(e => {

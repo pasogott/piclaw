@@ -1,9 +1,14 @@
+import { IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS, LegacyImportManifest, LegacyTreeImportManifest } from "./legacy-import-schema.js";
+import type { LegacyImportBinding, LegacyTreeHostBinding, LegacyTreeImportBinding } from "./legacy-import-schema.js";
+// Compatibility entry point for the existing explicit migration/qualification API.
+export { IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS, LegacyImportManifest, LegacyTreeImportManifest } from "./legacy-import-schema.js";
+export type { LegacyImportBinding, LegacyTreeHostBinding, LegacyTreeImportBinding } from "./legacy-import-schema.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { JsonValue, Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "../../src/durable-legacy-sdk.js";
-import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type ConversationId, type Tx } from "@earendil-works/pi-durable";
+import { CompactionEntry, SystemEntry, type Conversation, type EntryId, type ConversationId, type Tx } from "@earendil-works/pi-durable";
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): asserts value is ObjectValue {
   assert(value !== null && typeof value === "object" && !Array.isArray(value), "object required");
@@ -50,8 +55,6 @@ function message(value: unknown): asserts value is Message {
 }
 
 
-export const IMPORTER_VERSION = 2;
-export const DEFAULT_IMPORT_LIMITS = { maxEntries: 1000, maxBytes: 8 * 1024 * 1024 } as const;
 export type CopiedLegacyInput = Readonly<{
   sourceJSONL: string; chatJid: string; chatIncarnation: string; branchId: string;
   /** Genuinely captured current host instructions for continuation, not historical proof. */
@@ -66,17 +69,6 @@ export type GetLegacyContext = (entries: readonly SessionEntry[], leafId: string
   messages: readonly Message[];
   projected: readonly { sourceEntryId: string; messages: readonly Message[] }[];
 };
-type Mapping = { sourceEntryId: string; durableEntryId: number };
-export type LegacyImportBinding = {
-  schemaVersion: number; importerVersion: number; sourceHash: string;
-  chatJid: string; chatIncarnation: string; branchId: string; sourceSessionId: string;
-  sourceLeafId: string; engineConversationId: number;
-  originalEntries: JsonValue[]; entries: Mapping[];
-};
-export const LegacyImportManifest = defineDoc<{ binding: LegacyImportBinding | null }>({
-  kind: "app.copied-legacy-import", version: 1, scope: "conversation", history: "latest",
-  fork: "initial", initial: () => ({ binding: null }),
-});
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 /** Pure fail-closed preparation. Only a complete linear, quiescent v3 history is supported.
@@ -236,27 +228,12 @@ async function appendPrepared(tx: Tx, conversationId: ConversationId,
     }
 }
 
-export const DEFAULT_TREE_IMPORT_LIMITS = { ...DEFAULT_IMPORT_LIMITS, maxBranches: 16 } as const;
-export type LegacyTreeHostBinding = Readonly<{
-  chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string;
-}>;
 export type CopiedLegacyTreeInput = Readonly<{
   sourceJSONL: string;
   /** Complete leaf-ID → original host identity map; no active-branch inference. */
   hostBranchBindings: Readonly<Record<string, LegacyTreeHostBinding>>;
   maxEntries?: number; maxBytes?: number; maxBranches?: number;
 }>;
-export type LegacyTreeImportBinding = {
-  importerVersion: number; sourceHash: string; sourceSessionId: string;
-  originalEntries: JsonValue[];
-  plannedBranches: { sourceLeafId: string; chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string }[];
-  branches: LegacyImportBinding[]; entries: Mapping[];
-};
-export const LegacyTreeImportManifest = defineDoc<{ binding: LegacyTreeImportBinding | null }>({
-  kind: "app.copied-legacy-tree-import", version: 1, scope: "conversation", history: "latest",
-  fork: "initial", initial: () => ({ binding: null }),
-});
-
 /** Every source record must belong to the single rooted tree, and EVERY leaf must
  * have an explicit host binding. Detached once before invoking any host bridge.
  * Separate host JSONL files must be assembled/validated by the caller, not inferred. */

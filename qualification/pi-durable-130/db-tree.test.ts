@@ -2,7 +2,9 @@ import "./src/test-guard.js";
 import { expect, spyOn, test } from "bun:test";
 import { watch } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import * as persistedImport from "../../runtime/durable-engine/src/legacy-import-schema.js";
+import * as importCompatibility from "../../runtime/durable-engine/src/legacy-import.js";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Harness, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
@@ -13,6 +15,36 @@ import { context } from "./src/fixture.js";
 import { createDurableConversationAdapter } from "../../runtime/src/agent-pool/durable-runtime-adapter.js";
 import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
 import { projectPublicHistory } from "../../runtime/durable-engine/src/session-tree.js";
+
+test("persisted import documents retain exact identity, versions, initial state and policy", () => {
+  expect(persistedImport.IMPORTER_VERSION).toBe(2);
+  expect(persistedImport.DEFAULT_IMPORT_LIMITS).toEqual({maxEntries:1000,maxBytes:8*1024*1024});
+  expect(persistedImport.DEFAULT_TREE_IMPORT_LIMITS).toEqual({maxEntries:1000,maxBytes:8*1024*1024,maxBranches:16});
+  for (const [doc, kind] of [[persistedImport.LegacyImportManifest,"app.copied-legacy-import"],
+    [persistedImport.LegacyTreeImportManifest,"app.copied-legacy-tree-import"]] as const) {
+    expect(doc.definition).toMatchObject({kind,version:1,scope:"conversation",history:"latest",fork:"initial"});
+    expect(doc.definition.initial()).toEqual({binding:null});
+  }
+  expect(importCompatibility.LegacyImportManifest).toBe(persistedImport.LegacyImportManifest);
+  expect(importCompatibility.LegacyTreeImportManifest).toBe(persistedImport.LegacyTreeImportManifest);
+});
+
+test("native history reader graph excludes import preparation and archival tooling", async () => {
+  const engine = resolve(import.meta.dir,"../../runtime/durable-engine/src");
+  const loaded = new Set<string>();
+  const result = await Bun.build({
+    entrypoints:[join(engine,"host-runtime.ts"),join(engine,"session-tree.ts")],
+    target:"bun",packages:"external",
+    plugins:[{name:"history-import-boundary",setup(build) {
+      build.onLoad({filter:/\.[cm]?[jt]sx?$/}, args => { loaded.add(args.path); });
+    }}],
+  });
+  expect(result.success, result.logs.map(String).join("\n")).toBe(true);
+  expect(loaded.has(join(engine,"legacy-import-schema.ts"))).toBe(true);
+  for (const retired of ["legacy-import.ts","copied-upgrade.ts","copied-installation.ts","index.ts"])
+    expect(loaded.has(join(engine,retired))).toBe(false);
+  expect([...loaded].some(path => path.endsWith("/scripts/lib/sqlite-session-archive.ts"))).toBe(false);
+});
 
 test("only the adjacent audited imported compaction/baseline pair is deduplicated", () => {
   const source = { type: "compaction", id: "source", parentId: null, summary: "source summary", tokensBefore: 12 };

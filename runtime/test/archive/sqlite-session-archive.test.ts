@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { EARENDIL_SQLITE_COMPATIBILITY_COMMIT, SqliteSessionStore } from "../../src/agent-pool/sqlite-session-store.js";
+import { EARENDIL_SQLITE_COMPATIBILITY_COMMIT, SqliteSessionStore } from "../../scripts/lib/sqlite-session-archive.js";
 
 let cleanup: string[] = [];
 afterEach(() => {
@@ -28,7 +28,18 @@ function fixture() {
   return { root, source, database: join(root, "sessions.db") };
 }
 
-describe("SqliteSessionStore", () => {
+describe("archival SqliteSessionStore", () => {
+  test("retains the exact historical owner, migration identity and SQL checksum", () => {
+    const { database } = fixture();
+    const store = new SqliteSessionStore(database);
+    try {
+      expect(store.database.query("SELECT owner,id,migration_order,checksum FROM piclaw_schema_migrations").all()).toEqual([{
+        owner:"piclaw-agent-sessions",id:"001-namespaced-session-import",migration_order:1,
+        checksum:"3e4099241ba82d20d6ddfd41b12dc0f4d8c04cfa622bea2f0578300301811e72",
+      }]);
+    } finally { store.close(); }
+  });
+
   test("pins the non-shipping Earendil main compatibility probe", () => {
     expect(EARENDIL_SQLITE_COMPATIBILITY_COMMIT).toMatch(/^[0-9a-f]{40}$/);
   });
