@@ -34,6 +34,7 @@ import {
 import type { AssistantMessageEventStream, Context, Model, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 
 import { type AgentControlCommand, type AgentControlResult } from "./agent-control/index.js";
+import { getNativeCommandCatalogue } from "./agent-control/native-control-capabilities.js";
 import { getPiclawAgentDir } from "./core/agent-dir.js";
 import { SESSIONS_DIR, WORKSPACE_DIR, getAgentLogConfig, getSessionPoolConfig } from "./core/config.js";
 import { readAccessConfig } from "./core/config-access.js";
@@ -904,7 +905,8 @@ export class AgentPool {
     if (!this.durableApplication) return undefined;
     const position = this.durableSessionLookup?.(chatJid);
     if (!position?.readMetadata) return null;
-    return position.readMetadata();
+    const metadata = await position.readMetadata();
+    return metadata ? { ...metadata, commandCatalogue: getNativeCommandCatalogue(position) } : null;
   }
 
   async getSessionForIntrospection(chatJid: string): Promise<AgentSession> {

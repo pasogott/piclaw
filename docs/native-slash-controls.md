@@ -17,7 +17,7 @@ Policy changes apply at subsequent SDK decisions. They do not replay or restart 
 
 Shell commands are not replayed after recovery. If execution finishes but context persistence cannot be confirmed, the command returns an uncertainty error; do not automatically rerun it. Concurrent user shells for the same conversation are rejected. A restart refuses uncertain cleanup instead of aborting unrelated work to obtain idle.
 
-The catalogue reports availability from the bound native ports. Other unsupported commands remain unavailable.
+The `/commands` audit reports availability from the bound native ports. `GET /agent/commands` uses the same catalogue for autocomplete: supported commands and aliases appear in `commands`; unsupported names and aliases appear in `unavailable_commands`. The existing `unavailable` feature categories are unchanged. Unbound chats return 404. Failed metadata reads or missing catalogues return 503 without opening a legacy session.
 
 ## Focused checks
 

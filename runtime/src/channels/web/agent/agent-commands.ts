@@ -88,13 +88,24 @@ export async function handleAgentCommandsRequest(
   const chatJid = url.searchParams.get("chat_jid")?.trim() || options.defaultChatJid;
 
   const { result, durationMs } = await measureAsync(async () => {
-    let native;
-    try { native = await options.agentPool.getDurableSessionMetadata?.(chatJid); }
-    catch { return options.json({ error: "Native command metadata unavailable" }, 503); }
-    if (native !== undefined) {
-      return native ? options.json({ commands: buildCommandList(null), backend: "durable",
-        unavailable: ["legacy-extension-commands", "prompt-templates", "skills"] })
-        : options.json({ error: "No active session for this chat" }, 404);
+    try {
+      const native = await options.agentPool.getDurableSessionMetadata?.(chatJid);
+      if (native !== undefined) {
+        if (!native) return options.json({ error: "No active session for this chat" }, 404);
+        const catalogue = native.commandCatalogue;
+        if (!Array.isArray(catalogue)) throw new Error("Missing native command catalogue");
+        const names = (entries: typeof catalogue) => entries.flatMap(entry => [entry.name, ...(entry.aliases ?? [])]);
+        const available = new Set(names(catalogue.filter(entry =>
+          ["native", "web input", "web UI"].includes(entry.status))).map(name => name.toLowerCase()));
+        return options.json({
+          commands: buildCommandList(null).filter(command => available.has(command.name.toLowerCase())),
+          backend: "durable",
+          unavailable: ["legacy-extension-commands", "prompt-templates", "skills"],
+          unavailable_commands: [...new Set(names(catalogue.filter(entry => entry.status === "unavailable")))].sort(),
+        }, 200);
+      }
+    } catch {
+      return options.json({ error: "Native command metadata unavailable" }, 503);
     }
     try {
       const session = await options.agentPool.getSessionForIntrospection(chatJid);
