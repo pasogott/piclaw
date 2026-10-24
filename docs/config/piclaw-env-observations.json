@@ -1297,6 +1297,7 @@
             "docs/development/receipts/pi-103-core-addon-peers.json",
             "docs/development/receipts/pi-103-deeper-qualification.json",
             "docs/development/receipts/pi-103-soak-agent-qualification.json",
+            "docs/development/scheduled-result-history.md",
             "docs/development/schema-ownership.md",
             "docs/development/testing-and-linting-flow-presentation-2026-04-18.html",
             "docs/development/tool-output-retention-performance.md",
