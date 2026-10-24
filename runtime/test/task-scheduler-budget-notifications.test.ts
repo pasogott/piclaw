@@ -8,7 +8,9 @@ isolateBudgetTestDatabase();
 
 import { drainScheduledBudgetNotifications } from "../src/budget/scheduled-notifications.js";
 import { ensureBudgetWork, getDb, getTaskRunLogs, initDatabase, persistBudgetDecision } from "../src/db.js";
-import { createTask } from "../src/db/tasks.js";
+import { createTask, updateTask } from "../src/db/tasks.js";
+import { createCurrentPiclawScheduledRunStore } from "../src/service-effects/current-piclaw/scheduled-run-store.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../src/service-effects/contracts/common.js";
 import { pollScheduledRunsOnce, runScheduledTask } from "../src/task-scheduler.js";
 import type { SchedulerDeps } from "../src/task-scheduler.js";
 import type { ScheduledRunStore } from "../src/service-effects/contracts/scheduled-run-store.js";
@@ -93,6 +95,33 @@ beforeEach(() => {
 });
 
 describe("scheduled budget stop notifications", () => {
+  test("defers an exact live occurrence notice until canonical history commits", async () => {
+    updateTask(TASK_ID, { task_kind: "shell", command: "printf synthetic" });
+    const db = getDb(); db.exec("PRAGMA foreign_keys=ON");
+    const built = createCurrentPiclawScheduledRunStore(db, { hitFault() { return false; }, recordTrace() {} });
+    if (!built.ok) throw Error(built.error._tag);
+    const store = built.value;
+    const claimed = await store.claimDue({ now: new Date().toISOString(), limit: 1, workerId: "worker:notice", leaseTokenPrefix: "lease:notice", leaseDurationMs: 60000, reclaimAuthorities: [] });
+    if (!claimed.ok || !claimed.value[0]) throw Error("Missing fixture claim");
+    const lease = claimed.value[0];
+    const decision = persistPendingStop(`scheduled:${lease.record.runId}`);
+    const sent: string[] = [];
+    const deps = { sendMessage: async (_jid: string, text: string) => { sent.push(text); expect(getTaskRunLogs(TASK_ID)).toHaveLength(1); } };
+    await drainScheduledBudgetNotifications(deps);
+    expect(sent).toEqual([]);
+    expect(pendingStatus(decision)).toBe("pending");
+    const now = new Date().toISOString();
+    const request = { effect: { idempotencyKey: "complete:notice", requestHash: "", operationId: null, sourceSeq: null, provenanceRef: "notice:fixture", redactionClass: "private" as const },
+      runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: lease.record.attempt, expectedTaskRevision: lease.record.taskRevision,
+      leaseToken: lease.leaseToken, now, status: "error" as const, durationMs: 1, resultRef: null, errorCode: "scheduled_task_failed", completedAt: now,
+      resultPayload: { version: 1 as const, result: null, error: BLOCKED_ERROR }, outboxIntents: [] };
+    request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+    expect((await store.complete(request)).ok).toBe(true);
+    await drainScheduledBudgetNotifications(deps);
+    expect(sent).toHaveLength(1);
+    expect(pendingStatus(decision)).toBe("delivered");
+  });
+
   test("logs the blocked run before delivery and routes the durable notice to the task chat", async () => {
     let decisionId = "";
     let runAgentCalls = 0;

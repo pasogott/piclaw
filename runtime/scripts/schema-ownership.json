@@ -4,7 +4,8 @@
     "core": "3c66c54de0bc4826dc51655bb5f009ce6f9905d9",
     "sdk": "@earendil-works/pi-durable@1.3.0",
     "nativeAddons": "e8aac2399148cbef638764ba2b5a1cd916cc5ecc",
-    "approved-variant:table:chat_branches:ca1502052e5b89e1bea6419cf9448b2b81bf0c76dbfc585548d58bb2d11f5bc7": "Current migrateChatBranchAgentNameUniqueness rebuild quotes the table header; isolated historical chats/branches + legacy token_usage fixture; all other clauses/constraints unchanged. See runtime/src/db/connection.ts and qualification/pi-durable-130/schema-ownership-fixture.ts."
+    "approved-variant:table:chat_branches:ca1502052e5b89e1bea6419cf9448b2b81bf0c76dbfc585548d58bb2d11f5bc7": "Current migrateChatBranchAgentNameUniqueness rebuild quotes the table header; isolated historical chats/branches + legacy token_usage fixture; all other clauses/constraints unchanged. See runtime/src/db/connection.ts and qualification/pi-durable-130/schema-ownership-fixture.ts.",
+    "host.scheduled-history/occurrence-payload-v1": "{\"base\":\"047d08b1b8f78d5e3bd25b559da6c1917e1dd939\",\"owner\":\"host.scheduled-history\",\"id\":\"occurrence-payload-v1\",\"migration_order\":1,\"checksum\":\"7d717432ca22388076f53de373fb1ee710b92ad8368107bc7186a850cdae03f4\"}"
   },
   "owners": {
     "core:access_state": {
@@ -855,16 +856,19 @@
     },
     "core:task_run_logs": {
       "category": "core",
-      "initializer": "runtime/src/db/connection.ts#createSchema",
+      "initializer": "runtime/src/db/connection.ts#createSchema + runtime/src/db/scheduled-history-schema.ts#initializeScheduledHistorySchema",
       "writers": [
         "runtime/src/ipc.ts",
         "runtime/src/db/chat-branches.ts",
-        "runtime/src/db/tasks.ts"
+        "runtime/src/db/tasks.ts",
+        "runtime/src/service-effects/current-piclaw/scheduled-history-projection.ts"
       ],
-      "sourceOfTruth": "Legacy scheduler execution history and compatibility-facing run log rows. Native S07 has separate occurrence/run/source authority; historical rows without native identity remain preserved, never guessed into a native occurrence.",
-      "replayRetention": "No universal reconstruction or age-expiry guarantee. Preserve persisted identity, history and FK/receipt obligations; changes belong to the cited owner APIs. This read-only inventory adds no deletion, pruning, replay or migration authority.",
+      "sourceOfTruth": "Retained legacy/direct result payload rows remain explicitly unlinked. New native payload bytes are versioned/hash-bound and keyed by exact S07 occurrence identity; copied UI metadata derives from committed S07 history. Execution/lease/head authority remains exclusively S07.",
+      "replayRetention": "Same sealed completion repairs metadata/payload from original hash-validated evidence without reexecution; missing bytes without evidence are explicit unavailable. Owner deletion suppresses resurrection. Canonical cleanup retains authority while exact linked payload/reference rows survive; unlinked historical identities are never guessed.",
       "references": [
-        "runtime/src/db/connection.ts"
+        "runtime/src/db/connection.ts",
+        "runtime/src/db/scheduled-history-schema.ts",
+        "runtime/src/service-effects/current-piclaw/scheduled-history-projection.ts"
       ]
     },
     "core:thinking_content": {
@@ -3046,7 +3050,7 @@
     "table:task_run_logs": {
       "owner": "core:task_run_logs",
       "fingerprints": [
-        "9913c37a26e9290f7a3e35893db518678abdeffc409c83fbdff4fa2f081fab8f"
+        "3a9232c75c28825a01c429385a62448c2992aab849f8fc2db1a24064f021c240"
       ],
       "requiredIn": [
         "core",
@@ -4457,6 +4461,18 @@
       ],
       "requiredIn": [],
       "derivedIndexes": []
+    },
+    "index:idx_task_run_logs_occurrence": {
+      "owner": "core:task_run_logs",
+      "fingerprints": [
+        "83646ec1de291b41b5775cda23703336f495cbabbc72a865de81c5df00aec700"
+      ],
+      "requiredIn": [
+        "core",
+        "native",
+        "native-addons"
+      ],
+      "table": "task_run_logs"
     }
   },
   "documents": [

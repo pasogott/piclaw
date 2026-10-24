@@ -187,6 +187,55 @@ test("actual root scheduler: duplicate polls -> one EF-S07 occurrence/source -> 
   } finally { renewal.restore(); await h.close(); }
 }, 15000);
 
+for (const lostAcks of [1, 2, "unknown_then_not_applied", "unknown_probe_unavailable"] as const) test(`lost completion ACK repairs the same occurrence history without another native execution: ${lostAcks} lost`, async () => {
+  const h = await setup();
+  const complete = h.store.complete.bind(h.store);
+  const get = h.store.get.bind(h.store);
+  let calls = 0, failedProbe = false;
+  h.store.get = async id => {
+    if (lostAcks === "unknown_probe_unavailable" && calls === 2 && !failedProbe) {
+      failedProbe = true;
+      return { ok: false, error: { _tag: "storage_unavailable", certainty: "not_applied", retryable: true } };
+    }
+    return get(id);
+  };
+  let original: Parameters<ScheduledRunStore["complete"]>[0] | undefined;
+  h.store.complete = async request => {
+    calls++;
+    if (original) expect(request).toBe(original); else original = request;
+    if ((lostAcks === "unknown_then_not_applied" || lostAcks === "unknown_probe_unavailable") && calls === 2) return { ok: false, error: { _tag: "storage_unavailable", certainty: "not_applied", retryable: true } };
+    const result = await complete(request);
+    if (calls <= (typeof lostAcks === "number" ? lostAcks : 1) && result.ok) return { ok: false, error: { _tag: "storage_unavailable", certainty: "unknown", retryable: true } };
+    return result;
+  };
+  try {
+    await h.poll();
+    await until(() => h.queue.getMetrics().succeeded === 1);
+    expect(calls).toBe(2);
+    expect(h.fixture.host.modelCalls).toBe(1);
+    expect(h.inputs).toHaveLength(1);
+    const id = h.inputs[0]!.requestId, committed = value(await h.actual.get(id))!;
+    expect(committed.resultRef).toBe(`task_run_result:${id}`);
+    if (lostAcks === "unknown_probe_unavailable") {
+      expect(failedProbe).toBe(true);
+      expect(h.db.query("SELECT terminal_disposition FROM service_effect_s01_operations WHERE operation_id=?").get(committed.operationId!))
+        .toEqual({ terminal_disposition: null });
+      await h.poll(); // Recovery must preserve the already committed success.
+    }
+    expect(h.db.query("SELECT s.state,o.phase,o.terminal_disposition FROM service_effect_s01_sources s JOIN service_effect_s01_operations o ON o.primary_source_seq=s.source_seq AND o.chat_jid=s.chat_jid WHERE s.source_id=?").get(id))
+      .toEqual({ state: "consumed", phase: "terminal", terminal_disposition: "completed" });
+    expect(getTaskRunLogs("scheduled-fixture")).toEqual([expect.objectContaining({ occurrence_id: id, result: "synthetic answer", status: "success" })]);
+    h.db.query("DELETE FROM task_run_logs WHERE occurrence_id=?").run(id);
+    expect(value(await h.store.complete(original!))).toEqual(committed);
+    await h.poll();
+    expect(h.fixture.host.modelCalls).toBe(1);
+    expect(h.inputs).toHaveLength(1);
+    expect(h.sent).toEqual(["synthetic answer"]);
+    expect(getTaskRunLogs("scheduled-fixture")).toHaveLength(1);
+    expect(h.db.query("SELECT count(*) AS n FROM service_effect_s07_run_logs").get()).toEqual({ n: 1 });
+  } finally { await h.close(); }
+}, 15000);
+
 test("real renewal failure cancels pending durable work; late callback cannot settle a revised successor", async () => {
   const h = await setup();
   // Exercise the REAL root 20s renewal callback deterministically, without a

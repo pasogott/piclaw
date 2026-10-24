@@ -185,7 +185,8 @@ export function applyScheduledRunToTask(
   }).immediate();
 }
 
-/** Record one execution and return a stable result reference for EF-S07. */
+/** Record an unlinked legacy/direct execution. Admitted S07 result payloads
+ * and their history projection are written inside its completion transaction. */
 export function logTaskRun(log: TaskRunLog): number {
   const result = getDb().prepare(
     `INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
