@@ -27,6 +27,7 @@ import { initializeToolOutputOwnership } from './tool-output-ownership-schema.js
 import { initializeBudgetLimitsSchema } from './budget-limits-schema.js';
 import { initializeAddonOperationsSchema } from './addon-operations-schema.js';
 import { initializeChatProjects } from './chat-project-schema.js';
+import { initializeScheduledHistorySchema } from './scheduled-history-schema.js';
 import fs from "fs";
 import path from "path";
 
@@ -943,6 +944,7 @@ function initializeSchema(database: Database): void {
   initializeAddonOperationsSchema(database);
   ensureScheduledTaskColumns(database);
   installScheduledRunCompositionSchema(database);
+  initializeScheduledHistorySchema(database);
   migrateScheduledTaskAuthorities(database);
   ensureWebSessionColumns(database);
   ensureWebSessionIdentity(database);

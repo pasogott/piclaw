@@ -54,6 +54,8 @@ import {
   validScheduledRunId,
 } from "./scheduled-run-values.js";
 
+import { hasScheduledHistoryProjection, projectScheduledHistory, ScheduledHistoryError } from "./scheduled-history-projection.js";
+
 const P = "service_effect_s07_";
 const TASKS = `${P}tasks`, REVISIONS = `${P}task_revisions`, RUNS = `${P}occurrences`;
 const LEASES = `${P}leases`, RENEWALS = `${P}lease_renewals`, BINDINGS = `${P}source_bindings`, LOGS = `${P}run_logs`;
@@ -66,7 +68,7 @@ type MutationMethod = ScheduledRunMutationMethod;
 export type ScheduledRunStatement =
   | "occurrence_insert" | "occurrence_reclaim_update" | "lease_insert" | "renewal_insert" | "lease_history_update" | "lease_renew"
   | "source_binding_insert" | "source_binding_update"
-  | "next_decision_insert" | "run_log_insert" | "outbox_link_insert"
+  | "next_decision_insert" | "run_log_insert" | "history_projection" | "outbox_link_insert"
   | "task_head_update" | "occurrence_terminal_update" | "abandonment_insert"
   | "decision_insert" | "tombstone_insert" | "retention_delete"
   | ServiceOutboxEnqueueStatement;
@@ -259,7 +261,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       this.trace(method, effectId, operationId, version, "applied", "applied", sourceSeq);
       return result;
     } catch (error) {
-      const bounded = error instanceof CorruptState ? errorOf("corrupt_state") : error instanceof AbortMutation ? error.error : errorOf("storage_unavailable", "not_applied", isBusy(error));
+      const bounded = error instanceof CorruptState ? errorOf("corrupt_state") : error instanceof ScheduledHistoryError ? errorOf(error.tag) : error instanceof AbortMutation ? error.error : errorOf("storage_unavailable", "not_applied", isBusy(error));
       return this.failed(method, effectId, operationId, version, bounded, sourceSeq);
     } finally { release(); }
   }
@@ -446,11 +448,22 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key=`effect:${request.effect.idempotencyKey}`;
     return this.database.transaction(()=>{
       const replay=this.replayRecordOrRetained(key,'complete',request.effect.requestHash,request.runId);
-      if(replay)return Result.ok(replay);
+      if(replay){
+        if(request.resultPayload && replay.durationMs !== null){
+          projectScheduledHistory(this.database,request.runId,request);
+          this.statement('history_projection');
+        }
+        return Result.ok(replay);
+      }
       const run=this.requireFencedRun(request,hashScheduledLeaseToken(request.leaseToken));
       const snapshot=this.readSnapshot(run.task_id,run.task_revision);
       this.validateCompletionShape(request,run,snapshot);
-      return this.finishCompletion(request,run,snapshot);
+      const completed = this.finishCompletion(request,run,snapshot);
+      if(completed.ok && request.resultPayload){
+        projectScheduledHistory(this.database,request.runId,request);
+        this.statement('history_projection');
+      }
+      return completed;
     }).immediate();
   }
 
@@ -553,8 +566,12 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         if (!result) throw new CorruptState();
         return Result.ok(result);
       }
+      // Retain canonical rebuild/replay authority while an explicitly linked
+      // host payload survives. Legacy unlinked rows are never guessed into it.
+      const protectedHistory = hasScheduledHistoryProjection(this.database)
+        ? `AND NOT EXISTS (SELECT 1 FROM main.task_run_logs h WHERE h.occurrence_id=r.run_id OR (h.task_id=r.task_id AND r.result_ref='task_run_log:' || h.id))` : "";
       const rows = this.database.query(
-        `SELECT * FROM ${RUNS} WHERE state IN ('completed','abandoned') AND settled_at<? ORDER BY settled_at,run_id LIMIT ?`,
+        `SELECT r.* FROM ${RUNS} r WHERE r.state IN ('completed','abandoned') AND r.settled_at<? ${protectedHistory} ORDER BY r.settled_at,r.run_id LIMIT ?`,
       ).all(request.settledBefore, request.limit) as RunRow[];
       const runIds: string[] = [];
       for (const row of rows) {

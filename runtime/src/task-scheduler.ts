@@ -48,6 +48,7 @@ import type {
 import { hashCanonicalRequest, type CanonicalJsonValue, type EffectIdentity } from "./service-effects/contracts/common.js";
 import { createCurrentPiclawScheduledRunStore } from "./service-effects/current-piclaw/scheduled-run-store.js";
 import { addCanonicalDuration } from "./service-effects/current-piclaw/scheduled-run-values.js";
+import { scheduledResultRef } from "./service-effects/current-piclaw/scheduled-history-projection.js";
 import type { ScheduledTask } from "./types.js";
 import { createTrackedBashOperations } from "./tools/tracked-bash.js";
 import { createLogger } from "./utils/logger.js";
@@ -301,6 +302,8 @@ export interface ScheduledTaskRunOutcome {
   error: string | null;
   durationMs: number;
   taskRunLogId: number | null;
+  /** Durable delivery waits for the atomic S07/history commitment. */
+  budgetBlocked?: boolean;
 }
 
 /**
@@ -319,7 +322,7 @@ export async function runScheduledTask(
 async function executeScheduledTask(
   task: ScheduledTask,
   deps: SchedulerDeps,
-  options: { advanceTask?: boolean },
+  options: { advanceTask?: boolean; deferHistory?: boolean },
   claimActive: () => boolean = () => true,
   scheduledLease?: ScheduledRunLease,
 ): Promise<ScheduledTaskRunOutcome> {
@@ -344,7 +347,7 @@ async function executeScheduledTask(
   };
 
   const start = Date.now();
-  const budgetWorkId = `scheduled:${task.id}:${start}`;
+  const budgetWorkId = scheduledLease ? `scheduled:${scheduledLease.record.runId}` : `scheduled:${task.id}:${start}`;
   schedulerMetrics.taskRunsStarted += 1;
   let result: string | null = null;
   let error: string | null = null;
@@ -462,11 +465,12 @@ async function executeScheduledTask(
   if (error) schedulerMetrics.taskRunsFailed += 1;
   else schedulerMetrics.taskRunsSucceeded += 1;
 
-  // Record the run in the task_run_logs table.
+  // Direct callers retain legacy history. Claimed occurrences commit their
+  // payload/projection inside the same fenced transaction as S07 completion.
   const effectiveResult = loggedResult ?? result;
   const effectiveError = loggedError ?? error;
   const durationMs = Date.now() - start;
-  const taskRunLogId = logTaskRun({
+  const taskRunLogId = options.deferHistory ? null : logTaskRun({
     task_id: task.id,
     run_at: new Date().toISOString(),
     duration_ms: durationMs,
@@ -482,7 +486,7 @@ async function executeScheduledTask(
     updateTaskAfterRun(task.id, nextRun, error ? `Error: ${effectiveError || error}` : ((effectiveResult || result)?.slice(0, 200) || "Completed"));
   }
 
-  if (budgetBlocked) await drainScheduledBudgetNotifications(deps);
+  if (budgetBlocked && !options.deferHistory) await drainScheduledBudgetNotifications(deps);
 
   return {
     status: error ? "error" : "success",
@@ -490,6 +494,7 @@ async function executeScheduledTask(
     error: effectiveError,
     durationMs,
     taskRunLogId,
+    ...(options.deferHistory && budgetBlocked ? { budgetBlocked: true } : {}),
   };
 }
 
@@ -878,7 +883,7 @@ async function runClaimedScheduledTask(
       }
     }
 
-    const outcome = await executeScheduledTask(task, deps, { advanceTask: false }, () => controller.valid, controller.lease);
+    const outcome = await executeScheduledTask(task, deps, { advanceTask: false, deferHistory: true }, () => controller.valid, controller.lease);
     if (outcome.status === "skipped" && outcome.error !== null) { controller.stop(); return; }
     if (!mayContinueClaim(controller)) return;
     if (outcome.status === "skipped") {
@@ -905,12 +910,26 @@ async function runClaimedScheduledTask(
       now: completedAt,
       status: outcome.status,
       durationMs: outcome.durationMs,
-      resultRef: outcome.status === "success" ? `task_run_log:${outcome.taskRunLogId}` : null,
+      resultRef: outcome.status === "success" ? scheduledResultRef(finalLease.record.runId) : null,
+      resultPayload: { version: 1 as const, result: outcome.result, error: outcome.error },
       errorCode: outcome.status === "error" ? "scheduled_task_failed" : null,
       completedAt,
       outboxIntents: [],
     });
-    const completed = await store.complete(completeRequest);
+    let completed = await store.complete(completeRequest);
+    // Retry persistence with the identical sealed evidence, never task execution.
+    if (!completed.ok && completed.error.certainty === "unknown" && completed.error.retryable && canRunLegacyScheduledWork()) {
+      completed = await store.complete(completeRequest);
+    }
+    if (!completed.ok && completed.error.certainty === "unknown" && canRunLegacyScheduledWork()) {
+      const observed = await store.get(finalLease.record.runId);
+      if (observed.ok && observed.value?.state === "completed" && observed.value.attempt === finalLease.record.attempt
+        && observed.value.taskRevision === finalLease.record.taskRevision && observed.value.status === completeRequest.status
+        && observed.value.durationMs === completeRequest.durationMs && observed.value.settledAt === completeRequest.completedAt
+        && observed.value.resultRef === completeRequest.resultRef && observed.value.errorCode === completeRequest.errorCode) {
+        completed = { ok: true, value: observed.value };
+      }
+    }
     if (!canRunLegacyScheduledWork()) return;
     if (!completed.ok) {
       log.error("Failed to settle scheduled run", {
@@ -921,7 +940,7 @@ async function runClaimedScheduledTask(
         attempt: finalLease.record.attempt,
         errorTag: completed.error._tag,
       });
-      if (source) settleScheduledAgentSource(finalLease, source, "error", completedAt);
+      if (source && completed.error.certainty !== "unknown") settleScheduledAgentSource(finalLease, source, "error", completedAt);
       return;
     }
     const summary = outcome.status === "error"
@@ -929,6 +948,7 @@ async function runClaimedScheduledTask(
       : (outcome.result?.slice(0, 200) || "Completed");
     applyScheduledRunToTask(completed.value, summary);
     if (source) settleScheduledAgentSource(finalLease, source, outcome.status, completedAt);
+    if (outcome.budgetBlocked) await drainScheduledBudgetNotifications(deps);
     log.info("Scheduled run settled", {
       operation: "complete_scheduled_run",
       runId: finalLease.record.runId,

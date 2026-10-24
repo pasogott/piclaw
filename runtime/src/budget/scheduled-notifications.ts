@@ -62,6 +62,13 @@ async function drainOnce(deps: ScheduledBudgetNotificationDeps): Promise<void> {
     // Recheck the current pending row before dispatch in case an earlier send
     // or another local consumer acknowledged it while this batch was pending.
     if (!database.query("SELECT 1 FROM budget_decisions WHERE id=? AND notification_status='pending'").get(notice.decision_id)) continue;
+    // Exact durable work identities only. A concurrent poll must not deliver a
+    // blocked-run notice before its occurrence/history has settled. Historical
+    // unlinked work keeps its existing delivery semantics; never guess by time.
+    if (database.query(`SELECT 1 FROM main.service_effect_s07_occurrences o
+      WHERE o.task_id=? AND o.state IN ('claimed','source_bound')
+        AND (?='scheduled:' || o.run_id OR ?='durable-operation:' || o.operation_id) LIMIT 1`)
+      .get(notice.scheduled_task_id, notice.work_id, notice.work_id)) continue;
     const text = formatOutbound(`Scheduled task ${notice.scheduled_task_id} stopped by budget policy before another paid model call.\nReview its budget limits and run history before running it again.`, detectChannel(notice.chat_jid));
     if (!text) continue;
     try {

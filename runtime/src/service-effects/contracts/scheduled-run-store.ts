@@ -142,8 +142,16 @@ export interface BindScheduledSourceRequest extends ScheduledRunLeaseFence {
   readonly boundAt: string;
 }
 
+export interface ScheduledRunResultPayload {
+  readonly version: 1;
+  readonly result: string | null;
+  readonly error: string | null;
+}
+
 export interface CompleteScheduledRunRequest extends ScheduledRunLeaseFence {
   readonly effect: EffectIdentity;
+  /** Optional host result bytes. Authority remains the fenced S07 completion. */
+  readonly resultPayload?: ScheduledRunResultPayload;
   readonly status: ScheduledRunResultStatus;
   readonly durationMs: number;
   readonly resultRef: string | null;
