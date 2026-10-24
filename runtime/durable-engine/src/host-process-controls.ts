@@ -13,6 +13,30 @@ export const nativeProcessToolNames = ["session_status", "exit_process"] as cons
 export const nativeProcessInstructions = `## Native process controls
 Use session_status before requesting a restart. exit_process must be the ONLY tool call in its round and the LAST action of the turn. It commits a visible conditional restart notice and terminates through the SDK; do not request another model or tool call. Other active, queued or uncertain native work denies the request. resume_message is not supported: never replay uncertain work. Shutdown occurs only after terminal persistence, a fresh global idle check and confirmed native cleanup.`;
 const log = createLogger("native.process-controls");
+// Only fixed, locally generated errors may become diagnostics. Cleanup/provider
+// exceptions can contain credentials or payloads; never emit their text/stack.
+const blockers = new Map<string, string>([
+  ["Other native work is active", "sdk_activity"],
+  ["Native work is not quiescent", "sdk_activity"],
+  ["Other or uncertain native tasks are active", "sdk_task"],
+  ["Other native input is queued or placed", "sdk_submission"],
+  ["Other host operations are active", "host_operation"],
+  ["Other accepted host input is pending", "host_source"],
+  ["Scheduled execution is active or uncertain", "scheduled_execution"],
+  ["Host queued input is pending", "queued_input"],
+  ["Deferred host input is pending or unreadable", "deferred_input"],
+  ["A singleton root tool round with one accepted input is required", "invocation_scope"],
+  ["Queue migration or shutdown has started", "queue_lifecycle"],
+  ["Queue retains retries", "queue_retry"],
+  ["Queue retains pending work", "queue_pending"],
+  ["Queue retains unidentified or unrelated active work", "queue_active"],
+  ["Host admission or credential/control work is active or uncertain", "host_control"],
+  ["Native cleanup owner unavailable", "cleanup_unavailable"],
+  ["Native tool cleanup uncertain", "cleanup_uncertain"],
+]);
+function blockerOf(error: unknown): string {
+  return error instanceof Error ? blockers.get(error.message) ?? "unclassified" : "unclassified";
+}
 type Scope = NonNullable<NativeProcessSnapshot["scope"]>;
 type Options = {
   root: Database;
@@ -96,11 +120,11 @@ export function createHostProcessControls(options: Options) {
         const scope = snapshot.scope!;
         if (name === "session_status") {
           if (getSessionIsolationLevel() === "full") return fail("Session isolation prevents global activity disclosure; restart safety was not granted.");
-          let safe = true;
-          try { assertSqlIdle(scope); } catch { safe = false; }
+          let safe = true, blocker: string | undefined;
+          try { assertSqlIdle(scope); } catch (error) { safe = false; blocker = blockerOf(error); }
           return { output: [{ type: "text" as const, text: JSON.stringify({ safe_to_restart: safe,
             active_tasks: snapshot.inspection.tasks.length, unsettled_submissions: snapshot.inspection.submissions.length,
-            chat_jid: scope.input.chatJid, current_operation_id: scope.input.operationId }) }] };
+            chat_jid: scope.input.chatJid, current_operation_id: scope.input.operationId, ...(blocker ? { blocker } : {}) }) }] };
         }
         const reason = typeof args.reason === "string" ? args.reason.trim() : "";
         if (!reason || reason.length > 512) return fail("A bounded non-empty exit reason is required; no shutdown scheduled.");
@@ -142,22 +166,29 @@ export function createHostProcessControls(options: Options) {
     scheduled = true;
     const finish = async () => {
       let closing = false;
+      let phase: "inspection" | "before_cleanup" | "cleanup" | "after_cleanup" | "shutdown_request" = "inspection";
       try {
         assertOwner();
         const snapshot = await inspect();
         if (snapshot.inspection.tasks.length || snapshot.inspection.submissions.length) throw Error("Native work is not quiescent");
+        phase = "before_cleanup";
         assertSqlIdle();
         closing = true;
+        phase = "cleanup";
         await options.closeNative(); // An uncertain cleanup MUST NOT request process shutdown.
+        phase = "after_cleanup";
         assertSqlIdle(); // Uses the original application owner, not the now-closed SDK lease.
+        phase = "shutdown_request";
         (options.requestShutdown ?? requestGracefulShutdown)(reason);
-      } catch {
+      } catch (error) {
         if (!closing) {
           try { assertOwner(); pending = undefined; commandPending = false; scheduled = false; } catch { /* Lost ownership cannot unseal admission. */ }
         }
         // Refusal is terminal for this request. No delayed retry can bypass new
         // work or uncertain cleanup; a new request needs fresh authorisation.
-        log.warn("Native exit final safety/cleanup check failed; shutdown was not requested", { operation: "native_exit.refused" });
+        log.warn("Native exit final safety/cleanup check failed; shutdown was not requested", {
+          operation: "native_exit.refused", phase, blocker: blockerOf(error),
+        });
       }
     };
     (options.defer ?? (run => { setTimeout(() => { void run(); }, 1500); }))(finish);

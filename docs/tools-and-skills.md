@@ -288,9 +288,14 @@ You can extend that baseline with `.piclaw/config.json`:
 - `exec_batch` — run multiple shell commands and return concise summaries for each
 - `powershell` — Windows-only replacement for the default shell tool; active instead of `bash` on Windows hosts
 - `bun_run` — run a workspace Bun script directly; kept in the default active baseline on Windows so there is still a first-party script runner alongside PowerShell
-- `exit_process` — gracefully terminate piclaw so Supervisor restarts it; kept always active because lifecycle control should not depend on same-turn lazy activation
+- `session_status` — inspect native task/submission ownership and restart safety without changing execution state
+- `exit_process` — request graceful termination after committed native completion and confirmed cleanup; the configured service manager owns restart
 - `ssh` — get, set, or clear the session-scoped SSH profile used by remote-backed core tools (`read`, `write`, `edit`, `bash`); live redirection is turn-scoped and is cleared automatically at the end of each agent turn
 - `mcp` — token-efficient proxy for external MCP servers via the bundled `pi-mcp-adapter`; supports search, describe, connect, tool calls, and MCP UI message retrieval using shared `.mcp.json` plus optional Pi-owned override config
+
+For native execution, call `exit_process` alone and make it the last action of the turn. Its conditional notice records a request; it does not prove that shutdown occurred. Another operation, queued input, uncertain cleanup or lost ownership can still refuse the request. A refused request never schedules an automatic retry or replays work.
+
+When an authorised `session_status` inspection reports `safe_to_restart: false`, its optional `blocker` is a fixed code such as `queue_active`, `host_source` or `scheduled_execution`. A final refusal logs `native_exit.refused` with `phase` (`inspection`, `before_cleanup`, `cleanup`, `after_cleanup` or `shutdown_request`) and a bounded `blocker`. Unknown exceptions use `unclassified`; diagnostic fields exclude exception text and stacks. These fields do not change the safety checks. Verify the actual shutdown record and subsequent service start before accepting a reload.
 
 > **Note:** `proxmox` and `portainer` tools have been moved to the [piclaw-addons](https://github.com/rcarmo/piclaw-addons) repository. When the addons package is installed, these tools are registered automatically. They use the same session-scoped profile + `discover` → `capabilities` → `workflow` pattern as `ssh`.
 
