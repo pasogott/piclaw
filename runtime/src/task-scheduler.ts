@@ -483,7 +483,7 @@ async function executeScheduledTask(
     const nextRun = computeNextRun(task.schedule_type, task.schedule_value, {
       currentDate: task.next_run,
     });
-    updateTaskAfterRun(task.id, nextRun, error ? `Error: ${effectiveError || error}` : ((effectiveResult || result)?.slice(0, 200) || "Completed"));
+    updateTaskAfterRun(task.id, nextRun, error ? `Error: ${effectiveError || error}` : ((effectiveResult || result)?.slice(0, 200) || "Completed"), task.revision);
   }
 
   if (budgetBlocked && !options.deferHistory) await drainScheduledBudgetNotifications(deps);

@@ -25,6 +25,7 @@ import { CronExpressionParser } from "cron-parser";
 import { DATA_DIR, getRuntimeTimingConfig } from "./core/config.js";
 import { MediaService } from "./channels/web/media/media-service.js";
 import { createTask, deleteTask, getTaskById, updateTask } from "./db.js";
+import { canonicalScheduledTasksSql } from "./db/scheduled-task-definitions.js";
 import type { ScheduledTask } from "./types.js";
 import { createUuid } from "./utils/ids.js";
 import { createLogger, debugSuppressedError } from "./utils/logger.js";
@@ -627,15 +628,9 @@ export async function processTaskCommand(data: JsonRecord, deps: IpcDeps): Promi
     case "cleanup_tasks": {
       const chatJid = getStringField(data, "chatJid");
       const db = (await import("./db/connection.js")).getDb();
-      const completed = db.prepare("SELECT id FROM scheduled_tasks WHERE status = 'completed'").all() as { id: string }[];
-
-      for (const { id } of completed) {
-        db.prepare("DELETE FROM task_run_logs WHERE task_id = ?").run(id);
-      }
-
-      const result = db.prepare("DELETE FROM scheduled_tasks WHERE status = 'completed'").run();
-      const countValue = (result as { changes?: unknown }).changes;
-      const count = typeof countValue === "number" ? countValue : 0;
+      const completed = db.prepare(`WITH tasks AS (${canonicalScheduledTasksSql}) SELECT id FROM tasks WHERE status='completed'`).all() as { id: string }[];
+      db.transaction(() => { for (const { id } of completed) deleteTask(id); }).immediate();
+      const count = completed.length;
       if (chatJid) {
         try {
           await deps.sendMessage(chatJid, `Cleaned up ${count} completed task(s).`);
