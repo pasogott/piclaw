@@ -1,9 +1,9 @@
-import { repoRoot } from "./src/repo-root.js";
+import { installApprovedAddonsFixture } from "./installed-addons-fixture.js";
 import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
 import { expect, spyOn } from "bun:test";
 const applicationTest = isolatedApplicationTest(import.meta.url);
-import { cpSync, symlinkSync, realpathSync, mkdirSync, readdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -21,31 +21,10 @@ const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-co
 const { createAssistantMessageEventStream, getCurrentTools } = await import(import.meta.resolve("@earendil-works/pi-ai", rootUrl));
 
 applicationTest("all 23 installed: actual default factory public provider terminal and reopen", async () => {
-  const source = realpathSync(process.env.DURABLE_ADDONS_ROOT!);
   const workspace = process.env.PICLAW_WORKSPACE!;
   // Explicit profile inventory: copies only, never mutate candidate dependencies.
   expect(Object.keys(applicationAddonSourceProfiles)).toHaveLength(23);
-  const rootModules = realpathSync(join(repoRoot("CORE"), "node_modules"));
-  const catDeps = realpathSync(process.env.DURABLE_CATALOG_DEPENDENCIES ?? join(source, "node_modules"));
-  const installed = [];
-  for (const [kind, profile] of Object.entries(applicationAddonSourceProfiles)) {
-    const slug = profile.name.replace("@rcarmo/piclaw-addon-", "");
-    const pkg = join(workspace, ".pi/extensions/node_modules", profile.name);
-    cpSync(join(source, "addons", slug), pkg, {recursive:true, filter: p => !p.split("/").includes("node_modules")});
-    const dependencies = join(pkg, "node_modules"); mkdirSync(dependencies, {recursive:true});
-    // Overlay scoped children, not scopes: Root SDK takes precedence over catalog development SDKs.
-    for (const modules of [rootModules, catDeps, ...Object.values(applicationAddonSourceProfiles).map(profile => join(source, "addons", profile.name.replace("@rcarmo/piclaw-addon-", ""), "node_modules")).filter(path => existsSync(path))]) for (const entry of readdirSync(modules)) {
-      if (entry.startsWith(".")) continue;
-      if (entry.startsWith("@")) {
-        mkdirSync(join(dependencies, entry), {recursive:true});
-        for (const child of readdirSync(join(modules, entry))) {
-          const target = join(dependencies, entry, child);
-          if (!existsSync(target)) symlinkSync(join(modules, entry, child), target);
-        }
-      } else if (!existsSync(join(dependencies, entry))) symlinkSync(join(modules, entry), join(dependencies, entry));
-    }
-    installed.push({kind, name:profile.name});
-  }
+  const installed = installApprovedAddonsFixture(workspace);
   writeFileSync(join(workspace, "all-installed-inventory.json"), JSON.stringify(installed,null,2));
   const peerOptions = {
     transportFactory: () => ({id:"synthetic-peer", status:()=>({active:false}), ticket:()=>"synthetic-ticket", async start(){throw Error("disabled peer must not start");}, async request(){throw Error("peer network forbidden");}, async close(){}}),
