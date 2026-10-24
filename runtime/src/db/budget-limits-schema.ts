@@ -1,8 +1,11 @@
 import type Database from "bun:sqlite";
+import { budgetUsageEventTableSql, initializeUsageReportProjection, verifyExistingUsageReportProjection } from "./usage-report-projection.js";
 
 /** Additive budget tables. Every cap is absent until the user creates one. */
 export function initializeBudgetLimitsSchema(database: Database): void {
-  database.exec(`
+  database.transaction(() => {
+    verifyExistingUsageReportProjection(database);
+    database.exec(`
     CREATE TABLE IF NOT EXISTS budget_caps (
       id TEXT PRIMARY KEY,
       scope TEXT NOT NULL CHECK(scope IN ('task','instance_daily','instance_monthly','scheduled_run','provider_window')),
@@ -94,18 +97,7 @@ export function initializeBudgetLimitsSchema(database: Database): void {
     CREATE INDEX IF NOT EXISTS idx_budget_requests_work_state ON budget_request_reservations(work_id,state);
     CREATE INDEX IF NOT EXISTS idx_budget_requests_state ON budget_request_reservations(state);
 
-    CREATE TABLE IF NOT EXISTS budget_usage_events (
-      usage_event_id TEXT PRIMARY KEY,
-      token_usage_id INTEGER NOT NULL UNIQUE REFERENCES token_usage(id),
-      work_id TEXT REFERENCES budget_work(id),
-      chat_jid TEXT NOT NULL,
-      invocation_id TEXT,
-      accounted_at TEXT NOT NULL,
-      api_usd_micros INTEGER CHECK(api_usd_micros IS NULL OR api_usd_micros >= 0),
-      api_usd_known INTEGER NOT NULL CHECK(api_usd_known IN (0,1)),
-      valuation_provenance TEXT NOT NULL CHECK(valuation_provenance IN ('catalogue_estimate','documented_free','unavailable')),
-      usage_source TEXT NOT NULL
-    ) STRICT;
+    ${budgetUsageEventTableSql.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")};
     CREATE INDEX IF NOT EXISTS idx_budget_usage_work_time ON budget_usage_events(work_id, accounted_at);
     CREATE INDEX IF NOT EXISTS idx_budget_usage_time ON budget_usage_events(accounted_at);
     CREATE INDEX IF NOT EXISTS idx_budget_usage_chat_time ON budget_usage_events(chat_jid, accounted_at);
@@ -174,5 +166,7 @@ export function initializeBudgetLimitsSchema(database: Database): void {
       BEFORE UPDATE ON budget_usage_events BEGIN SELECT RAISE(ABORT, 'budget usage events are immutable'); END;
     CREATE TRIGGER IF NOT EXISTS budget_usage_events_no_delete
       BEFORE DELETE ON budget_usage_events BEGIN SELECT RAISE(ABORT, 'budget usage events are immutable'); END;
-  `);
+    `);
+    initializeUsageReportProjection(database);
+  }).immediate();
 }

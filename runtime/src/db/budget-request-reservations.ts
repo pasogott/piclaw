@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { getDb } from './connection.js';
 import { getBudgetWork, getBudgetCap } from './budget-limits.js';
 import { storeTokenUsage, type TokenUsageRecord } from './token-usage.js';
+import { decodeUsageReport, projectUsageEvent, readUsageProjectionEvent } from './usage-report-projection.js';
 import { evaluateBudget } from '../budget/evaluator.js';
 import { valueApiEquivalentCost } from '../budget/valuation.js';
 import type { BudgetProviderEvidence } from '../budget/types.js';
@@ -143,6 +144,12 @@ export function settleBudgetRequest(binding: BudgetRequestBinding, usage: Omit<T
     const hash = digest(usage), eventId = `usage:invocation:${binding.id}`;
     if (row.state === 'settled') {
       if (row.settlement_sha256 !== hash || row.usage_event_id !== eventId) throw new BudgetRequestError('conflict');
+      const event = readUsageProjectionEvent(database, eventId);
+      if (!event || event.work_id !== binding.workId || event.invocation_id !== binding.id || event.chat_jid !== binding.chatJid) throw new BudgetRequestError('conflict');
+      const body = decodeUsageReport(event);
+      if (body?.origin.kind === 'recorder_event') throw new BudgetRequestError('conflict');
+      if (body?.origin.kind === 'host_request' && (body.origin.binding_sha256 !== row.binding_sha256 || body.origin.settlement_sha256 !== row.settlement_sha256)) throw new BudgetRequestError('conflict');
+      projectUsageEvent(database, event);
       return row;
     }
     if (row.state !== 'dispatched' && row.state !== 'unresolved') throw new BudgetRequestError('invalid_state');
@@ -165,9 +172,10 @@ export function settleBudgetRequest(binding: BudgetRequestBinding, usage: Omit<T
       || usage.valuation_provenance === 'documented_free' && (amount !== 0
         || [usage.cost_total,usage.cost_input,usage.cost_output,usage.cost_cache_read,usage.cost_cache_write].some(cost => cost !== 0))) throw new BudgetRequestError('invalid_binding');
     // A charge with this host identity must never pre-exist under another owner.
-    if (database.query('SELECT 1 FROM token_usage WHERE usage_event_id=?').get(eventId)) throw new BudgetRequestError('conflict');
+    if (readUsageProjectionEvent(database, eventId) || database.query('SELECT 1 FROM main.token_usage WHERE usage_event_id=?').get(eventId)) throw new BudgetRequestError('conflict');
     storeTokenUsage({ ...usage, work_id: binding.workId, invocation_id: binding.id, usage_event_id: eventId,
-      execution_kind: getBudgetWork(binding.workId, database)!.execution_kind },database);
+      execution_kind: getBudgetWork(binding.workId, database)!.execution_kind },database,
+      { kind: 'host_request', request_id: binding.id, binding_sha256: row.binding_sha256, settlement_sha256: hash });
     database.query("UPDATE budget_request_reservations SET state='settled',settlement_sha256=?,usage_event_id=?,updated_at=? WHERE id=?").run(hash,eventId,new Date().toISOString(),binding.id);
     return getBudgetRequest(binding.id,database)!;
   }).immediate();
