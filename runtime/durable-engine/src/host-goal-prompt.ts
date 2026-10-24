@@ -112,10 +112,15 @@ export function createHostGoalPrompt(addon: {
       const decision = addon.resolveGoalInput(text, captured.operation.chatJid);
       return decision.action === "transform" && decision.text ? [{ type: "text" as const, text: decision.text }] : [];
     }));
-    const messages = continuations.length ? await runtime.prepareGoalContext(api.conversationId, api.taskId, captured.inputs,
-      request.messages, continuations, {
+    const messages = await runtime.prepareGoalContext(api.conversationId, api.taskId, captured.inputs,
+      request.messages, continuations.length ? continuations : [{ type: "text", text: "Goal state is supplied by the system instructions for this request." }], {
         goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status as "active" | "budget_limited",
-      }, assertContributionCurrent, context) : request.messages;
+        // Persist proof of the exact ephemeral system overlay. Plan/Goal
+        // context re-entry can recognise it without trusting arbitrary text.
+        systemPrompt: prompt,
+        ...(continuations.length ? { inputKey: JSON.stringify([captured.operation.operationId,
+          captured.inputs.map(input => input.sourceSeq)]) } : {}),
+      }, assertContributionCurrent, context);
     assertContributionCurrent();
     // Match the add-on system-prompt contract. Goal rules must not be demoted
     // to user instructions; the objective is explicitly labelled user data.

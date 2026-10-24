@@ -497,12 +497,13 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       const conversation = (await reader.conversation(f.base.root.id, context))!;
       const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
       const snapshots = entries.items.filter(entry => entry.kind === "host.goal-context");
-      // The committed usage update appends a second continuation snapshot.
-      // Neither snapshot contains system rules or rewrites the accepted input.
-      expect(snapshots).toHaveLength(2);
+      // Expansion is frozen for the accepted operation, even after accounting.
+      // System authority is metadata; it is not emitted as user instructions.
+      expect(snapshots).toHaveLength(1);
       for (const snapshot of snapshots) {
         expect(JSON.stringify(snapshot)).toContain("Continue working toward the active thread goal");
-        expect(JSON.stringify(snapshot)).not.toContain("Active Goal");
+        expect(JSON.stringify(snapshot.model)).not.toContain("Active Goal");
+        expect((snapshot.data as any).systemPrompt).toContain("Active Goal");
       }
       const { projectPublicHistory } = await import("../../runtime/durable-engine/src/session-tree.js");
       expect(JSON.stringify(projectPublicHistory(entries.items, null))).not.toContain("Active Goal");

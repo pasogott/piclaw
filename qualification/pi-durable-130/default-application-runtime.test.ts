@@ -837,7 +837,7 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
       lifecycle_generation: 2, budget_limit_reported: true, no_progress_turns: 0 });
     const queued = getDeferredQueuedFollowups("web:default");
     expect(queued).toHaveLength(1);
-    expect(queued[0]!.queuedContent).toContain("has reached its token budget");
+    expect(queued[0]!.queuedContent).toStartWith("🎯 Goal budget reached: Budget wrap-up");
     expect(queued[0]!.source_id).toStartWith("goal-budget:");
     const sourceText = (root.query("SELECT content FROM messages WHERE rowid=?").get(firstMessage.id) as { content: string }).content;
     root.query("UPDATE messages SET content=? WHERE rowid=?").run(sourceText + "tampered", firstMessage.id);
