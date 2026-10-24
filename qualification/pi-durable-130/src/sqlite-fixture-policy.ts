@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { isSqliteContention } from "../../../runtime/src/db/sqlite-async-admission.js";
 import { enableSqliteWal } from "../../../runtime/src/db/sqlite-journal.js";
 import { BunSqliteDatabase } from "../../../runtime/durable-engine/src/bun-sqlite.js";
 
@@ -14,7 +15,17 @@ export function configureHostWalFixtureDatabase(db: Database): void {
 }
 
 export async function openWalFixtureDatabase(path: string): Promise<BunSqliteDatabase> {
-  const db = new BunSqliteDatabase(path);
+  // A copied WAL fixture can still be releasing a checkpoint-worker lock.
+  // Retry connection setup only, before any SDK callback or effect can run.
+  const deadline = performance.now() + 5000;
+  let db: BunSqliteDatabase;
+  for (;;) {
+    try { db = new BunSqliteDatabase(path); break; }
+    catch (error) {
+      if (!isSqliteContention(error) || performance.now() >= deadline) throw error;
+      await Bun.sleep(10);
+    }
+  }
   try {
     const before = await db.get<{ synchronous: number }>("PRAGMA synchronous");
     if (before?.synchronous !== 2) throw new Error("Candidate fixture requires existing synchronous=FULL (2)");

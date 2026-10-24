@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 61
     },
     "docsDeploy": {
-      "referencedNames": 153,
+      "referencedNames": 154,
       "directReaderNames": 18,
       "directReaderOccurrences": 42,
       "helperReaderNames": 0,
@@ -1297,6 +1297,7 @@
             "docs/development/receipts/pi-103-core-addon-peers.json",
             "docs/development/receipts/pi-103-deeper-qualification.json",
             "docs/development/receipts/pi-103-soak-agent-qualification.json",
+            "docs/development/schema-ownership.md",
             "docs/development/testing-and-linting-flow-presentation-2026-04-18.html",
             "docs/development/tool-output-retention-performance.md",
             "docs/development/web-session-query-performance.md",
@@ -4367,6 +4368,21 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-paths.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_SCHEMA_INVENTORY_JSON",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/development/schema-ownership.md"
           ],
           "readerFiles": []
         }

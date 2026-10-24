@@ -8,7 +8,7 @@ import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 const log = createLogger("durable.runtime");
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
-import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
+import { configure, AgentDoc, AssistantEntry, ResetEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -84,6 +84,7 @@ export interface RuntimeOptions {
   readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
+  readonly withSessionResetGuard?: <T>(chatJid: string, body: () => Promise<T>) => Promise<T>;
   /** Same-file owner/admission fences; SDK compaction itself orders the target conversation. */
   readonly withCompactionGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Prompt entries support pre-ACK execution; check accepted source at SQL commit. */
@@ -184,6 +185,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     codemodeExecute: o.codemodeExecute,
     assertAdmission: o.assertAdmission?.bind(o),
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
+    withSessionResetGuard: o.withSessionResetGuard?.bind(o),
     withCompactionGuard: o.withCompactionGuard?.bind(o),
     withPromptContextGuard: o.withPromptContextGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
@@ -635,19 +637,44 @@ export class HostConversationRuntime {
     const copy = Object.freeze({ ...binding });
     if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
       !this.options.existingConversationIds.includes(copy.conversationId as ConversationId)) throw Error("Host binding conflict");
-    if (!this.options.withIdleModelGuard) throw Error("Idle model guard unavailable");
-    if (this.changingModel || this.maintenanceBinding || this.active.size) throw Error("Runtime is not idle");
-    this.changingModel = true;
+    const scoped = !!this.options.withSessionResetGuard;
+    const guard = scoped
+      ? <T>(body: () => Promise<T>) => this.options.withSessionResetGuard!(copy.chatJid, body)
+      : this.options.withIdleModelGuard;
+    if (!guard) throw Error("Idle model guard unavailable");
+    if (this.changingModel || this.maintenanceBinding || (!scoped && this.active.size)) throw Error("Runtime is not idle");
+    this.maintenanceBinding = Object.freeze({ chatJid: copy.chatJid, conversationId: copy.conversationId });
+    this.changingModel = !scoped;
     const operation = (async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
-      if (inspection.tasks.length || inspection.submissions.length) throw Error("Runtime is not idle");
+      if (!scoped && (inspection.tasks.length || inspection.submissions.length)) throw Error("Runtime is not idle");
       const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); this.fence();
       if (!conversation) throw Error("Missing existing conversation");
-      await this.options.withIdleModelGuard!(() => conversation.reset(undefined, this.context));
+      await guard(async () => {
+        // The host guard fences this chat's sources and operation; SDK-only
+        // work in this conversation must also be idle before resetting it.
+        if (scoped) {
+          const current = await this.harness.inspect(this.context); this.fence();
+          if (current.tasks.some(task => task.record.conversationId === copy.conversationId) ||
+              current.submissions.some(submission => submission.conversationId === copy.conversationId))
+            throw Error("Conversation is not idle");
+          await conversation.commit(async tx => {
+            if ((await tx.doc(InboxDoc, copy.conversationId as ConversationId)).items.length || (await tx.doc(LiveDoc, copy.conversationId as ConversationId)).run)
+              throw Error("Conversation is not idle");
+            // Same public reset entry as Conversation.reset(), without its
+            // submission API resuming the store-wide scheduler on idle siblings.
+            await tx.appendEntry(copy.conversationId as ConversationId, { kind: ResetEntry.kind, head: "self" });
+          }, this.context);
+        } else {
+          await conversation.reset(undefined, this.context);
+        }
+      });
       this.fence();
     })();
     this.active.add(operation);
-    try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
+    try { await operation; } finally {
+      this.active.delete(operation); this.changingModel = false; this.maintenanceBinding = undefined;
+    }
   }
 
   /** No ephemeral AgentSession to recreate: re-read committed context and

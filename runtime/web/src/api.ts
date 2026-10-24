@@ -1022,7 +1022,7 @@ export class SSEClient {
     startStaleMonitor(source: EventSource, generation: number) {
         this.clearStaleMonitor();
         this.staleCheckTimer = setInterval(() => {
-            if (!this.isAuthoritativeConnection(source, generation) || this.status !== 'connected') return;
+            if (!this.isAuthoritativeConnection(source, generation) || (this.status !== 'connected' && !this.connecting)) return;
             if (!this.lastActivityAt) return;
             if (Date.now() - this.lastActivityAt <= this.staleThresholdMs) return;
             console.warn('SSE connection went stale; forcing reconnect');
@@ -1030,7 +1030,7 @@ export class SSEClient {
         }, 15000);
     }
 
-    forceReconnect() {
+    forceReconnect({ immediate = false } = {}) {
         if (this.disposed) return;
         this.connecting = false;
         this.connectionGeneration += 1;
@@ -1040,8 +1040,17 @@ export class SSEClient {
         this.clearStaleMonitor();
         this.status = 'disconnected';
         this.onStatusChange('disconnected');
-        this.reconnectAttempts += 1;
-        this.scheduleReconnect();
+        if (immediate) {
+            // A visible return/online event is a new connectivity opportunity,
+            // not another background failure subject to a suspended cooldown.
+            this.reconnectAttempts = 0;
+            this.reconnectDelay = 1000;
+            this.cooldownUntil = 0;
+            this.connect();
+        } else {
+            this.reconnectAttempts += 1;
+            this.scheduleReconnect();
+        }
     }
     
     connect() {
@@ -1062,6 +1071,8 @@ export class SSEClient {
         const query = this.chatJid ? `?chat_jid=${encodeURIComponent(this.chatJid)}` : '';
         const source = new EventSource(API_BASE + '/sse/stream' + query);
         this.eventSource = source;
+        this.markActivity();
+        this.startStaleMonitor(source, generation);
 
         const bindJsonEvent = (eventType) => {
             source.addEventListener(eventType, (e) => {
@@ -1181,21 +1192,27 @@ export class SSEClient {
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
     }
 
-    reconnectIfNeeded() {
-        if (this.disposed) return;
+    reconnectIfNeeded({ immediate = false } = {}) {
+        if (this.disposed) return false;
         const now = Date.now();
-        if (this.status === 'connected') {
+        if (this.status === 'connected' || this.connecting) {
             if (this.lastActivityAt && now - this.lastActivityAt > this.staleThresholdMs) {
-                this.forceReconnect();
+                this.forceReconnect({ immediate });
+                return true;
             }
-            return;
+            return false;
         }
-        if (this.cooldownUntil && now < this.cooldownUntil) return;
+        if (immediate) {
+            this.forceReconnect({ immediate: true });
+            return true;
+        }
+        if (this.cooldownUntil && now < this.cooldownUntil) return false;
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;
         }
         this.connect();
+        return true;
     }
     
     disconnect() {

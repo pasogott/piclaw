@@ -100,6 +100,34 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
   });
 }
 
+describe("native abort terminal status ownership", () => {
+  for (const scenario of ["idle", "successor", "failure", "compaction"] as const) {
+    test(`${scenario}: only a settled abort may clear its captured status`, async () => {
+      let status: Record<string, unknown> = { type: "intent", turn_id: "captured", source: "startup_recovery" };
+      if (scenario === "compaction") status.intent_key = "compaction";
+      const updates: unknown[] = [], events: unknown[] = [];
+      const service = createService({
+        getAgentStatus: () => ({ ...status }), // recovery getters need not preserve object identity
+        updateAgentStatus: (_jid, next) => { updates.push(next); status = next; },
+        broadcastEvent: (_type, payload) => { events.push(payload); },
+        agentPool: { applyControlCommand: async () => {
+          if (scenario === "successor") status = { type: "intent", turn_id: "newer" };
+          return { status: scenario === "failure" ? "error" : "success", message: scenario === "failure" ? "settlement uncertain" : "No active durable operation." };
+        } } as any,
+      });
+      const response = await service.handleAgentRunAbort(abortRequest({ chat_jid: "web:default", turn_id: "captured" }));
+      expect(response.status).toBe(scenario === "failure" ? 500 : 200);
+      if (scenario === "idle") {
+        expect(status).toMatchObject({ type: "done", title: "Idle", turn_id: "captured" });
+        expect(updates).toHaveLength(1); expect(events).toHaveLength(1);
+      } else {
+        expect(status.type).toBe("intent");
+        expect(updates).toEqual([]); expect(events).toEqual([]);
+      }
+    });
+  }
+});
+
 describe("buildStalledWorkDiagnostic", () => {
   const progress = {
     chatJid: "web:tool-run",

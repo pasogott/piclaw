@@ -78,6 +78,15 @@ export class BunSqliteDatabase implements SqliteDatabase {
 
   /** Scope the next public storage transactions; checks run inside the candidate write lock. */
   async withIdleModelGuard<T>(body: () => Promise<T>): Promise<T> {
+    return this.withIdleGuard(body);
+  }
+
+  async withSessionResetGuard<T>(chatJid: string, body: () => Promise<T>): Promise<T> {
+    if (!chatJid.trim()) throw new Error("Reset chat required");
+    return this.withIdleGuard(body, chatJid);
+  }
+
+  private async withIdleGuard<T>(body: () => Promise<T>, chatJid?: string): Promise<T> {
     if (!this.guard) return Promise.reject(new Error("Idle model guard unavailable"));
     const guard = this.guard;
     const check = () => {
@@ -91,10 +100,12 @@ export class BunSqliteDatabase implements SqliteDatabase {
         const current = statSync(path);
         if (current.dev !== this.identity!.dev || current.ino !== this.identity!.ino) throw new Error("Shared database identity changed");
       }
-      const busy = guard.root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL
-        UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed')
-        UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
-        UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get();
+      const scope = chatJid ?? null;
+      const busy = guard.root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL AND (? IS NULL OR chat_jid = ?)
+        UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed') AND (? IS NULL OR chat_jid = ?)
+        UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal' AND (? IS NULL OR chat_jid = ?)
+        UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') AND (? IS NULL OR chat_jid = ?) LIMIT 1`)
+        .get(scope, scope, scope, scope, scope, scope, scope, scope);
       if (guard.root.inTransaction) throw new Error("Root connection transaction active");
       if (busy) throw new Error("Host work is not idle");
     };

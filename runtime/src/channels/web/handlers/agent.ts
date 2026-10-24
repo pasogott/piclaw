@@ -9,6 +9,7 @@
  */
 
 import { acceptQueuedInputSource } from "../runtime/queued-followup-lifecycle-service.js";
+import { settledAbortStatus } from "../agent/agent-abort-status.js";
 import { getAddonLocalDispatchBlock } from "../../../addons/local-dispatch.js";
 import { withVerifiedAddonMessage } from "../../../addons/local-context.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
@@ -1083,7 +1084,16 @@ async function handleAgentMessageInScope(
   }
 
   if (command?.type === "abort" && !hasAttachments) {
+    const captured = JSON.stringify(channel.getAgentStatus?.(chatJid) ?? null);
     const result = await channel.agentPool.applyControlCommand(chatJid, command);
+    if (result.status !== "success") {
+      return channel.json({ error: result.message, command: result, thread_id: null, ui_only: true }, 500);
+    }
+    const terminal = settledAbortStatus(captured, channel.getAgentStatus?.(chatJid) ?? null, result.message);
+    if (terminal) {
+      channel.updateAgentStatus?.(chatJid, terminal);
+      channel.broadcastEvent("agent_status", { ...terminal, chat_jid: chatJid });
+    }
     return channel.json(
       {
         thread_id: null,

@@ -125,6 +125,7 @@
     "scheduled-allocation.test.ts",
     "scheduled.test.ts",
     "schema-convergence.test.ts",
+    "schema-ownership.test.ts",
     "scoped-compaction.test.ts",
     "selected-context-admission.test.ts",
     "single-database.test.ts",
