@@ -29,7 +29,8 @@ function insert(db: Database, row: ReturnType<typeof record>, rowid?: number) {
 }
 function historical(path = ":memory:", ddl?: string) {
   const db = new Database(path); db.exec("PRAGMA foreign_keys=ON");
-  db.exec(ddl ?? readFileSync(new URL("../fixtures/service-outbox-schema-788f7fbd.sql", import.meta.url), "utf8"));
+  // Batch fixture DDL only; the upgrade runs after this transaction commits.
+  db.transaction(() => db.exec(ddl ?? readFileSync(new URL("../fixtures/service-outbox-schema-788f7fbd.sql", import.meta.url), "utf8")))();
   applyOwnedMigrations(db, [{owner:"fixture.original",id:"retained",order:1,sql:"SELECT 1;"}]);
   return db;
 }
@@ -104,7 +105,7 @@ test("valid upgrade preserves bytes/rowids/history and both populated incoming l
   const dir=mkdtempSync(join(tmpdir(),"certainty-upgrade-")),path=join(dir,"owned.sqlite");
   let db=historical(path);
   try {
-    seed(db); histories(db); links(db);
+    db.transaction(() => { seed(db); histories(db); links(db); })();
     const before=data(db),oldReceipt=db.query("SELECT * FROM piclaw_schema_migrations").all();
     installServiceOutboxSchema(db);
     expect(data(db)).toEqual(before);

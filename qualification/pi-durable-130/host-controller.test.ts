@@ -12,13 +12,13 @@ import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { AcceptedReplyThreadUnavailableError } from "../../runtime/durable-engine/src/host-message-thread.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
-for (const modes of [["committed-answer"], ["unavailable-reply-thread"], ["unrelated-settlement-error"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
+// Each scenario owns its fixture and keeps the existing 15-second deadline.
+for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrelated-settlement-error"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
   ["bootstrap-close-failure", "shutdown-close-failure"],
   ["rollback", "rollback-host-changed", "rollback-close-failure", "rollback-pending"],
   ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"],
-  ["rollback-candidate-only", "rollback-retired-document", "rollback-terminal-records"]] as const) {
-  test(`explicit owner-first host controller: ${modes.join(" / ")}`, async () => {
-    for (const mode of modes) {
+  ["rollback-candidate-only", "rollback-retired-document", "rollback-terminal-records"]] as const).flat()) {
+  test(`explicit owner-first host controller: ${mode}`, async () => {
     const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-controller-"));
     const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
     const committed = ["committed-answer", "unavailable-reply-thread", "unrelated-settlement-error"].includes(mode);
@@ -311,7 +311,7 @@ for (const modes of [["committed-answer"], ["unavailable-reply-thread"], ["unrel
             expect(flips).toBe(0);
             expect(events).toEqual(["owner", "storage", "close", "release"]);
             held.release();
-            continue;
+            return;
           }
           const attempt = controller.rollback(cutover, m.revision);
           if (observer) {
@@ -379,7 +379,6 @@ for (const modes of [["committed-answer"], ["unavailable-reply-thread"], ["unrel
       await f.close();
       if (oldMemory === undefined) delete process.env.PICLAW_DB_IN_MEMORY; else process.env.PICLAW_DB_IN_MEMORY = oldMemory;
       await rm(dir, { recursive: true, force: true });
-    }
     }
   }, 15000);
 }

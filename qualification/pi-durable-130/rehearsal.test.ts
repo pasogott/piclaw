@@ -9,6 +9,10 @@ import { SessionManager, buildSessionContext, convertToLlm } from "@earendil-wor
 const cli = resolve(import.meta.dir, "../../runtime/durable-engine/src/rehearse.ts");
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const baseline = "Explicit persisted rehearsal baseline";
+// Each CLI keeps a strict deadline; serial batches need a matching parent budget.
+const cliTimeoutMs = 5_000;
+const cliTestBudget = (calls: number) => calls * cliTimeoutMs + 5_000;
+
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const assistant = (tool = false) => ({ role: "assistant" as const, api: "openai-completions" as const,
@@ -76,8 +80,17 @@ async function invoke(dir: string, destination: string, extra: string[] = [], so
     cwd: dir, env: { HOME: join(dir, "home"), PATH: "/usr/bin:/bin", PI_CODING_AGENT_DIR: join(dir, "home", "agent"),
       PICLAW_WORKSPACE: dir, PICLAW_STORE: join(dir, "unused-store") }, stdout: "pipe", stderr: "pipe",
   });
-  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { stdout, stderr, exit };
+  let timedOut = false;
+  const started = performance.now();
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, cliTimeoutMs);
+  try {
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (timedOut) throw new Error(`Rehearsal CLI exceeded ${cliTimeoutMs}ms`);
+    return { stdout, stderr, exit };
+  } finally {
+    clearTimeout(timer);
+    console.info(`[rehearsal-cli] ${Math.round(performance.now() - started)}ms`);
+  }
 }
 
 test("CLI imports all four leaves with original identities, tools/images/compaction; closes and publicly reopens paused", () => using(async (dir, f) => {
@@ -106,7 +119,7 @@ test("CLI imports all four leaves with original identities, tools/images/compact
   const saved = await readFile(join(first, "rehearsal.sqlite"));
   expect((await invoke(dir, first)).stderr).toContain('"code":"destination_exists"');
   expect(await readFile(join(first, "rehearsal.sqlite"))).toEqual(saved);
-}));
+}), cliTestBudget(3));
 
 test("CLI rejects digest, manifest, flags and active-profile paths before ANY destination creation", () => using(async (dir, f) => {
   const destination = join(dir, "never-created");
@@ -128,7 +141,7 @@ test("CLI rejects digest, manifest, flags and active-profile paths before ANY de
   expect((await invoke(dir, destination, [], join(dir, "disguised.jsonl"))).stderr).toContain('"code":"invalid_input"');
   expect((await invoke(dir, join(active, "destination"))).stderr).toContain('"code":"invalid_input"');
   expect(existsSync(destination)).toBe(false);
-}));
+}), cliTestBudget(13));
 
 test("CLI rejects unsupported or non-quiescent leaves, incomplete/duplicate bindings and conflicting/missing continuation instructions before storage", () => using(async (dir, f) => {
   const destination = join(dir, "never-created");
@@ -154,4 +167,4 @@ test("CLI rejects unsupported or non-quiescent leaves, incomplete/duplicate bind
     expect(result.stderr).toContain('"code":"import_unsupported"');
     expect(result.stderr).not.toContain("Queued/unanswered"); expect(existsSync(destination)).toBe(false);
   }
-}));
+}), cliTestBudget(7));
