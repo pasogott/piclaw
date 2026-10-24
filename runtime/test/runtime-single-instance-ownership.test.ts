@@ -2,6 +2,10 @@ import { expect, test } from 'bun:test';
 import { spawn } from 'child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { WORKSPACE_DIR } from '../src/core/config.js';
+
+// Config is frozen at parent import; other fixtures may later change env.
+const ownerChildEnv = () => ({ ...process.env, PICLAW_WORKSPACE: WORKSPACE_DIR });
 import { acquireRuntimeLock, createDefaultRuntimeProcessInspector, type RuntimeProcessInspector } from '../src/runtime/single-instance.js';
 import { addLogSink, removeLogSink, type LogRecord } from '../src/utils/logger.js';
 
@@ -197,7 +201,7 @@ test('multiprocess O_EXCL publication: ordinary legacy acquirer never deletes pa
     h.assertCurrentOwner(); console.log('owner');
     fs.readSync(0, Buffer.alloc(1), 0, 1, null);
     h.assertCurrentOwner(); h.release();
-  `], { stdio: ['pipe', 'pipe', 'pipe'] });
+  `], { env: ownerChildEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>(resolve => child.once('exit', resolve));
   let output = '';
   let errors = '';
@@ -240,7 +244,7 @@ test('multiprocess O_EXCL publication: ordinary legacy acquirer never deletes pa
 test('SIGSTOP remains owned; only managed recovery archives the exact dead owner after SIGKILL', async () => {
   const f = fixture();
   const modulePath = new URL('../src/runtime/single-instance.ts', import.meta.url).pathname;
-  const child = spawn(process.execPath, ['-e', `import { acquireRuntimeLock } from ${JSON.stringify(modulePath)}; const h = acquireRuntimeLock({ lockPath: ${JSON.stringify(f.lockPath)}, disabled: false, strictOwnership: true }); h.assertCurrentOwner(); console.log('ready'); setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['-e', `import { acquireRuntimeLock } from ${JSON.stringify(modulePath)}; const h = acquireRuntimeLock({ lockPath: ${JSON.stringify(f.lockPath)}, disabled: false, strictOwnership: true }); h.assertCurrentOwner(); console.log('ready'); setInterval(() => {}, 1000);`], { env: ownerChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
   try {
     await new Promise<void>((resolve, reject) => {
@@ -250,6 +254,7 @@ test('SIGSTOP remains owned; only managed recovery archives the exact dead owner
       child.once('exit', code => { clearTimeout(timer); reject(new Error(`child exited ${code}`)); });
     });
     const raw = readFileSync(f.lockPath, 'utf8');
+    expect(JSON.parse(raw).workspace).toBe(WORKSPACE_DIR);
     child.kill('SIGSTOP');
     for (let attempt = 0; attempt < 100; attempt++) {
       if (/^State:\s+T/m.test(readFileSync(`/proc/${child.pid}/status`, 'utf8'))) break;
@@ -287,7 +292,7 @@ test('two managed crash-recovery publishers cannot both acquire kernel ownership
   const seed=acquireRuntimeLock({lockPath:f.lockPath,disabled:false,strictOwnership:true});
   const stale={...seed.record,pid:999999999};seed.release();writeFileSync(f.lockPath,JSON.stringify(stale));
   const children=Array.from({length:2},()=>{
-    const child=spawn(process.execPath,['-e',`import {acquireRuntimeLock} from ${JSON.stringify(modulePath)};try{const h=acquireRuntimeLock({lockPath:${JSON.stringify(f.lockPath)},disabled:false,strictOwnership:true,recoverStaleOwnership:true});h.assertCurrentOwner();console.log('READY');setInterval(()=>{},1000);}catch{console.log('REFUSED');process.exit(2);}`],{stdio:['ignore','pipe','pipe']});
+    const child=spawn(process.execPath,['-e',`import {acquireRuntimeLock} from ${JSON.stringify(modulePath)};try{const h=acquireRuntimeLock({lockPath:${JSON.stringify(f.lockPath)},disabled:false,strictOwnership:true,recoverStaleOwnership:true});h.assertCurrentOwner();console.log('READY');setInterval(()=>{},1000);}catch{console.log('REFUSED');process.exit(2);}`],{env:ownerChildEnv(),stdio:['ignore','pipe','pipe']});
     const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
     const outcome=new Promise<string>((resolve,reject)=>{
       let text='';const timer=setTimeout(()=>reject(Error('publisher deadline')),3000);
