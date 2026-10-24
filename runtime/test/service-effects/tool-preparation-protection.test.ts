@@ -154,6 +154,7 @@ describe("WP-3C protected trace/projection oracle", () => {
     expect(Object.isFrozen(inventory.unresolvedSchemas)).toBeTrue();
   });
 
+  // Source-wide AST audit; this is not a runtime latency assertion.
   test("source schemas are closed by protected fields or explicit safe-field exceptions", () => {
     const sourceTree = readRepositorySourceTree();
     const inventory = inventoryRepositoryToolFamilies(sourceTree);
@@ -209,8 +210,7 @@ describe("WP-3C protected trace/projection oracle", () => {
       expect([...safe].filter((field) => protectedTopLevel.has(field))).toEqual([]);
       expect([...fields].filter((field) => !protectedTopLevel.has(field) && !safe.has(field))).toEqual([]);
     }
-  });
-
+  }, 30_000);
   test("wildcard templates redact arbitrary nested candidate data", () => {
     const secret = "dynamic-template-secret";
     for (const template of DYNAMIC_TOOL_PREPARATION_TEMPLATES) {

@@ -1,6 +1,6 @@
 // Read-only projection of PUBLIC durable entries to the existing root UI snapshot input.
 import { isDeepStrictEqual } from "node:util";
-import { hostPlanContextKind, assertHostPlanContext } from "./host-plan-context.js";
+import { assertHostPlanContext, hostPlanContextKind, assertHostGoalContext, hostGoalContextKind } from "./host-plan-context.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RootSessionTreeNode } from "../../src/agent-control/session-tree-snapshot.js";
 import type { LegacyImportBinding } from "./legacy-import.js";
@@ -26,6 +26,7 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
     if (row.kind === "app.legacy-source" && !original) continue;
     if (row.kind === "pi.system" && !original) continue; // private baseline, never a UI message
     if (row.kind === hostPlanContextKind) { assertHostPlanContext(row); continue; }
+    if (row.kind === hostGoalContextKind) { assertHostGoalContext(row); continue; }
     if (original?.type === "message" && (original.message as { role?: unknown } | undefined)?.role === "system" &&
       ["pi.system", "app.legacy-message"].includes(row.kind)) {
       if (row.model?.length !== 1 || !isDeepStrictEqual(row.model[0], original.message))

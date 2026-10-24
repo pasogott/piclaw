@@ -927,18 +927,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return result;
   } }));
   registry.install(defineExtension({ name: "app.host-builtins", tools, hooks: processControls.extension.hooks }));
-  // Plan validates/materializes the SDK's pinned context before request-only
-  // prompt hooks add their own sections. Provider adapters still hoist stable
-  // system guidance; mutable Plan snapshots remain in their historical position.
+  // Goal and Plan retain immutable context before request-only system hooks.
+  // Their shared materializer repairs only source-owned trailing snapshots at
+  // the SDK pinned cutoff; neither prompt moves across later tool results.
+  if (goal) registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error) { lifetime.abort(error); } }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   if (regretsPrompt) registry.install(regretsPrompt);
   if (observability) registry.install(createHostObservabilityPrompt(observability.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); observability.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
-  if (goal) {
-    registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error) { lifetime.abort(error); } }));
-    registry.install(createHostGoalTerminalFence(goal.addon, { root, runtime, assertOwner: assertGoal }));
-  }
+  if (goal) registry.install(createHostGoalTerminalFence(goal.addon, { root, runtime, assertOwner: assertGoal }));
   const commandPolicy = createHostCommandPolicy(root, () => { assert(); if (readAccessConfig().mode !== "single-user") throw Error("Native controls require single-user policy"); });
   const harnessOptions = { models, registry: withTaskModelRequestScope(registry), settings: commandPolicy.settings };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;

@@ -18,12 +18,12 @@ export function createHostGoalPrompt(addon: {
   accountTerminalGoalProgress(chat: string, expected: { goalId: string; generation: number }, tokens: number): unknown;
 }, options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult" | "readCommittedRunUsage">;
+  runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult" | "readCommittedRunUsage" | "prepareGoalContext">;
   assertOwner(): void;
   failClosed(error: unknown): void;
 }) {
   const load = addon.loadThreadGoal.bind(addon), build = addon.buildGoalSystemPrompt.bind(addon);
-  const beforeRequest: NonNullable<GenerationHooks["beforeRequest"]> = async (request, api) => {
+  const beforeRequest: NonNullable<GenerationHooks["beforeRequest"]> = async (request, api, context) => {
     try {
     options.assertOwner();
     const runtime = options.runtime();
@@ -81,17 +81,36 @@ export function createHostGoalPrompt(addon: {
           addon.claimGoalBudgetWrapup(captured.operation.chatJid, { goalId: goal.goal_id, generation: goal.lifecycle_generation })));
       }
     }
-    return scope(() => {
+    const contribution = scope(() => {
       const goal = load(captured.operation.chatJid);
       if (goal?.status === "budget_limited" && budgetWrapup()) {
         const prompt = addon.buildGoalBudgetLimitPrompt(goal) + "\nThe goal is already budget_limited. Give the final wrap-up without calling further tools.";
-        return { messages: [...request.messages, { role: "user" as const, content: prompt, timestamp: 0 }] };
+        return { goal, prompt };
       }
-      if (!goal || (goal.status !== "active")) return request;
+      if (!goal || (goal.status !== "active")) return null;
       const prompt = build(goal);
       authority.assertCurrent();
-      return { messages: [...request.messages, { role: "user" as const, content: prompt, timestamp: 0 }] };
+      return { goal, prompt };
     });
+    if (!contribution) return request;
+    const { goal, prompt } = contribution;
+    const assertContributionCurrent = () => {
+      executable();
+      scope(() => {
+        const current = load(captured.operation.chatJid);
+        if (!current || current.goal_id !== goal.goal_id || current.lifecycle_generation !== goal.lifecycle_generation || current.status !== goal.status)
+          throw Error("Goal context lifecycle changed");
+        for (const text of texts) if (addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled" && !budgetWrapup())
+          throw Error("Goal input lifecycle changed");
+      });
+    };
+    assertContributionCurrent();
+    const messages = await runtime.prepareGoalContext(api.conversationId, api.taskId, captured.inputs,
+      request.messages, [{ type: "text", text: prompt }], {
+        goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status as "active" | "budget_limited",
+      }, assertContributionCurrent, context);
+    assertContributionCurrent();
+    return { messages };
     } catch (error) {
       options.failClosed(error);
       throw Error("Goal request authority unavailable");

@@ -487,15 +487,26 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     const poolEntered = Promise.withResolvers<void>(), pool = Promise.withResolvers<void>();
     const webEntered = Promise.withResolvers<void>(), web = Promise.withResolvers<void>();
     let shutdown!: (signal: string) => Promise<void>;
+    let stopped: Promise<unknown> | undefined;
     let settled = false;
     const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
-    const deadlineTimers: ReturnType<typeof setTimeout>[] = [];
-    const schedule = globalThis.setTimeout;
-    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: (...args: any[]) => void, ms?: number, ...args: any[]) => {
-      const timer = schedule(run, ms, ...args);
-      if (ms === 15000) deadlineTimers.push(timer);
-      return timer;
+    // Failed shutdown deliberately keeps the real process backstop armed. Own
+    // every such timer here so restoring process.exit cannot terminate the suite.
+    const nativeSetTimeout = globalThis.setTimeout;
+    const nativeClearTimeout = globalThis.clearTimeout;
+    const backstops: { handle: ReturnType<typeof setTimeout>; run: () => void; cleared: boolean }[] = [];
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== 15_000) return nativeSetTimeout(run, ms, ...args);
+      const handle = nativeSetTimeout(() => {}, 86_400_000);
+      handle.unref();
+      backstops.push({ handle, run, cleared: false });
+      return handle;
     }) as typeof setTimeout);
+    const clears = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: ReturnType<typeof setTimeout>) => {
+      const timer = backstops.find(timer => timer.handle === handle);
+      if (timer) timer.cleared = true;
+      nativeClearTimeout(handle);
+    }) as typeof clearTimeout);
     const deps = bootstrapDepsForFailure({
       createShutdownHandler,
       registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; },
@@ -524,7 +535,7 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
       await entered.promise;
       const stopping = shutdown("test");
       // Observe rejection immediately, including a producer join failure.
-      const stopped = stopping.catch((error: unknown) => error);
+      stopped = stopping.catch((error: unknown) => error);
       await assertHeld(); // Producer has resolved, scheduler join is still held.
       if (failure === "scheduler" || failure === "producer") {
         if (failure === "scheduler") scheduler.reject(new Error("uncertain scheduler join"));
@@ -550,12 +561,18 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
           replacement.release();
         }
       }
+      expect(backstops).toHaveLength(1);
+      expect(backstops[0]!.cleared).toBe(failure === "none");
+      if (failure !== "none") {
+        backstops[0]!.run();
+        expect(exit).toHaveBeenCalledWith(0);
+      }
     } finally {
       scheduler.resolve(); queue.resolve(); pool.resolve(); web.resolve();
+      await stopped;
       owner.release(); // Offline fixture cleanup only, including fail-closed case.
-      // Production failures retain the backstop; this completed fixture must not
-      // restore real process.exit while its retained timers can kill later tests.
-      deadlineTimers.forEach(clearTimeout);
+      for (const timer of backstops) nativeClearTimeout(timer.handle);
+      clears.mockRestore();
       timers.mockRestore();
       exit.mockRestore();
       rmSync(dir, { recursive: true, force: true });

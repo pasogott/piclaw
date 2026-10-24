@@ -29,7 +29,7 @@ export async function sdkRecoverySnapshot(database: OwnedSqlite) {
 }
 
 export type RecoveryCheckpoint = { sdkSnapshot?: Awaited<ReturnType<typeof sdkRecoverySnapshot>>; generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { withIdleModelGuard?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["withIdleModelGuard"]; loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean; allowRequest?: (requestId: string) => boolean; prepareTerminalEffect?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"] } = {}) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { withPromptContextGuard?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["withPromptContextGuard"]; withIdleModelGuard?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["withIdleModelGuard"]; loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean; allowRequest?: (requestId: string) => boolean; prepareTerminalEffect?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"] } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const hostPath = join(STORE_DIR, "messages.db");
@@ -118,6 +118,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
         harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
         prepareTerminalEffect: testConfig.prepareTerminalEffect,
         withIdleModelGuard: testConfig.withIdleModelGuard,
+        withPromptContextGuard: testConfig.withPromptContextGuard,
         ...ports, existingConversationIds: [base.root.id], conversationFor(chat, branch) {
           if (chat !== chatJid || branch !== "main") throw Error("Manifest conflict"); return base.root.id;
         }, authorizeScheduling(inspection) {
