@@ -12,6 +12,9 @@ import { AgentPool } from "../../src/agent-pool.js";
 import { AgentSessionManager } from "../../src/agent-pool/session-manager.js";
 import type { PoolEntry } from "../../src/agent-pool/session-manager.js";
 import { captureResidentLegacyUpgradeBindings } from "../../src/agent-pool/legacy-authority-capture.js";
+import { snapshotLegacyHostFrontier } from "../../src/agent-pool/legacy-host-frontier.js";
+import { applyOwnedMigrations } from "../../src/db/migrations.js";
+import { nativeBindingRecoveryIndex, nativeBindingRecoveryMigration } from "../../src/db/native-host-schema-contract.js";
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanup.splice(0).reverse()) fn(); });
@@ -203,5 +206,48 @@ for (const change of ["leaf", "baseline", "root", "fence", "pending", "source"] 
     if (change === "pending") Object.assign(f.pool.get("a")!.runtime.session, { pendingMessageCount: 1 });
     if (change === "source") writeFileSync(f.file, readFileSync(f.file, "utf8") + "\n");
     await expect(pending).rejects.toThrow();
+  });
+}
+
+function frontierDatabase() {
+  const db = new Database(":memory:");
+  // Frontier policy only; real host table validation runs in native qualification.
+  db.exec("CREATE TABLE piclaw_durable_bindings_v1(incarnation TEXT,chat_jid TEXT,source_id TEXT,payload_ref TEXT)");
+  applyOwnedMigrations(db, [{ owner:"core.fixture", id:"original", order:1, sql:"CREATE TABLE captured_host(value TEXT)" }]);
+  db.exec("INSERT INTO captured_host VALUES ('preserved')");
+  return db;
+}
+
+test("legacy frontier permits only the declared candidate index and checksummed native receipt", () => {
+  const db = frontierDatabase();
+  try {
+    const before = snapshotLegacyHostFrontier(db);
+    applyOwnedMigrations(db, [nativeBindingRecoveryMigration]);
+    expect(snapshotLegacyHostFrontier(db)).toBe(before);
+    db.exec(`CREATE INDEX ${nativeBindingRecoveryIndex}_unexpected ON piclaw_durable_bindings_v1(chat_jid)`);
+    expect(snapshotLegacyHostFrontier(db)).not.toBe(before);
+    db.exec(`DROP INDEX ${nativeBindingRecoveryIndex}_unexpected`);
+    expect(snapshotLegacyHostFrontier(db)).toBe(before);
+    db.query("INSERT INTO piclaw_schema_migrations VALUES (?,?,?,?,?)")
+      .run(nativeBindingRecoveryMigration.owner, "undeclared-step", 2, "unapproved", "now");
+    expect(snapshotLegacyHostFrontier(db)).not.toBe(before);
+  } finally { db.close(); }
+});
+
+for (const [field, changed] of [["owner","other.owner"], ["id","other-step"], ["migration_order",2], ["checksum","wrong-checksum"]] as const) {
+  test(`legacy frontier protects a nonmatching native receipt ${field} and existing core receipts`, () => {
+    const db = frontierDatabase();
+    try {
+      applyOwnedMigrations(db, [nativeBindingRecoveryMigration]);
+      const before = snapshotLegacyHostFrontier(db);
+      expect(() => db.transaction(() => {
+        db.query(`UPDATE piclaw_schema_migrations SET ${field}=? WHERE owner=?`).run(changed, nativeBindingRecoveryMigration.owner);
+        expect(snapshotLegacyHostFrontier(db)).not.toBe(before);
+        throw Error("rollback probe");
+      })()).toThrow("rollback probe");
+      expect(snapshotLegacyHostFrontier(db)).toBe(before);
+      db.exec("UPDATE piclaw_schema_migrations SET applied_at='changed' WHERE owner='core.fixture'");
+      expect(snapshotLegacyHostFrontier(db)).not.toBe(before);
+    } finally { db.close(); }
   });
 }

@@ -2,6 +2,11 @@ import "./src/test-guard.js";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initializeHostSchema, initializeHostDurableBindings, createHostDurableBindings, HostCutoverController } from "../../runtime/durable-engine/src/index.js";
+import { acceptedPayloadRecoveryIndex, migrateHostAcceptedPayloadLookup } from '../../runtime/durable-engine/src/host-schema.js';
+import { acceptedPayloadRecoverySql, readApplicationMessagePayload } from '../../runtime/durable-engine/src/accepted-payload-recovery.js';
+import { acceptedSteerFixture } from './src/accepted-steer-recovery-fixture.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 test("host schema: FK, exact synchronous guard, atomic DDL and incompatible shapes fail closed", () => {
   const db = new Database(":memory:");
@@ -65,4 +70,104 @@ test("cutover: stale JSON count cannot override existing work rows on inspect, r
     expect(controller.recordPostCutoverWork(1, { operationId: "op2", contentHash: digest }).postCutoverCount).toBe(2);
     expect(controller.prepareRollback(2).reasons).toContain("recorded_work");
   } finally { db.close(); }
+});
+
+const lookupReceipt = (db: Database) => db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='host.native-bindings' ORDER BY migration_order").all();
+function removeLookupStep(db: Database) {
+  db.exec(`DROP INDEX ${acceptedPayloadRecoveryIndex}`);
+  db.exec("DELETE FROM piclaw_schema_migrations WHERE owner='host.native-bindings'");
+}
+
+test('host binding lookup migration is owned, atomic, exact and idempotent without row changes', () => {
+  const db = new Database(':memory:'); db.exec('PRAGMA foreign_keys=ON');
+  try {
+    initializeHostSchema(db, () => {});
+    expect(lookupReceipt(db)).toHaveLength(1);
+    expect(db.query(`PRAGMA index_info(${acceptedPayloadRecoveryIndex})`).all().map(row => (row as {name:string}).name))
+      .toEqual(['incarnation', 'chat_jid', 'source_id', 'payload_ref']);
+    db.query('INSERT INTO piclaw_durable_bindings_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run('d','i',1,'chat','main','op',1,'source','payload','request','a'.repeat(64),null);
+    const rows = db.query('SELECT * FROM piclaw_durable_bindings_v1').all();
+    removeLookupStep(db);
+    let calls = 0;
+    expect(() => migrateHostAcceptedPayloadLookup(db, () => { if (++calls === 3) throw Error('owner lost'); })).toThrow('owner lost');
+    expect(lookupReceipt(db)).toEqual([]);
+    expect(db.query('SELECT 1 FROM sqlite_master WHERE name=?').get(acceptedPayloadRecoveryIndex)).toBeNull();
+    expect(db.query('SELECT * FROM piclaw_durable_bindings_v1').all()).toEqual(rows);
+    migrateHostAcceptedPayloadLookup(db, () => {});
+    const receipt = lookupReceipt(db);
+    const index = db.query('SELECT sql,rootpage FROM sqlite_master WHERE name=?').get(acceptedPayloadRecoveryIndex);
+    migrateHostAcceptedPayloadLookup(db, () => {}); initializeHostSchema(db, () => {});
+    expect(lookupReceipt(db)).toEqual(receipt);
+    expect(db.query('SELECT sql,rootpage FROM sqlite_master WHERE name=?').get(acceptedPayloadRecoveryIndex)).toEqual(index);
+    expect(db.query('SELECT * FROM piclaw_durable_bindings_v1').all()).toEqual(rows);
+    // A receipt without its index is drift, never a silently successful reopen.
+    db.exec(`DROP INDEX ${acceptedPayloadRecoveryIndex}`);
+    expect(() => migrateHostAcceptedPayloadLookup(db, () => {})).toThrow('Unsupported host schema');
+    expect(lookupReceipt(db)).toEqual(receipt);
+    expect(db.query('SELECT 1 FROM sqlite_master WHERE name=?').get(acceptedPayloadRecoveryIndex)).toBeNull();
+    db.exec((index as {sql:string}).sql);
+    removeLookupStep(db);
+    db.exec(`CREATE INDEX ${acceptedPayloadRecoveryIndex} ON piclaw_durable_bindings_v1(chat_jid)`);
+    expect(() => migrateHostAcceptedPayloadLookup(db, () => {})).toThrow('Unsupported host schema');
+    expect(lookupReceipt(db)).toEqual([]);
+    expect(db.query('SELECT * FROM piclaw_durable_bindings_v1').all()).toEqual(rows);
+  } finally { db.close(); }
+});
+
+test('real accepted-payload fallback searches retained bindings and preserves SDK provenance/hash checks', async () => {
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, 'binding-recovery-index-'));
+  const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
+  const f = await acceptedSteerFixture(dir, 'before-submit', undefined, true, { sharedDatabase: true });
+  try {
+    const { primary } = await f.prepare();
+    const db = f.db;
+    const params = [primary.chatJid, primary.sourceId, primary.payloadRef, f.incarnation];
+    const original = db.query(acceptedPayloadRecoverySql).get(...params);
+    expect(original).not.toBeNull();
+    const insert = db.query('INSERT INTO piclaw_durable_bindings_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+    db.transaction(() => {
+      for (let i = 0; i < 4000; i++) insert.run('retained', f.incarnation, f.base.root.id,
+        `retained-chat-${i % 20}`, 'main', `retained-op-${i}`, i + 1000, `retained-source-${i}`,
+        `retained-payload-${i}`, `retained-request-${i}`, 'a'.repeat(64), null);
+    }).immediate();
+    const rows = () => db.query('SELECT * FROM piclaw_durable_bindings_v1 ORDER BY domain,operation_id').all();
+    const retained = rows(); removeLookupStep(db);
+    const plan = () => (db.query(`EXPLAIN QUERY PLAN ${acceptedPayloadRecoverySql}`).all(...params) as {detail:string}[]).map(row => row.detail);
+    expect(plan().some(detail => /SCAN b\b/.test(detail))).toBe(true);
+    migrateHostAcceptedPayloadLookup(db, () => f.owner.assert());
+    const indexed = plan();
+    expect(indexed.some(detail => detail.includes(`SEARCH b USING INDEX ${acceptedPayloadRecoveryIndex}`))).toBe(true);
+    for (const alias of ['s','e']) expect(indexed.some(detail => detail.startsWith(`SEARCH ${alias} `) && /PRIMARY KEY|rowid/.test(detail))).toBe(true);
+    expect(rows()).toEqual(retained);
+    expect(db.query(acceptedPayloadRecoverySql).get(...params)).toEqual(original);
+    const bindings = createHostDurableBindings(db, { domain: f.incarnation, incarnation: f.incarnation,
+      manifest: [{chatJid:f.chatJid,branchId:'main',conversationId:f.base.root.id}], assertOwner() { f.owner.assert(); },
+      async resolveContent(ref, input) { return readApplicationMessagePayload(db, f.incarnation, input, ref); } });
+    expect(await bindings.getOrBind(primary)).toEqual({ content: 'primary A' });
+    expect(db.query('UPDATE messages SET content=? WHERE id=? AND chat_jid=? RETURNING id').all('edited projection', primary.sourceId, primary.chatJid)).toEqual([{id:primary.sourceId}]);
+    // Preserve production selection: an existing same-identity edit fails its hash.
+    await expect(bindings.getOrBind(primary)).rejects.toThrow('Host payload hash conflict');
+    // A changed projection identity or missing row takes the actual SDK fallback.
+    const editedId = `${primary.sourceId}:edited-projection`;
+    expect(db.query('UPDATE messages SET id=? WHERE id=? AND chat_jid=? RETURNING id').all(editedId, primary.sourceId, primary.chatJid)).toEqual([{id:editedId}]);
+    expect(await bindings.getOrBind(primary)).toEqual({ content: 'primary A' });
+    expect(db.query('DELETE FROM messages WHERE id=? AND chat_jid=? RETURNING id').all(editedId, primary.chatJid)).toEqual([{id:editedId}]);
+    expect(await bindings.getOrBind(primary)).toEqual({ content: 'primary A' });
+    expect(() => readApplicationMessagePayload(db, f.incarnation, { ...primary, sourceId:'wrong' }, primary.payloadRef)).toThrow('Unverified application payload');
+    db.query('UPDATE piclaw_durable_bindings_v1 SET request_hash=? WHERE domain=? AND request_id=?').run('b'.repeat(64),f.incarnation,primary.requestId);
+    expect(() => readApplicationMessagePayload(db, f.incarnation, primary, primary.payloadRef)).toThrow('Unverified SDK accepted payload');
+    db.query('UPDATE piclaw_durable_bindings_v1 SET request_hash=? WHERE domain=? AND request_id=?').run(primary.requestHash,f.incarnation,primary.requestId);
+    const accepted = db.query(`SELECT e.id,e.record FROM piclaw_durable_bindings_v1 b JOIN submissions s ON s.id=b.submission_id
+      JOIN entries e ON e.id=json_extract(s.record,'$.entry') WHERE b.domain=? AND b.request_id=?`).get(f.incarnation, primary.requestId) as {id:number;record:string};
+    const changed = JSON.parse(accepted.record); changed.model[0].content = 'forged SDK bytes';
+    db.query('UPDATE entries SET record=? WHERE id=?').run(JSON.stringify(changed), accepted.id);
+    await expect(bindings.getOrBind(primary)).rejects.toThrow('Host payload hash conflict');
+    db.query('UPDATE entries SET record=? WHERE id=?').run(accepted.record, accepted.id);
+    expect(await bindings.getOrBind(primary)).toEqual({ content: 'primary A' });
+    expect(rows()).toEqual(retained);
+  } finally {
+    await f.close(); process.env.PICLAW_DB_IN_MEMORY = oldMemory;
+    await rm(dir, { recursive:true, force:true });
+  }
 });
