@@ -43,6 +43,50 @@ function modelLookupFixture(getCurrentModelLabel: () => Promise<string | null>) 
   return { statuses, compact, stats, compactStarted, statsStarted, events, responses, send };
 }
 
+describe("UI-only abort acknowledgement", () => {
+  test("settled no-op abort clears only the captured busy status without a timeline post", async () => {
+    const f = modelLookupFixture(async () => null);
+    f.statuses.update("web:test", { type: "intent", turn_id: "old", title: "Working" });
+    const pending = f.send("/abort");
+    await f.compactStarted.promise;
+    f.compact.resolve({ status: "success", message: "No active durable operation." });
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ui_only: true, command: { status: "success", message: "No active durable operation." } });
+    expect(f.statuses.get("web:test")).toMatchObject({ type: "done", title: "Idle", turn_id: "old" });
+    expect(f.events.filter(e => e.event === "agent_status")).toHaveLength(1);
+    expect(f.events.some(e => e.event === "new_post")).toBe(false);
+    expect(f.responses).toEqual([]);
+  });
+
+  test("abort never clears a successor status or another chat", async () => {
+    const f = modelLookupFixture(async () => null);
+    f.statuses.update("web:test", { type: "intent", turn_id: "old" });
+    f.statuses.update("web:other", { type: "intent", turn_id: "other" });
+    const pending = f.send("/abort");
+    await f.compactStarted.promise;
+    f.statuses.update("web:test", { type: "intent", turn_id: "successor" });
+    f.compact.resolve({ status: "success", message: "Aborted the current durable operation." });
+    expect((await pending).status).toBe(200);
+    expect(f.statuses.get("web:test")).toMatchObject({ turn_id: "successor", type: "intent" });
+    expect(f.statuses.get("web:other")).toMatchObject({ turn_id: "other", type: "intent" });
+    expect(f.events).toEqual([]);
+  });
+
+  test("failed cancellation is not acknowledged or painted idle", async () => {
+    const f = modelLookupFixture(async () => null);
+    f.statuses.update("web:test", { type: "intent", turn_id: "uncertain" });
+    const pending = f.send("/abort");
+    await f.compactStarted.promise;
+    f.compact.resolve({ status: "error", message: "Abort terminal settlement pending" });
+    const response = await pending;
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: "Abort terminal settlement pending", command: { status: "error" } });
+    expect(f.statuses.get("web:test")).toMatchObject({ type: "intent", turn_id: "uncertain" });
+    expect(f.events).toEqual([]);
+  });
+});
+
 describe("manual command deferred model lookup ownership", () => {
   for (const command of ["/compact", "/session-rotate"]) {
     test(`${command} claims before lookup and cannot reclaim a newer command`, async () => {

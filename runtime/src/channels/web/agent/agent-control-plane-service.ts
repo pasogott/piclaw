@@ -23,6 +23,7 @@ import { queuedSteeringRejectionReason } from "./queued-steering-diagnostics.js"
 import type { AgentControlCommand, AgentControlResult } from "../../../agent-control/agent-control-types.js";
 import type { QueuedFollowupItem } from "../runtime/followup-placeholders.js";
 import { parseJsonObjectRequest } from "../json-body.js";
+import { settledAbortStatus } from "./agent-abort-status.js";
 import type { QueuedFollowupLifecycleService } from "../runtime/queued-followup-lifecycle-service.js";
 import { completeOobeForInstance, isProviderReadyOobeCompletedForInstance } from "../oobe-instance-state.js";
 import {
@@ -453,10 +454,16 @@ export class WebAgentControlPlaneService {
       requestedTurnId: expectedTurnId || null,
       activeTurnId: activeTurnId || null,
     });
+    const captured = JSON.stringify(status);
     try {
       const result = await this.options.agentPool.applyControlCommand(chatJid, { type: "abort", raw: "/abort" });
       if (result.status === "error") {
         return this.options.json({ status: "error", error: result.message, chat_jid: chatJid, turn_id: activeTurnId || null, result }, 500);
+      }
+      const terminal = settledAbortStatus(captured, this.options.getAgentStatus?.(chatJid) ?? null, result.message);
+      if (terminal) {
+        this.options.updateAgentStatus?.(chatJid, terminal);
+        this.options.broadcastEvent("agent_status", { ...terminal, chat_jid: chatJid });
       }
       return this.options.json({ status: "ok", chat_jid: chatJid, turn_id: activeTurnId || null, result }, 200);
     } catch (error) {

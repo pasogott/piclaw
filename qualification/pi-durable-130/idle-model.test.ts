@@ -188,3 +188,88 @@ test("shared DB next-request model controls persist while destructive reset reta
     expect(f.host.credentialLookups).toBe(0);
   } finally { await runtime.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test("scoped reset preserves sibling SDK inbox and host sources while refusing its own pending work", async () => {
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "scoped-reset-"));
+  const path = join(dir, "shared.db"), owner = TestOwner.acquire(path), root = new Database(path);
+  installServiceWorkSchema(root);
+  let sql!: BunSqliteDatabase;
+  let resetHook: (() => void) | undefined, ownerHook: (() => void) | undefined;
+  const openStorage = () => {
+    sql = new BunSqliteDatabase(path, { root, assertOwner: () => { owner.assert(); ownerHook?.(); } });
+    return SqliteStorage.open(sql);
+  };
+  const f = await openFixture(owner, () => {}, openStorage), id = f.root.id;
+  await f.close();
+  const unused = async () => { throw Error("unexpected host effect"); };
+  const binding = { incarnation: "scoped", chatJid: "web:idle", branchId: "main", conversationId: id };
+  const config = { incarnation: "scoped", owner: { assert: () => owner.assert(), release() {} }, openStorage,
+    withIdleModelGuard: <T>(body: () => Promise<T>) => sql.withIdleModelGuard(body),
+    withSessionResetGuard: <T>(chatJid: string, body: () => Promise<T>) => { resetHook?.(); return sql.withSessionResetGuard(chatJid, body); },
+    harnessOptions: { models: f.models, registry: f.registry },
+    work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
+    terminal: { getTerminal: unused, commitTerminal: unused } as any,
+    bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
+    conversationFor: () => id, existingConversationIds: [id], authorizeScheduling: unused, putAnswer: unused,
+    sessionId: "scoped", lane: "scoped", generation: 1, now: () => new Date(0).toISOString() };
+  let runtime = await HostConversationRuntime.open(config, context);
+  let siblingId!: number;
+  try {
+    await runtime.allocateScheduledFork(id, child => { siblingId = child; });
+    await runtime.close();
+    let harness = await Harness.open(await openStorage(), config.harnessOptions, context);
+    const sibling = (await harness.conversation(siblingId as any, context))!;
+    const siblingInput = await sibling.submit({ type: "input", requestId: "sibling-pending", content: "untouched sibling" }, context);
+    const siblingSubmissionId = siblingInput.id;
+    await harness.close(context);
+    harness = await Harness.open(await openStorage(), config.harnessOptions, context);
+    const siblingStatus = await (await harness.submission(siblingSubmissionId, context))!.status(context);
+    await harness.close(context);
+    root.query("INSERT INTO service_effect_s01_chats(chat_jid,active_operation_id) VALUES ('other',NULL),('web:idle',NULL)").run();
+    root.query("UPDATE service_effect_s01_chats SET next_source_seq=2").run();
+    const insert = root.query("INSERT INTO service_effect_s01_sources VALUES (?,1,?,?,'message',?,'payload',NULL,NULL,'now',NULL,'provenance',0)");
+    insert.run("other", "other-source", "a".repeat(64), "pending");
+    insert.run("web:idle", "own-source", "b".repeat(64), "disposed");
+    const beforeSources = root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid").all();
+    runtime = await HostConversationRuntime.open(config, context);
+    const beforeReset = await runtime.readSessionPosition(binding);
+    await runtime.resetSession(binding);
+    expect(await runtime.readSessionPosition(binding)).not.toBe(beforeReset);
+    expect(root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid").all()).toEqual(beforeSources);
+    await expect(sql.withIdleModelGuard(async () => {})).rejects.toThrow("Host work is not idle");
+    const afterReset = await runtime.readSessionPosition(binding);
+    root.query("UPDATE service_effect_s01_sources SET state='pending' WHERE chat_jid='web:idle'").run();
+    await expect(runtime.resetSession(binding)).rejects.toThrow("Host work is not idle");
+    expect(await runtime.readSessionPosition(binding)).toBe(afterReset);
+    root.query("UPDATE service_effect_s01_sources SET state='disposed' WHERE chat_jid='web:idle'").run();
+    resetHook = () => root.query("UPDATE service_effect_s01_sources SET state='pending' WHERE chat_jid='web:idle'").run();
+    await expect(runtime.resetSession(binding)).rejects.toThrow("Host work is not idle");
+    resetHook = undefined;
+    expect(await runtime.readSessionPosition(binding)).toBe(afterReset);
+    root.query("UPDATE service_effect_s01_sources SET state='disposed' WHERE chat_jid='web:idle'").run();
+    root.exec("BEGIN");
+    await expect(runtime.resetSession(binding)).rejects.toThrow("Root connection transaction active");
+    root.exec("ROLLBACK");
+    let checks = 0;
+    ownerHook = () => { if (++checks === 3) throw Error("scoped final guard lost owner"); };
+    await expect(runtime.resetSession(binding)).rejects.toThrow("scoped final guard lost owner");
+    ownerHook = undefined;
+    expect(checks).toBe(3);
+    await runtime.close();
+    runtime = await HostConversationRuntime.open(config, context);
+    expect(await runtime.readSessionPosition(binding)).toBe(afterReset);
+    await runtime.close();
+    harness = await Harness.open(await openStorage(), config.harnessOptions, context);
+    expect(await (await harness.submission(siblingSubmissionId, context))!.status(context)).toEqual(siblingStatus);
+    const own = (await harness.conversation(id, context))!;
+    await own.submit({ type: "input", requestId: "own-pending", content: "must not reset" }, context);
+    await harness.close(context);
+    runtime = await HostConversationRuntime.open(config, context);
+    await expect(runtime.resetSession(binding)).rejects.toThrow("Conversation is not idle");
+    expect(f.host.modelCalls).toBe(0);
+    expect(f.host.credentialLookups).toBe(0);
+  } finally {
+    await runtime.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
