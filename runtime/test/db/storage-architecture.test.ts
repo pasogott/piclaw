@@ -1,7 +1,7 @@
 import Database from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 
 import { createVerifiedSqliteBackup, verifySqliteBackup } from "../../src/db/backup.js";
@@ -50,8 +50,10 @@ test("verified SQLite backup never overwrites destinations and removes failed sn
 
 test("backup verifier rejects corrupt files", () => {
   const paths = tempDbPaths();
-  Bun.write(paths.backup, "not sqlite");
-  expect(() => verifySqliteBackup(paths.backup)).toThrow();
+  mkdirSync(dirname(paths.backup), { recursive: true });
+  writeFileSync(paths.backup, "not sqlite");
+  expect(existsSync(paths.backup)).toBe(true);
+  expect(() => verifySqliteBackup(paths.backup)).toThrow("file is not a database");
 });
 
 test("owner-scoped migrations are transactional, idempotent, and checksum guarded", () => {

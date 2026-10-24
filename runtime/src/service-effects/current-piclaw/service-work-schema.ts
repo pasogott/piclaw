@@ -1,6 +1,126 @@
 import type Database from "bun:sqlite";
+import { applyOwnedMigrations } from "../../db/migrations.js";
 
 const SCHEMA_PREFIX = "service_effect_s01_";
+
+// Keep the historical declarations exact: unrecognised constraints must not be
+// erased by the narrow queue rebuild. The membership parent is never rebuilt
+// (EF-S07 source_bindings also references it).
+const OPERATION_SOURCES_SQL = `CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}operation_sources (
+      chat_jid TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      source_seq INTEGER NOT NULL,
+      PRIMARY KEY(operation_id, source_seq),
+      UNIQUE(chat_jid, source_seq),
+      FOREIGN KEY(chat_jid, operation_id)
+        REFERENCES ${SCHEMA_PREFIX}operations(chat_jid, operation_id),
+      FOREIGN KEY(chat_jid, source_seq)
+        REFERENCES ${SCHEMA_PREFIX}sources(chat_jid, source_seq)
+    ) STRICT;`;
+const HISTORICAL_QUEUE_SQL = `CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}queued_inputs (
+      chat_jid TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      source_seq INTEGER NOT NULL,
+      queue_kind TEXT NOT NULL CHECK(queue_kind IN ('steer','follow_up','next_run')),
+      harness_entry_id TEXT,
+      state TEXT NOT NULL CHECK(state IN ('accepted','queued','consumed','disposed')),
+      PRIMARY KEY(operation_id, source_seq),
+      FOREIGN KEY(chat_jid, operation_id)
+        REFERENCES ${SCHEMA_PREFIX}operations(chat_jid, operation_id),
+      FOREIGN KEY(chat_jid, source_seq)
+        REFERENCES ${SCHEMA_PREFIX}operation_sources(chat_jid, source_seq)
+    ) STRICT;`;
+const FINAL_QUEUE_SQL = HISTORICAL_QUEUE_SQL.replace(
+  /\n    \) STRICT;/,
+  `,
+      FOREIGN KEY(chat_jid, operation_id, source_seq)
+        REFERENCES ${SCHEMA_PREFIX}operation_sources(chat_jid, operation_id, source_seq)
+    ) STRICT;`,
+);
+const PARENT_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}operation_source_membership
+  ON ${SCHEMA_PREFIX}operation_sources(chat_jid, operation_id, source_seq);`;
+const QUEUE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}queued_source
+  ON ${SCHEMA_PREFIX}queued_inputs(chat_jid, source_seq);`;
+const QUEUE_UPGRADE = {
+  owner: "service_effect_s01",
+  id: "exact-queued-source-membership",
+  order: 1,
+  sql: `
+    ${PARENT_INDEX_SQL}
+    ${FINAL_QUEUE_SQL.replace("IF NOT EXISTS ", "").replace(
+      `${SCHEMA_PREFIX}queued_inputs (`, `${SCHEMA_PREFIX}queued_inputs_upgrade (`,
+    )}
+    INSERT INTO ${SCHEMA_PREFIX}queued_inputs_upgrade
+      (rowid, chat_jid, operation_id, source_seq, queue_kind, harness_entry_id, state)
+      SELECT rowid, chat_jid, operation_id, source_seq, queue_kind, harness_entry_id, state
+      FROM ${SCHEMA_PREFIX}queued_inputs ORDER BY rowid;
+    DROP TABLE ${SCHEMA_PREFIX}queued_inputs;
+    ALTER TABLE ${SCHEMA_PREFIX}queued_inputs_upgrade RENAME TO ${SCHEMA_PREFIX}queued_inputs;
+    ${QUEUE_INDEX_SQL}
+  `,
+};
+
+// Ignore formatting, not SQL semantics (in particular, preserve string literals).
+function normaliseSql(sql: string): string {
+  return sql
+    .replace(`"${SCHEMA_PREFIX}queued_inputs"`, `${SCHEMA_PREFIX}queued_inputs`)
+    .split(/('(?:''|[^'])*')/).map((part, i) => i % 2 ? part : part.replace(/\bIF NOT EXISTS\b/gi, "").replace(/\s+/g, "").toLowerCase())
+    .join("").replace(/;$/, "");
+}
+
+function schemaSql(database: Database, name: string): string | null {
+  const row = database.query("SELECT sql FROM sqlite_schema WHERE name = ? COLLATE NOCASE").get(name) as { sql: string | null } | null;
+  return row?.sql ?? null;
+}
+
+function invalidUpgrade(): never {
+  // No historical identifiers or row bytes cross this setup error boundary.
+  throw new Error("EF-S01 queue upgrade requires recognised schema and valid source membership.");
+}
+
+/** Read-only preflight, before even ledger/base DDL. Never reassign bad history. */
+function preflightQueueUpgrade(database: Database): void {
+  // Inspect an existing temp schema without allocating one on a main-only root.
+  const hasTemp = (database.query("PRAGMA database_list").all() as {name:string}[]).some(row => row.name === "temp");
+  // Unqualified installer/helper SQL must not resolve to a temporary shadow.
+  if (hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema WHERE
+      lower(name) LIKE 'service_effect_s01_%' OR name='piclaw_schema_migrations' COLLATE NOCASE LIMIT 1`).get()) invalidUpgrade();
+  const parent = schemaSql(database, `${SCHEMA_PREFIX}operation_sources`);
+  const queue = schemaSql(database, `${SCHEMA_PREFIX}queued_inputs`);
+  if (parent !== null && normaliseSql(parent) !== normaliseSql(OPERATION_SOURCES_SQL)) invalidUpgrade();
+  if (queue !== null && ![HISTORICAL_QUEUE_SQL, FINAL_QUEUE_SQL].some(sql => normaliseSql(sql) === normaliseSql(queue))) invalidUpgrade();
+  for (const [name, expected] of [
+    [`${SCHEMA_PREFIX}operation_source_membership`, PARENT_INDEX_SQL],
+    [`${SCHEMA_PREFIX}queued_source`, QUEUE_INDEX_SQL],
+  ] as const) {
+    const sql = schemaSql(database, name);
+    if (sql !== null && normaliseSql(sql) !== normaliseSql(expected)) invalidUpgrade();
+  }
+  if (database.query("SELECT 1 FROM sqlite_schema WHERE name = ? COLLATE NOCASE").get(`${SCHEMA_PREFIX}queued_inputs_upgrade`)) invalidUpgrade();
+  if (queue === null) return;
+  if (parent === null) invalidUpgrade();
+  // Queue-owned objects would disappear on DROP TABLE; reject rather than guess
+  // how to recreate them. Other parent indexes/triggers remain untouched.
+  if (database.query(`SELECT 1 FROM sqlite_schema WHERE tbl_name = ? COLLATE NOCASE AND
+      (type = 'trigger' OR (type = 'index' AND sql IS NOT NULL AND name <> ? COLLATE NOCASE)) LIMIT 1`)
+    .get(`${SCHEMA_PREFIX}queued_inputs`, `${SCHEMA_PREFIX}queued_source`)
+    || hasTemp && database.query("SELECT 1 FROM sqlite_temp_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE LIMIT 1")
+      .get(`${SCHEMA_PREFIX}queued_inputs`)) invalidUpgrade();
+  // Even empty child tables are unsafe: DROP may cascade, or invalidate their FK.
+  const child = database.query(`SELECT 1 FROM sqlite_schema AS s, pragma_foreign_key_list(s.name, 'main') AS f
+    WHERE s.type='table' AND f."table"=? COLLATE NOCASE LIMIT 1`).get(`${SCHEMA_PREFIX}queued_inputs`);
+  const tempChild = hasTemp && database.query(`SELECT 1 FROM sqlite_temp_schema AS s, pragma_foreign_key_list(s.name, 'temp') AS f
+    WHERE s.type='table' AND f."table"=? COLLATE NOCASE LIMIT 1`).get(`${SCHEMA_PREFIX}queued_inputs`);
+  if (child || tempChild) invalidUpgrade();
+  if (database.query(`SELECT 1 FROM ${SCHEMA_PREFIX}queued_inputs AS q WHERE
+      q.queue_kind NOT IN ('steer','follow_up','next_run') OR q.state NOT IN ('accepted','queued','consumed','disposed')
+      OR NOT EXISTS (SELECT 1 FROM ${SCHEMA_PREFIX}operation_sources AS p
+        WHERE p.chat_jid=q.chat_jid AND p.operation_id=q.operation_id AND p.source_seq=q.source_seq)
+      LIMIT 1`).get()) invalidUpgrade();
+  for (const table of ["queued_inputs", "operation_sources"]) {
+    if (database.query(`PRAGMA foreign_key_check('${SCHEMA_PREFIX}${table}')`).get()) invalidUpgrade();
+  }
+}
 
 /**
  * Install the latent EF-S01 schema on an explicitly supplied isolated database.
@@ -17,7 +137,9 @@ export function installServiceWorkSchema(database: Database): void {
     throw new Error("EF-S01 requires SQLite foreign-key enforcement.");
   }
 
-  const install = () => database.exec(`
+  const install = () => {
+    preflightQueueUpgrade(database);
+    database.exec(`
     CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}chats (
       chat_jid TEXT PRIMARY KEY,
       next_source_seq INTEGER NOT NULL DEFAULT 1 CHECK(next_source_seq >= 1),
@@ -80,17 +202,7 @@ export function installServiceWorkSchema(database: Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}one_active_operation
       ON ${SCHEMA_PREFIX}operations(chat_jid) WHERE phase <> 'terminal';
 
-    CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}operation_sources (
-      chat_jid TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      source_seq INTEGER NOT NULL,
-      PRIMARY KEY(operation_id, source_seq),
-      UNIQUE(chat_jid, source_seq),
-      FOREIGN KEY(chat_jid, operation_id)
-        REFERENCES ${SCHEMA_PREFIX}operations(chat_jid, operation_id),
-      FOREIGN KEY(chat_jid, source_seq)
-        REFERENCES ${SCHEMA_PREFIX}sources(chat_jid, source_seq)
-    ) STRICT;
+    ${OPERATION_SOURCES_SQL}
 
     CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}intents (
       operation_id TEXT NOT NULL,
@@ -103,19 +215,7 @@ export function installServiceWorkSchema(database: Database): void {
       FOREIGN KEY(operation_id) REFERENCES ${SCHEMA_PREFIX}operations(operation_id)
     ) STRICT;
 
-    CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}queued_inputs (
-      chat_jid TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      source_seq INTEGER NOT NULL,
-      queue_kind TEXT NOT NULL CHECK(queue_kind IN ('steer','follow_up','next_run')),
-      harness_entry_id TEXT,
-      state TEXT NOT NULL CHECK(state IN ('accepted','queued','consumed','disposed')),
-      PRIMARY KEY(operation_id, source_seq),
-      FOREIGN KEY(chat_jid, operation_id)
-        REFERENCES ${SCHEMA_PREFIX}operations(chat_jid, operation_id),
-      FOREIGN KEY(chat_jid, source_seq)
-        REFERENCES ${SCHEMA_PREFIX}operation_sources(chat_jid, source_seq)
-    ) STRICT;
+    ${HISTORICAL_QUEUE_SQL}
 
     CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}wake_intents (
       chat_jid TEXT NOT NULL,
@@ -137,6 +237,13 @@ export function installServiceWorkSchema(database: Database): void {
     CREATE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}open_operations
       ON ${SCHEMA_PREFIX}operations(chat_jid, phase, operation_id);
   `);
-  if (database.inTransaction) install();
-  else database.transaction(install).immediate();
+    applyOwnedMigrations(database, [QUEUE_UPGRADE]);
+    // A receipt must not hide schema drift or a missing prerequisite index.
+    if (normaliseSql(schemaSql(database, `${SCHEMA_PREFIX}queued_inputs`) ?? "") !== normaliseSql(FINAL_QUEUE_SQL)
+      || normaliseSql(schemaSql(database, `${SCHEMA_PREFIX}operation_source_membership`) ?? "") !== normaliseSql(PARENT_INDEX_SQL)
+      || normaliseSql(schemaSql(database, `${SCHEMA_PREFIX}queued_source`) ?? "") !== normaliseSql(QUEUE_INDEX_SQL)) invalidUpgrade();
+  };
+  // Bun uses a savepoint when nested: a caller may catch setup failure and still
+  // commit unrelated outer work without leaking DDL, copied rows, or receipts.
+  database.transaction(install).immediate();
 }
