@@ -3,6 +3,7 @@ import { isolateBudgetTestDatabase } from './fixture.js';
 import { createTempWorkspace } from '../helpers.js';
 import { ensureBudgetWork,saveBudgetCap } from '../../src/db/budget-limits.js';
 import { getBudgetRequest } from '../../src/db/budget-request-reservations.js';
+import { getDb } from '../../src/db/connection.js';
 import { admitBudgetRequest,admitBudgetRequestDispatch } from '../../src/budget/request-reservation-admission.js';
 isolateBudgetTestDatabase();
 const binding={id:'async-request',workId:'async-work',chatJid:'web:async',providerId:'fixture',modelId:'fixture',accountRef:'fixture',amountMicros:60};
@@ -27,6 +28,36 @@ test('dispatch aborted after mutation rolls back to its original hold',async()=>
  await expect(admitBudgetRequestDispatch(binding,{signal:aborter.signal,authorise(){if(++checks===4)aborter.abort(Error('aborted-after-dispatch'));}})).rejects.toThrow('aborted-after-dispatch');
  expect(getBudgetRequest(binding.id)?.state).toBe('reserved');
 });
+// The first check is inside the helper callback; dispatch adds two inner
+// authority checks before its UPDATE. None may be mistaken for lock acquisition.
+for (const kind of ['reservation','dispatch'] as const) {
+ for (const failAt of kind === 'reservation' ? [1,2] : [1,2,3,4]) {
+  test(`${kind} authority SQLITE_BUSY at check ${failAt} is terminal and rolls back SQL`,async()=>{
+   fixture();const database=getDb();const signal=new AbortController().signal;
+   if(kind==='dispatch')await admitBudgetRequest(binding,{signal,authorise(){}});
+   const snapshot=()=>['budget_request_reservations','budget_work','budget_caps','budget_decisions','token_usage']
+    .map(table=>database.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+   const before=snapshot();const policy=database.query('PRAGMA busy_timeout').get();
+   const busy=Object.assign(Error('authority busy'),{code:'SQLITE_BUSY'});let checks=0;
+   const admit=kind==='reservation'?admitBudgetRequest:admitBudgetRequestDispatch;
+   await expect(admit(binding,{signal,authorise(){
+    checks++;
+    expect(database.inTransaction).toBe(true);
+    if(checks===failAt){
+     // Observe the actual write before rejecting the post-mutation check.
+     expect(getBudgetRequest(binding.id)?.state??null).toBe(kind==='reservation'
+      ? failAt===2?'reserved':null : failAt===4?'dispatched':'reserved');
+     throw busy;
+    }
+   }})).rejects.toBe(busy);
+   expect(checks).toBe(failAt);
+   expect(snapshot()).toEqual(before);
+   expect(getBudgetRequest(binding.id)?.state??null).toBe(kind==='dispatch'?'reserved':null);
+   expect(database.inTransaction).toBe(false);
+   expect(database.query('PRAGMA busy_timeout').get()).toEqual(policy);
+  });
+ }
+}
 test('actual reservation contention yields to timers, restores policy and denies revocation',async()=>{
  const entry=new URL('../fixtures/budget-request-admission-disk.ts',import.meta.url).pathname;
  const launcher=new URL('../../scripts/local-test-priority.ts',import.meta.url).pathname;

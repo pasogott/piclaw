@@ -14,6 +14,8 @@ The explicit backend contract is `AgentPool.isDurableRuntime()`. Native ordinary
 
 Lost acknowledgements and before-submit failures reconcile the same committed native intent. Publication failure does not revoke accepted input. No consumed queue row is restored for a replacement SDK submission.
 
+Host message/queue writers use [acquisition-only SQLite admission](sqlite-write-admission.md). An entered SQL/authorization callback is never automatically replayed, including BUSY after source acceptance.
+
 ## Queue actions
 
 Queue-item steering requires both `source_accepted` and `source_id`. Manual or historical unaccepted deferred/placeholder rows return409 unchanged. They remain visible, individually removable and eligible for normal FIFO materialisation/admission. Steering does not silently adopt or remove/resubmit their text.

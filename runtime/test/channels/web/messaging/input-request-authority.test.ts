@@ -17,11 +17,13 @@ test('failed admission rolls back introduced target lifetime and spill/message s
  await expect(admitWebUserMessage(channel,{...params,content:'spill '.repeat(20000)}, {}, phase=>{validate(phase);if(phase==='after')throw Error('revoked at commit');},new AbortController().signal)).rejects.toThrow('revoked at commit');
  expect(getChatBranchByChatJid(params.chatJid)).toBeNull();for(const table of ['messages','media','chats'])expect((getDb().query(`SELECT count(*) n FROM ${table}`).get() as any).n).toBe(0);
 });
-test('confirmed BUSY rollback may retry its own new lifetime, never adopt an external lifetime',async()=>{
+test('callback BUSY is terminal and rolls back its introduced lifetime, never adopts an external lifetime',async()=>{
  const db=fixture(),prepare=db.prepare.bind(db);const validate=captureInputTarget(params.chatJid);let attempts=0;
- db.prepare=((sql:string)=>{const statement=prepare(sql);if(!sql.includes('INSERT INTO messages'))return statement;return new Proxy(statement,{get(target,key){if(key==='run')return(...args:any[])=>{if(++attempts===1)throw Object.assign(Error('busy'),{code:'SQLITE_BUSY'});return target.run(...args);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}) as typeof db.prepare;
- try{expect((await admitWebUserMessage(channel,params,{},validate,new AbortController().signal))!.id).toBeGreaterThan(0);}finally{db.prepare=prepare;}
- expect(attempts).toBe(2);expect((db.query('SELECT count(*) n FROM chat_branches WHERE chat_jid=?').get(params.chatJid) as any).n).toBe(1);
+ const failure=Object.assign(Error('busy'),{code:'SQLITE_BUSY'});
+ db.prepare=((sql:string)=>{const statement=prepare(sql);if(!sql.includes('INSERT INTO messages'))return statement;return new Proxy(statement,{get(target,key){if(key==='run')return(...args:any[])=>{if(++attempts===1)throw failure;return target.run(...args);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}) as typeof db.prepare;
+ try{await expect(admitWebUserMessage(channel,params,{},validate,new AbortController().signal)).rejects.toBe(failure);}finally{db.prepare=prepare;}
+ expect(attempts).toBe(1);expect(getChatBranchByChatJid(params.chatJid)).toBeNull();
+ for(const table of ['messages','media','chats'])expect((db.query(`SELECT count(*) n FROM ${table}`).get() as any).n).toBe(0);
  const externalParams={...params,chatJid:'web:externally-created'};const external=captureInputTarget(externalParams.chatJid);ensureChatBranch({chat_jid:externalParams.chatJid,agent_name:'external'});
  await expect(admitWebUserMessage(channel,externalParams,{},external,new AbortController().signal)).rejects.toThrow('lifetime changed');expect((db.query('SELECT count(*) n FROM messages WHERE chat_jid=?').get(externalParams.chatJid) as any).n).toBe(0);
 });
@@ -34,9 +36,19 @@ test('cancellation after mutation rolls back the new branch, message and spill',
  await expect(admitWebUserMessage(channel,{...params,content:'spill '.repeat(20000)},{},phase=>{validate(phase);if(phase==='after')abort.abort(Error('stopped before commit'));},abort.signal)).rejects.toThrow('stopped before commit');
  expect(getChatBranchByChatJid(params.chatJid)).toBeNull();for(const table of ['messages','media','chats'])expect((getDb().query(`SELECT count(*) n FROM ${table}`).get() as any).n).toBe(0);
 });
-test('an external target created after a BUSY rollback cannot be adopted by the retry',async()=>{
- const db=fixture(),prepare=db.prepare.bind(db);const validate=captureInputTarget(params.chatJid);let attempts=0;
- db.prepare=((sql:string)=>{const statement=prepare(sql);if(!sql.includes('INSERT INTO messages'))return statement;return new Proxy(statement,{get(target,key){if(key==='run')return(...args:any[])=>{if(++attempts===1)throw Object.assign(Error('busy first attempt'),{code:'SQLITE_BUSY'});return target.run(...args);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}) as typeof db.prepare;
- const pending=admitWebUserMessage(channel,params,{},validate,new AbortController().signal);const observed=pending.then(()=>null,error=>error);await Bun.sleep(0);expect(getChatBranchByChatJid(params.chatJid)).toBeNull();ensureChatBranch({chat_jid:params.chatJid,agent_name:'external-between-attempts'});
- try{expect(String(await observed)).toContain('lifetime changed');expect(attempts).toBe(1);expect((db.query('SELECT count(*) n FROM messages').get() as any).n).toBe(0);}finally{db.prepare=prepare;}
+test('an external target created during acquisition backoff cannot be adopted by the admitted callback',async()=>{
+ const db=fixture(),transaction=db.transaction.bind(db),validate=captureInputTarget(params.chatJid);let failAcquisition=true,checks=0;
+ db.transaction=((operation:()=>unknown)=>{const run=transaction(operation);return Object.assign(()=>run(),{
+  immediate(){if(failAcquisition){failAcquisition=false;throw Object.assign(Error('writer acquisition busy'),{code:'SQLITE_BUSY'});}return run.immediate();},
+  deferred:()=>run.deferred(),exclusive:()=>run.exclusive(),
+ });}) as typeof db.transaction;
+ try {
+  const pending=admitWebUserMessage(channel,params,{},phase=>{checks++;validate(phase);},new AbortController().signal);
+  const observed=pending.then(()=>null,error=>error);await Bun.sleep(0);
+  expect(checks).toBe(0);expect(getChatBranchByChatJid(params.chatJid)).toBeNull();
+  const external=ensureChatBranch({chat_jid:params.chatJid,agent_name:'external-between-acquisitions'});
+  expect(String(await observed)).toContain('lifetime changed');expect(checks).toBe(1);
+  expect(getChatBranchByChatJid(params.chatJid)?.branch_id).toBe(external.branch_id);
+  expect((db.query('SELECT count(*) n FROM messages').get() as any).n).toBe(0);
+ } finally {db.transaction=transaction;}
 });

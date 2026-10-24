@@ -35,17 +35,19 @@ test('synchronous internal storage also rolls back spill media when its transact
   fixture();getDb().exec("CREATE TRIGGER deny_message BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT,'denied');END");
   expect(storeWebMessage(channel,params('spill fail '.repeat(14000)))).toBeNull();expect(count('messages')).toBe(0);expect(count('media')).toBe(0);
 });
-test('confirmed contention rollback retries one stable ID and never leaks generated spill rows',async()=>{
+test('callback contention is terminal and rolls back its one message ID and generated spill rows',async()=>{
   const db=fixture(),insert=db.prepare.bind(db);let attempts=0;const ids:string[]=[];
+  const failure=Object.assign(Error('synthetic contention'),{code:'SQLITE_BUSY'});
   db.prepare=((sql:string)=>{
     if(sql.includes('INSERT INTO messages')){
       const statement=insert(sql);
-      return new Proxy(statement,{get(target,key){if(key==='run')return(...args:any[])=>{ids.push(args[0]);if(++attempts===1)throw Object.assign(Error('synthetic contention'),{code:'SQLITE_BUSY'});return target.run(...args);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
+      return new Proxy(statement,{get(target,key){if(key==='run')return(...args:any[])=>{ids.push(args[0]);if(++attempts===1)throw failure;return target.run(...args);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
     }
     return insert(sql);
   }) as typeof db.prepare;
-  try{const result=await admitWebUserMessage(channel,params('retry-spill '.repeat(15000)),{},()=>{},new AbortController().signal);expect(result.id).toBeGreaterThan(0);}finally{db.prepare=insert;}
-  expect(attempts).toBe(2);expect(new Set(ids).size).toBe(1);expect(count('messages')).toBe(1);expect(count('media')).toBe(1);expect(count('message_media')).toBe(1);
+  try{await expect(admitWebUserMessage(channel,params('retry-spill '.repeat(15000)),{},()=>{},new AbortController().signal)).rejects.toBe(failure);}finally{db.prepare=insert;}
+  expect(attempts).toBe(1);expect(ids).toHaveLength(1);expect(count('messages')).toBe(0);expect(count('media')).toBe(0);expect(count('message_media')).toBe(0);expect(count('chats')).toBe(0);
+  expect(db.query("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'retry'").all()).toEqual([]);
 });
 test('atomic incoming spill and deferred consume share one rollback and commit',async()=>{
   fixture();setDeferredQueuedFollowups('web:idle',[{rowId:-7,queuedContent:'queued',queuedAt:new Date().toISOString()}]);

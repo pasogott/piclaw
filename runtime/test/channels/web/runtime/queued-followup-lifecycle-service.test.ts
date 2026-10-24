@@ -114,6 +114,64 @@ describe("queued follow-up lifecycle service", () => {
     expect(service.getQueuedFollowupItems('web:default')).toEqual(before);
     expect(await service.admitQueuedFollowupItem(['web:default', 0, 'next accepted'], () => {}, signal)).toBe(first - 1);
   });
+  for (const seed of ['existing', 'unset'] as const) {
+    test(`accepted source callback SQLITE_BUSY is terminal and restores queue SQL and ${seed} allocator seed`, async () => {
+      const fixture = await createServiceFixture();
+      const { db } = fixture;
+      const database = db.getDb();
+      installServiceWorkSchema(database);
+      const made = createCurrentPiclawServiceWorkStore(database, {
+        hitFault: () => false, recordTrace() {}, validateAcceptance: () => true,
+      });
+      if (!made.ok) throw Error('work fixture');
+      const work = made.value;
+      const first = fixture.service.enqueueQueuedFollowupItem('web:default', 0, 'same input', 7,
+        '2024-01-01T00:00:00.000Z', { mediaIds: [7], contentBlocks: [{ type: 'text', text: 'sibling' }] });
+      fixture.service.enqueueQueuedFollowupItem('web:sibling', 0, 'same input');
+      // A new service has persisted siblings but no in-memory allocation seed.
+      const { QueuedFollowupLifecycleService } = await import('../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js');
+      const service = seed === 'existing' ? fixture.service : new QueuedFollowupLifecycleService();
+      const beforeQueue = service.getQueuedFollowupItems('web:default');
+      const sibling = service.getQueuedFollowupItems('web:sibling');
+      const snapshot = () => ['router_state', 'messages', ...['sources', 'chats', 'operations', 'intents', 'decisions', 'wake_intents']
+        .map(table => `service_effect_s01_${table}`)]
+        .map(table => database.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      const before = snapshot();
+      const policy = database.query('PRAGMA busy_timeout').get();
+      const busy = Object.assign(Error('source acceptance busy'), { code: 'SQLITE_BUSY' });
+      let calls = 0;
+      let checks = 0;
+      const signal = new AbortController().signal;
+      await expect(service.admitQueuedFollowupItem(['web:default', 0, 'same input'], () => { checks++; }, signal,
+        ({ chatJid, item, database: captured }) => {
+          calls++;
+          expect(captured).toBe(database);
+          expect(database.inTransaction).toBe(true);
+          expect(item.rowId).toBe(first - 1);
+          expect(item.source_id).toMatch(/^source-[0-9a-f-]{36}$/);
+          expect(item.source_id).not.toBe(beforeQueue[0]!.source_id);
+          expect(db.getDeferredQueuedFollowups(chatJid)).toHaveLength(2);
+          expect(db.getDeferredQueuedFollowups(chatJid)[1]!.source_id).toBe(item.source_id);
+          work.acceptSourceInTransaction(seal({ effect: {
+            idempotencyKey: `accept:${item.source_id}`, requestHash: '', operationId: null, sourceSeq: null,
+            provenanceRef: 'host:queue', redactionClass: 'private' as const,
+          }, chatJid, sourceId: item.source_id, kind: 'message', payloadRef: `queued-source:${item.source_id}`,
+          targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), database);
+          expect(work.getAcceptedSource(chatJid, item.source_id)).not.toBeNull();
+          expect(snapshot()).not.toEqual(before);
+          // Throw only once: an accidental replay would commit and fail rejection.
+          if (calls === 1) throw busy;
+        })).rejects.toBe(busy);
+      expect(calls).toBe(1);
+      expect(checks).toBe(1);
+      expect(snapshot()).toEqual(before);
+      expect(service.getQueuedFollowupItems('web:default')).toEqual(beforeQueue);
+      expect(service.getQueuedFollowupItems('web:sibling')).toEqual(sibling);
+      expect(database.inTransaction).toBe(false);
+      expect(database.query('PRAGMA busy_timeout').get()).toEqual(policy);
+      expect(await service.admitQueuedFollowupItem(['web:default', 0, 'independent accepted input'], () => {}, signal)).toBe(first - 1);
+    });
+  }
   test('asynchronous admission rejects redirected workspace before committing captured database work', async () => {
     const {service}=await createServiceFixture();
     let restore:(()=>void)|undefined;

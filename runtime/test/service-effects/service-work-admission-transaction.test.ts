@@ -138,18 +138,20 @@ test("before-effect faults abort outer admission; no precommit lost-ack fault or
   expect(JSON.stringify(traces)).not.toContain('"certainty":"applied"');
 });
 
-test("confirmed outer contention rollback retries stable host/source identity without duplicate wake", async () => {
+test("callback contention after source and wake acceptance is terminal and rolls back the exact host/source identity", async () => {
   const { db, store } = fixture(); let attempts = 0; const ids: string[] = [];
-  const options = coordinator(store);
-  await admit({ acceptSource(stored) {
-    ids.push(stored.message.id); options.acceptSource!(stored);
-    if (++attempts === 1) throw Object.assign(Error("retry"), { code: "SQLITE_BUSY" });
-  } });
-  expect(attempts).toBe(2); expect(new Set(ids).size).toBe(1);
-  expect(db.query("SELECT * FROM messages").all()).toHaveLength(1);
-  expect(db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
-  expect(db.query("SELECT * FROM service_effect_s01_decisions").all()).toHaveLength(1);
-  expect(db.query("SELECT next_source_seq FROM service_effect_s01_chats").get()).toEqual({ next_source_seq: 2 });
+  const before=snapshot(db),failure=Object.assign(Error('source callback busy'),{code:'SQLITE_BUSY'});
+  await expect(admit({ acceptSource(stored) {
+    ids.push(stored.message.id);attempts++;
+    store.acceptSourceInTransaction(seal({...request(stored.message.id),acceptedAt:stored.message.timestamp,
+      payloadRef:`message-row:${stored.rowId}`,createWakeIntent:true}),stored.database);
+    expect(db.query('SELECT * FROM service_effect_s01_wake_intents').all()).toHaveLength(1);
+    if(attempts===1)throw failure;
+  } })).rejects.toBe(failure);
+  expect(attempts).toBe(1);expect(ids).toHaveLength(1);expect(snapshot(db)).toEqual(before);
+  expect(db.query('SELECT * FROM service_effect_s01_sources').all()).toHaveLength(0);
+  expect(db.query('SELECT * FROM service_effect_s01_decisions').all()).toHaveLength(0);
+  expect(db.query('SELECT * FROM service_effect_s01_wake_intents').all()).toHaveLength(0);
 });
 
 test("cancellation after source and wake writes rolls back all effects; preflight never calls coordinator", async () => {

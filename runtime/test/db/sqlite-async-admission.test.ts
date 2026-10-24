@@ -36,3 +36,57 @@ test('concurrent read-modify-write retries see fresh committed state without los
   const first=append('a'),second=append('b');await Bun.sleep(0);blocker.exec('ROLLBACK');await Promise.all([first,second]);
   expect(count(db)).toBe(2);expect(db.query('SELECT value FROM input ORDER BY rowid').all()).toEqual([{value:'0:a'},{value:'1:b'}]);expect(timeout(db)).toBe(5000);
 }));
+
+for (const code of ['SQLITE_BUSY', 'SQLITE_BUSY_SNAPSHOT', 'SQLITE_LOCKED', 261]) {
+  test(`callback-raised contention is terminal and never repeats an external effect; code=${code}`, async()=>fixture(async(db)=>{
+    const failure=Object.assign(Error('callback contention'),{code});
+    let effects=0,rollbacks=0;
+    const pending=admitSqliteWrite(db,()=>{
+      effects++; db.exec("INSERT INTO input VALUES('rolled back')");
+      if(effects===1) throw failure;
+      return 7;
+    },()=>{},new AbortController().signal,5000,()=>{},()=>{rollbacks++;});
+    await expect(pending).rejects.toBe(failure);
+    expect(effects).toBe(1); expect(rollbacks).toBe(1); expect(count(db)).toBe(0);
+    expect(db.inTransaction).toBe(false); expect(timeout(db)).toBe(5000);
+  }));
+}
+for (const phase of ['before','after'] as const) {
+  test(`authorization contention in ${phase} phase is never replayed`,async()=>fixture(async(db)=>{
+    const failure=Object.assign(Error('authorization busy'),{code:'SQLITE_BUSY'});
+    let operations=0,checks=0,rollbacks=0;
+    await expect(admitSqliteWrite(db,()=>{operations++;db.exec("INSERT INTO input VALUES('guarded')");},current=>{
+      checks++; if(current===phase)throw failure;
+    },new AbortController().signal,40,()=>{},()=>{rollbacks++;})).rejects.toBe(failure);
+    expect(checks).toBe(phase==='before'?1:2);expect(operations).toBe(phase==='before'?0:1);
+    expect(rollbacks).toBe(1);expect(count(db)).toBe(0);expect(timeout(db)).toBe(5000);
+  }));
+}
+test('commit contention never replays a callback while a rollback-journal reader is pinned',async()=>fixture(async(db,reader)=>{
+  db.exec('PRAGMA journal_mode=DELETE');
+  reader.exec('BEGIN');reader.query('SELECT * FROM input').all();
+  let operations=0,rollbacks=0;
+  try {
+    await expect(admitSqliteWrite(db,()=>{operations++;db.exec("INSERT INTO input VALUES('blocked commit')");},()=>{},
+      new AbortController().signal,40,()=>{},()=>{rollbacks++;})).rejects.toThrow();
+    expect(operations).toBe(1);expect(rollbacks).toBe(1);expect(db.inTransaction).toBe(false);
+    expect(count(db)).toBe(0);expect(timeout(db)).toBe(5000);
+  } finally {reader.exec('ROLLBACK');}
+}));
+test('nested callback contention rolls back only its savepoint and preserves the outer transaction',async()=>fixture(async(db)=>{
+  db.exec("BEGIN IMMEDIATE;INSERT INTO input VALUES('outer')");
+  const failure=Object.assign(Error('inner busy'),{code:'SQLITE_BUSY'});let operations=0;
+  try {
+    await expect(admitSqliteWrite(db,()=>{operations++;db.exec("INSERT INTO input VALUES('inner')");throw failure;},()=>{},
+      new AbortController().signal,40)).rejects.toBe(failure);
+    expect(operations).toBe(1);expect(db.inTransaction).toBe(true);
+    expect(db.query('SELECT value FROM input').all()).toEqual([{value:'outer'}]);expect(timeout(db)).toBe(5000);
+  } finally {db.exec('ROLLBACK');}
+  expect(count(db)).toBe(0);
+}));
+test('a changed binding while awaiting acquisition prevents callback entry without touching the stale handle',async()=>fixture(async(db,blocker)=>{
+  blocker.exec('BEGIN IMMEDIATE');let valid=true,operations=0;
+  const pending=admitSqliteWrite(db,()=>{operations++;},()=>{},new AbortController().signal,5000,()=>{if(!valid)throw Error('binding revoked');});
+  await Bun.sleep(0);valid=false;blocker.exec('ROLLBACK');
+  await expect(pending).rejects.toThrow('binding revoked');expect(operations).toBe(0);expect(count(db)).toBe(0);expect(timeout(db)).toBe(5000);
+}));
