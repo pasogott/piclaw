@@ -1,5 +1,11 @@
-// INACTIVE application-owned offline schema boundary. No bootstrap or migration registry.
+// Application-owned host schema; SDK tables retain their separate owner.
 import type { Database } from "bun:sqlite";
+import { applyOwnedMigrations } from "../../src/db/migrations.js";
+
+export const acceptedPayloadRecoveryIndex = "idx_piclaw_durable_bindings_payload_recovery_v1";
+const recoveryIndexSql = `CREATE INDEX IF NOT EXISTS ${acceptedPayloadRecoveryIndex}
+  ON piclaw_durable_bindings_v1(incarnation,chat_jid,source_id,payload_ref)`;
+const recoveryIndexMigration = { owner: "host.native-bindings", id: "accepted-payload-index-v1", order: 1, sql: recoveryIndexSql } as const;
 const definitions = [
   `CREATE TABLE IF NOT EXISTS piclaw_durable_bindings_v1 (
       domain TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -45,6 +51,30 @@ export function assertHostSchema(db: Database, indices: readonly number[] = [0, 
     if (!row || normalized(row.sql) !== normalized(definitions[i]!)) throw new UnsupportedHostSchemaError();
   }
 }
+function assertRecoveryIndex(db: Database, required: boolean): void {
+  const row = db.query("SELECT type,tbl_name,sql FROM sqlite_master WHERE name=?").get(acceptedPayloadRecoveryIndex) as
+    { type: string; tbl_name: string; sql: string | null } | null;
+  if (!row && !required) return;
+  if (!row || row.type !== "index" || row.tbl_name !== "piclaw_durable_bindings_v1" || !row.sql || normalized(row.sql) !== normalized(recoveryIndexSql))
+    throw new UnsupportedHostSchemaError();
+}
+function applyRecoveryIndex(db: Database, owner: () => void): void {
+  owner();
+  assertHostSchema(db, [0]);
+  assertRecoveryIndex(db, false);
+  applyOwnedMigrations(db, [recoveryIndexMigration]);
+  assertRecoveryIndex(db, true);
+  owner();
+}
+/** Explicit additive host step, using the existing owned ledger and no SDK DDL. */
+export function migrateHostAcceptedPayloadLookup(db: Database, ownerguard: () => void): void {
+  const owner = () => { if (ownerguard() !== undefined) throw new Error("Invalid synchronous owner guard"); };
+  owner();
+  if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
+    throw new Error("Host schema requires foreign_keys ON");
+  if (db.inTransaction) throw new Error("Host schema requires an offline outer transaction");
+  db.transaction(() => applyRecoveryIndex(db, owner)).immediate();
+}
 export function initializeHostSchemaTables(db: Database, ownerguard: () => void, indices: readonly number[]): void {
   const owner = () => { if (ownerguard() !== undefined) throw new Error("Invalid synchronous owner guard"); };
   owner();
@@ -59,6 +89,7 @@ export function initializeHostSchemaTables(db: Database, ownerguard: () => void,
     }
     for (const i of indices) db.exec(definitions[i]!);
     assertHostSchema(db, indices);
+    if (indices.includes(0)) applyRecoveryIndex(db, owner);
     owner();
   }).immediate();
 }

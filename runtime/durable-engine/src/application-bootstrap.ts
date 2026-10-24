@@ -24,7 +24,8 @@ import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { createHostController, type HostControllerOptions } from "./host-controller.js";
 import { createHostDurableBindings, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
-import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
+import { assertHostSchema, initializeHostSchema, migrateHostAcceptedPayloadLookup } from "./host-schema.js";
+import { readApplicationMessagePayload } from "./accepted-payload-recovery.js";
 import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
@@ -145,7 +146,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   database = new BunSqliteDatabase(path, { root, assertOwner: assert, fenceTransactions: true });
   const candidateDatabase = database;
     if (config.offlineInitialize === true) initializeHostSchema(root, assert);
-    else assertHostSchema(root);
+    else {
+      assertHostSchema(root);
+      migrateHostAcceptedPayloadLookup(root, assert);
+    }
     const hostFollowups = new QueuedFollowupLifecycleService();
     const work = value(createCurrentPiclawServiceWorkStore(root, { hitFault: () => false, recordTrace() {}, validateAcceptance() { assert(); return true; },
       pendingQueuedSourceOrder: chat => {
@@ -178,26 +182,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (!row) throw Error("Unverified scheduled payload");
         return row.prompt;
       }
-      const row = (/^message-row:[1-9][0-9]*$/.test(ref)
-        ? root.query("SELECT id, content FROM messages WHERE rowid=? AND chat_jid=?").get(Number(ref.slice(12)), input.chatJid)
-        : ref === `queued-source:${input.sourceId}`
-          ? root.query("SELECT id, content FROM messages WHERE id=? AND chat_jid=?").get(input.sourceId, input.chatJid) : null) as { id: string; content: string } | null;
-      if (row?.id === input.sourceId) return row.content;
-      // Timeline rows are mutable projections. Already-admitted work recovers its
-      // bytes from the SDK accepted submission; bindContent still checks the hash.
-      const saved = root.query(`SELECT e.record,b.conversation_id,b.operation_id,b.source_seq,b.branch_id,b.request_id,b.request_hash
-        FROM piclaw_durable_bindings_v1 b JOIN submissions s ON s.id=b.submission_id
-        JOIN entries e ON e.id=json_extract(s.record,'$.entry')
-        WHERE b.chat_jid=? AND b.source_id=? AND b.payload_ref=? AND b.incarnation=?`)
-        .get(input.chatJid,input.sourceId,ref,r.incarnation) as { record: string; conversation_id: number; operation_id: string; source_seq: number; branch_id: string; request_id: string; request_hash: string } | null;
-      if (!saved) throw Error("Unverified application payload");
-      const entry = JSON.parse(saved.record), host = entry.data, user = entry.model;
-      if (entry.kind !== "host.accepted" || entry.conversationId !== saved.conversation_id ||
-          host?.incarnation !== r.incarnation || host.chatJid !== input.chatJid || host.branchId !== saved.branch_id ||
-          host.operationId !== saved.operation_id || host.sourceSeq !== saved.source_seq || host.sourceId !== input.sourceId || host.payloadRef !== ref ||
-          host.requestId !== saved.request_id || host.requestHash !== saved.request_hash ||
-          !Array.isArray(user) || user.length !== 1 || user[0]?.role !== "user" || typeof user[0].content !== "string") throw Error("Unverified SDK accepted payload");
-      return user[0].content;
+      return readApplicationMessagePayload(root, r.incarnation, input, ref);
     }
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,

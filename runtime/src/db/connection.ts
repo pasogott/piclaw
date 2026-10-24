@@ -188,9 +188,9 @@ function createSchema(database: Database): void {
       PRIMARY KEY (id, chat_jid),
       FOREIGN KEY (chat_jid) REFERENCES chats(jid)
     );
-    -- Indexes for common timeline queries and thread operations.
-    -- idx_messages_chat_jid_timestamp covers both chat and time ordering.
-    -- idx_messages_chat_jid_bot_timestamp is used for agent/user filters.
+    -- The chat-only index implicitly orders each chat by rowid for timeline pagination.
+    -- Timestamp and bot/timestamp indexes serve time-ordered and agent/user queries.
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_jid ON messages(chat_jid);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_jid_timestamp ON messages(chat_jid, timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_jid_bot_timestamp ON messages(chat_jid, is_bot_message, timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(chat_jid, thread_id);
