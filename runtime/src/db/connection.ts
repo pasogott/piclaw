@@ -35,8 +35,8 @@ import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import { migrateMediaCompression } from "./media-recompress.js";
 import { ensureLegacyColumns } from "./legacy-columns.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
-import { enableSqliteWal } from "./sqlite-journal.js";
-import { isZfsFilesystem, registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
+import { registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
+import { configureSqliteRole, openSqliteRole } from "./sqlite-role-policy.js";
 import { ensureOwnedMigrationLedger } from "./migrations.js";
 import { retireAttachmentRowidIndex } from "./attachment-index-retirement.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
@@ -887,12 +887,9 @@ export function initDatabase(): void {
       }
     }
 
-    if (useMemory) {
-      db = new Database(":memory:");
-    } else {
-      fs.mkdirSync(path.dirname(nextPath), { recursive: true });
-      db = new Database(nextPath);
-    }
+    db = null; dbMode = null; dbPathCache = null; dbFileIdentity = null;
+    if (!useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
+    db = openSqliteRole(nextPath, { role: "root" });
     dbMode = nextMode;
     dbPathCache = nextCacheKey;
     dbFileIdentity = useMemory ? null : currentFileIdentity(nextPath);
@@ -910,26 +907,10 @@ export function initDatabase(): void {
     throw new Error("Database initialization failed");
   }
 
-  // Configure lock waiting before schema inspection and file-header pragmas.
-  db.exec("PRAGMA busy_timeout = 5000;");
+  // Reuse preserves the declared path and root's existing FK policy.
+  if (reuse) configureSqliteRole(db, nextPath, { role: "root", expectedIdentity: dbFileIdentity ?? undefined });
   const foreignKeysBeforeInitialization = (db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys === 1;
-  if (useMemory) db.exec("PRAGMA journal_mode = MEMORY;");
-  else enableSqliteWal(db);
   db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA secure_delete = ON;");
-  if (!useMemory) {
-    if (isZfsFilesystem(nextPath)) {
-      // ZFS has its own ARC — mmap causes double-caching and D-state stalls
-      // under I/O pressure. Use SQLite's conventional page cache instead.
-      db.exec("PRAGMA mmap_size = 0;");
-      db.exec("PRAGMA cache_size = -8000;"); // 8 MB page cache
-    } else {
-      // A1: Use mmap for DB reads — moves page I/O from anonymous heap to file-backed memory.
-      db.exec("PRAGMA mmap_size = 268435456;"); // 256 MB
-      // A2: Reduce malloc'd page cache since mmap handles hot pages.
-      db.exec("PRAGMA cache_size = -1000;"); // 1 MB (was default 2 MB)
-    }
-  }
   const database = db;
   // Serialize schema inspection and migration in one writer transaction. This
   // prevents competing initializers starving behind separately committed DDL
