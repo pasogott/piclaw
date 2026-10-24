@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type Database from "bun:sqlite";
+import { hasScheduledTaskDefinitions, projectScheduledTask } from "../../db/scheduled-task-definitions.js";
 import type { CompleteScheduledRunRequest, ScheduledRunResultPayload } from "../contracts/scheduled-run-store.js";
 import { normaliseComplete } from "./scheduled-run-values.js";
 
@@ -72,11 +73,16 @@ export function projectScheduledHistory(
       || canonical.result_ref !== evidence.resultRef || canonical.error_code !== evidence.errorCode)) {
       throw new ScheduledHistoryError("corrupt_state");
     }
-    const task = database.query("SELECT id FROM main.scheduled_tasks WHERE id=?").get(canonical.task_id);
+    let task = database.query("SELECT id FROM main.scheduled_tasks WHERE id=?").get(canonical.task_id);
     const head = database.query("SELECT status FROM main.service_effect_s07_tasks WHERE task_id=?").get(canonical.task_id) as { status: string } | null;
     // Explicit owner deletion suppresses repair, including old sealed requests.
     if (!head) throw new ScheduledHistoryError("corrupt_state");
-    if (!task || head.status === "deleted") return { state: "retired" };
+    if (head.status === "deleted") return { state: "retired" };
+    if (!task && hasScheduledTaskDefinitions(database)) {
+      projectScheduledTask(database, canonical.task_id);
+      task = database.query("SELECT id FROM main.scheduled_tasks WHERE id=?").get(canonical.task_id);
+    }
+    if (!task) return { state: "retired" };
     const stored = database.query("SELECT id,result,error,payload_version,payload_hash FROM main.task_run_logs WHERE occurrence_id=?")
       .get(runId) as PayloadRow | null;
     if (canonical.status === "success" && canonical.result_ref !== scheduledResultRef(runId)) {

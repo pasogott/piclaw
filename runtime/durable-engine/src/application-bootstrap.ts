@@ -1,5 +1,6 @@
 // Single-root application composition; execution and recovery remain SDK-owned.
 import type { Database } from "bun:sqlite";
+import { readScheduledDefinition } from "../../src/db/scheduled-task-definitions.js";
 import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
@@ -176,11 +177,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       }
       if ("conversationId" in input && bindings.resolveConversation(input) === input.conversationId) {
-        const row = root.query(`SELECT t.prompt FROM scheduled_tasks t
-          JOIN service_effect_s07_occurrences r ON r.task_id=t.id AND r.task_revision=t.revision AND r.scheduled_for=t.next_run
-          WHERE r.run_id=? AND r.operation_id=? AND r.accepted_source_seq=? AND t.chat_jid=? AND t.status='active'`).get(input.sourceId, input.operationId, input.sourceSeq, input.chatJid) as { prompt: string } | null;
+        const row = root.query(`SELECT r.task_id,r.task_revision FROM main.service_effect_s07_occurrences r
+          JOIN main.service_effect_s07_tasks h ON h.task_id=r.task_id AND h.current_revision=r.task_revision
+            AND h.next_run_at=r.scheduled_for AND h.status='active'
+          WHERE r.run_id=? AND r.operation_id=? AND r.accepted_source_seq=?`).get(input.sourceId, input.operationId, input.sourceSeq) as
+          { task_id: string; task_revision: number } | null;
         if (!row) throw Error("Unverified scheduled payload");
-        return row.prompt;
+        const definition = readScheduledDefinition(root, row.task_id, row.task_revision);
+        if (!definition.body || definition.body.chat_jid !== input.chatJid || definition.snapshot.payloadRef !== ref) throw Error("Unverified scheduled payload");
+        return definition.body.prompt;
       }
       return readApplicationMessagePayload(root, r.incarnation, input, ref);
     }
@@ -473,12 +478,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!scope || lease.task.kind !== "agent") throw Error("Unbound scheduled root");
       const read = () => {
         assertLive();
-        const row = root.query(`SELECT s.source_seq,s.source_id,s.payload_ref,o.operation_id,t.prompt,v.snapshot_json
+        const row = root.query(`SELECT s.source_seq,s.source_id,s.payload_ref,o.operation_id,v.snapshot_json
           FROM service_effect_s07_occurrences r
           JOIN service_effect_s07_tasks h ON h.task_id=r.task_id AND h.current_revision=r.task_revision AND h.status='active' AND h.next_run_at=r.scheduled_for
           JOIN service_effect_s07_task_revisions v ON v.task_id=r.task_id AND v.revision=r.task_revision
-          JOIN scheduled_tasks t ON t.id=r.task_id AND t.revision=r.task_revision AND t.status='active' AND t.next_run=r.scheduled_for
-          JOIN service_effect_s01_sources s ON s.chat_jid=t.chat_jid AND s.source_seq=r.accepted_source_seq AND s.source_id=r.run_id
+          JOIN service_effect_s01_sources s ON s.source_seq=r.accepted_source_seq AND s.source_id=r.run_id
           JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq AND os.operation_id=r.operation_id
           JOIN service_effect_s01_operations o ON o.operation_id=r.operation_id AND o.primary_source_seq=s.source_seq AND o.phase IN ('claimed','executing')
           JOIN service_effect_s01_chats c ON c.chat_jid=s.chat_jid AND c.active_operation_id=o.operation_id
@@ -487,9 +491,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
             AND s.chat_jid=? AND s.payload_ref=?`)
           .get(record.runId, record.workerId, record.attempt, record.taskRevision, hashScheduledLeaseToken(lease.leaseToken), r.now(),
             scope.chatJid, lease.task.payloadRef) as
-            { source_seq: number; source_id: string; payload_ref: string; operation_id: string; prompt: string; snapshot_json: string } | null;
+            { source_seq: number; source_id: string; payload_ref: string; operation_id: string; snapshot_json: string } | null;
         if (!row || hashCanonicalRequest(JSON.parse(row.snapshot_json)) !== hashCanonicalRequest(lease.task as unknown as CanonicalJsonValue)) throw Error("Scheduled source authority unavailable");
-        return row;
+        const definition = readScheduledDefinition(root, record.taskId, record.taskRevision);
+        if (!definition.body || definition.body.chat_jid !== scope.chatJid || definition.snapshot.payloadRef !== lease.task.payloadRef) throw Error("Scheduled payload unavailable");
+        return { ...row, prompt: definition.body.prompt };
       };
       const source = read(), requestId = `scheduled:${record.runId}`;
       const label = lease.task.modelLabel;

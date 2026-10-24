@@ -131,7 +131,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -175,7 +175,8 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
   const delegateAccountingUnknown = scenario === "native-delegate-accounting-unknown";
   const scheduledAccounting = scenario.startsWith("native-scheduler-accounting");
   const scheduledAccountingUnknown = scenario === "native-scheduler-accounting-unknown";
-  const nativeScheduler = scenario === "native-scheduler" || scheduledAccounting;
+  const definitionScheduler = scenario === "native-scheduler-definition";
+  const nativeScheduler = scenario === "native-scheduler" || scheduledAccounting || definitionScheduler;
   const compactionAccounting = scenario.startsWith("native-compaction-accounting");
   const compactionAccountingUnknown = scenario === "native-compaction-accounting-unknown";
   const compactionCloseFailure = scenario === "native-compaction-accounting-close-fail";
@@ -399,6 +400,10 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
   const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }, options?: { signal?: AbortSignal }) => {
     for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
       observedResults.set(result.toolCallId, { toolName: result.toolName, isError: result.isError, content: result.content });
+    if (definitionScheduler) {
+      expect(JSON.stringify(input.messages)).toContain("scheduled real consumer");
+      expect(JSON.stringify(input.messages)).not.toContain("MUTABLE CACHE MUST NEVER EXECUTE");
+    }
     requested.push(physical.id);
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
@@ -986,9 +991,11 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
         closeDatabase(); owner.release(); return;
       }
     try {
-      storeChatMetadata("web:scheduled-dynamic", new Date().toISOString());
-      await bound.prepareInputSourceAdmission!("web:scheduled-dynamic");
-      for (const [index, chat] of ["web:default", "web:scheduled-dynamic", "web:default"].entries()) {
+      if (!definitionScheduler) {
+        storeChatMetadata("web:scheduled-dynamic", new Date().toISOString());
+        await bound.prepareInputSourceAdmission!("web:scheduled-dynamic");
+      }
+      for (const [index, chat] of (definitionScheduler ? ["web:default"] : ["web:default", "web:scheduled-dynamic", "web:default"]).entries()) {
         if (index === 2) {
           const message = { id: "scheduler-main-seed", chat_jid: chat, sender: "user", sender_name: "User", content: "main history", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
           const row = root.transaction(() => { const id = storeMessage(message); const admit = bound.getInputSourceAdmission!(chat); assert(admit); admit({ message, rowId: id, database: root }); return id; })();
@@ -1000,6 +1007,8 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
         const before = JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all());
         const due = new Date(Date.now() - 1000).toISOString(), id = `native-schedule-${index}`;
         createTask({ id, chat_jid: chat, model: `${modelB.provider}/${modelB.id}`, prompt: "scheduled real consumer", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+        if (definitionScheduler) root.query(`UPDATE scheduled_tasks SET prompt='MUTABLE CACHE MUST NEVER EXECUTE',
+          model='wrong/model',chat_jid='web:wrong',revision=999,status='completed',next_run=NULL WHERE id=?`).run(id);
         await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
         const deadline = Date.now() + 5000;
         while (!root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE task_id=? AND state='completed'").get(id) && Date.now() < deadline) await Bun.sleep(10);
@@ -1010,6 +1019,25 @@ for (const scenario of ["native-plan-clear", "native-plan-initial-empty", "nativ
         expect(JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all())).toBe(before);
         if (!delivered.at(-1)) throw Error(JSON.stringify(root.query("SELECT * FROM task_run_logs WHERE task_id=?").all(id)));
         expect(delivered.at(-1)).toBe("factory synthetic reply");
+      }
+      if (definitionScheduler) {
+        expect(delivered).toEqual(["factory synthetic reply"]);
+        expect(calls).toBe(1);
+        expect(root.query("SELECT prompt,revision,status,next_run FROM scheduled_tasks WHERE id='native-schedule-0'").get())
+          .toEqual({ prompt: "scheduled real consumer", revision: 1, status: "completed", next_run: null });
+        const definitions = root.query("SELECT * FROM host_scheduled_task_definitions ORDER BY task_id,revision").all();
+        const revisions = root.query("SELECT * FROM service_effect_s07_task_revisions ORDER BY task_id,revision").all();
+        prohibited.forEach(spy => expect(spy).not.toHaveBeenCalled());
+        sdkSpies.forEach(spy => expect(spy).not.toHaveBeenCalled());
+        await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+        closeDatabase(); initDatabase(); root = getDb();
+        backend = await createDefaultApplicationRuntime(owner, async () => services);
+        expect(root.query("SELECT * FROM host_scheduled_task_definitions ORDER BY task_id,revision").all()).toEqual(definitions);
+        expect(root.query("SELECT * FROM service_effect_s07_task_revisions ORDER BY task_id,revision").all()).toEqual(revisions);
+        expect(root.query("SELECT prompt,status,next_run FROM scheduled_tasks WHERE id='native-schedule-0'").get())
+          .toEqual({ prompt: "scheduled real consumer", status: "completed", next_run: null });
+        expect(calls).toBe(1); // Cold reopen never resubmits the completed occurrence.
+        return;
       }
       expect(delivered).toHaveLength(3);
     if (scheduledAccounting) {

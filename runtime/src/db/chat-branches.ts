@@ -6,6 +6,8 @@
  */
 
 import { getDb } from "./connection.js";
+import { deleteTask, moveScheduledTasksToChat } from "./tasks.js";
+import { canonicalScheduledTasksSql, readCanonicalScheduledTask } from "./scheduled-task-definitions.js";
 import { ChatAccessDenied } from "./session-ownership.js";
 import { attachMediaToMessage, deleteUnreferencedMedia } from "./media.js";
 import { deleteThinkingContentByChatJid } from "./thinking-cleanup.js";
@@ -333,6 +335,7 @@ export interface ArchivedBranchDownloadData {
   chat_cursor: Record<string, unknown> | null;
   token_usage: Record<string, unknown>[];
   scheduled_tasks: Record<string, unknown>[];
+  scheduled_definition_revisions: Record<string, unknown>[];
   task_run_logs: Record<string, unknown>[];
   configs: {
     ssh: Record<string, unknown> | null;
@@ -380,10 +383,7 @@ function requireArchivedPurgeTarget(chatJid: string): ChatBranchRecord {
 function getArchivedBranchTaskIds(chatJid: string): string[] {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT id
-       FROM scheduled_tasks
-      WHERE chat_jid = ?
-      ORDER BY id ASC`
+    `WITH tasks AS (${canonicalScheduledTasksSql}) SELECT id FROM tasks WHERE chat_jid = ? ORDER BY id ASC`
   ).all(chatJid) as Array<{ id: string }>;
   return rows.map((row) => row.id);
 }
@@ -429,8 +429,11 @@ export function exportArchivedBranchDownloadData(chatJid: string): ArchivedBranc
     message_media: messageMedia,
     chat_cursor: db.prepare(`SELECT * FROM chat_cursors WHERE chat_jid = ?`).get(branch.chat_jid) as Record<string, unknown> | null,
     token_usage: db.prepare(`SELECT * FROM token_usage WHERE chat_jid = ? ORDER BY run_at ASC, id ASC`).all(branch.chat_jid) as Record<string, unknown>[],
-    scheduled_tasks: taskIds.length > 0
-      ? db.prepare(`SELECT * FROM scheduled_tasks WHERE chat_jid = ? ORDER BY id ASC`).all(branch.chat_jid) as Record<string, unknown>[]
+    scheduled_tasks: taskIds.map(id => readCanonicalScheduledTask(db, id) as unknown as Record<string, unknown>),
+    scheduled_definition_revisions: taskIds.length > 0
+      ? db.prepare(`SELECT d.*,r.config_hash,r.snapshot_json,r.authored_at FROM main.host_scheduled_task_definitions d
+          JOIN main.service_effect_s07_task_revisions r ON r.task_id=d.task_id AND r.revision=d.revision
+          WHERE d.task_id IN (${taskPlaceholders}) ORDER BY d.task_id,d.revision`).all(...taskIds) as Record<string, unknown>[]
       : [],
     task_run_logs: taskIds.length > 0
       ? db.prepare(`SELECT * FROM task_run_logs WHERE task_id IN (${taskPlaceholders}) ORDER BY run_at ASC, id ASC`).all(...taskIds) as Record<string, unknown>[]
@@ -662,7 +665,7 @@ export function mergeChatBranchIntoParent(chatJid: string): MergeChatBranchIntoP
     counts = {
       messages: countRows(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ?`, source.chat_jid),
       token_usage: countRows(`SELECT COUNT(*) AS count FROM token_usage WHERE chat_jid = ?`, source.chat_jid),
-      scheduled_tasks: countRows(`SELECT COUNT(*) AS count FROM scheduled_tasks WHERE chat_jid = ?`, source.chat_jid),
+      scheduled_tasks: countRows(`WITH tasks AS (${canonicalScheduledTasksSql}) SELECT COUNT(*) AS count FROM tasks WHERE chat_jid = ?`, source.chat_jid),
       chat_cursors: countRows(`SELECT COUNT(*) AS count FROM chat_cursors WHERE chat_jid = ?`, source.chat_jid),
       ssh_configs: countRows(`SELECT COUNT(*) AS count FROM ssh_configs WHERE chat_jid = ?`, source.chat_jid),
       proxmox_configs: countRows(`SELECT COUNT(*) AS count FROM proxmox_configs WHERE chat_jid = ?`, source.chat_jid),
@@ -674,7 +677,7 @@ export function mergeChatBranchIntoParent(chatJid: string): MergeChatBranchIntoP
 
     db.prepare(`UPDATE messages SET chat_jid = ? WHERE chat_jid = ?`).run(parent.chat_jid, source.chat_jid);
     db.prepare(`UPDATE token_usage SET chat_jid = ? WHERE chat_jid = ?`).run(parent.chat_jid, source.chat_jid);
-    db.prepare(`UPDATE scheduled_tasks SET chat_jid = ? WHERE chat_jid = ?`).run(parent.chat_jid, source.chat_jid);
+    moveScheduledTasksToChat(source.chat_jid, parent.chat_jid);
 
     moveChatCursorToLastPosition(parent.chat_jid);
     db.prepare(`DELETE FROM chat_cursors WHERE chat_jid = ?`).run(source.chat_jid);
@@ -755,11 +758,7 @@ export function permanentDeleteArchivedBranch(chatJid: string): PermanentDeleteA
 
   db.exec("BEGIN IMMEDIATE");
   try {
-    if (taskIds.length > 0) {
-      const taskPlaceholders = taskIds.map(() => "?").join(",");
-      db.prepare(`DELETE FROM task_run_logs WHERE task_id IN (${taskPlaceholders})`).run(...taskIds);
-      db.prepare(`DELETE FROM scheduled_tasks WHERE id IN (${taskPlaceholders})`).run(...taskIds);
-    }
+    for (const taskId of taskIds) deleteTask(taskId);
 
     db.prepare(
       `DELETE FROM message_media
@@ -841,6 +840,9 @@ export function renameChatJid(oldJid: string, newJid: string): RenameChatJidResu
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    // Parent and child chat identities move together; enforce all foreign keys
+    // at this transaction's commit instead of between the linked updates.
+    db.exec("PRAGMA defer_foreign_keys=ON");
     // --- chats (PK = jid) -----------------------------------------------
     const chatsRows = db.prepare(
       `UPDATE chats SET jid = ? WHERE jid = ?`
@@ -901,14 +903,11 @@ export function renameChatJid(oldJid: string, newJid: string): RenameChatJidResu
     updated.push("token_usage");
 
     // --- scheduled_tasks ------------------------------------------------
-    db.prepare(
-      `UPDATE scheduled_tasks SET chat_jid = ? WHERE chat_jid = ?`
-    ).run(next, old);
-    db.prepare(
-      `UPDATE scheduled_tasks
-          SET chat_jid = ? || substr(chat_jid, ?)
-        WHERE substr(chat_jid, 1, ?) = ?`
-    ).run(childNextPrefix, childPrefixLength + 1, childPrefixLength, childPrefix);
+    const taskChats = db.prepare(`WITH tasks AS (${canonicalScheduledTasksSql})
+      SELECT DISTINCT chat_jid FROM tasks WHERE chat_jid=? OR substr(chat_jid,1,?)=?`)
+      .all(old, childPrefixLength, childPrefix) as { chat_jid: string }[];
+    for (const task of taskChats) moveScheduledTasksToChat(task.chat_jid,
+      task.chat_jid === old ? next : childNextPrefix + task.chat_jid.slice(childPrefixLength));
 
     // --- config tables (ssh, proxmox, portainer) -----------------------
     for (const tbl of ["ssh_configs", "proxmox_configs", "portainer_configs"]) {

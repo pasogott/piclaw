@@ -6,6 +6,7 @@
  */
 
 import { getDb } from "./db.js";
+import { canonicalScheduledTasksSql, readCanonicalScheduledTask } from "./db/scheduled-task-definitions.js";
 import { getBudgetCap } from "./db/budget-limits.js";
 import { scheduledBudgetReadiness, type ScheduledBudgetReadiness } from "./budget/scheduled-readiness.js";
 import type { ScheduledTask, TaskRunLog } from "./types.js";
@@ -111,7 +112,7 @@ function normalizeStatus(status: string | null | undefined): ScheduledTaskStatus
 
 function getTaskCounts(): ScheduledTaskCounts {
   const rows = getDb()
-    .prepare("SELECT status, COUNT(*) as count FROM scheduled_tasks GROUP BY status")
+    .prepare(`WITH tasks AS (${canonicalScheduledTasksSql}) SELECT status, COUNT(*) as count FROM tasks GROUP BY status`)
     .all() as Array<{ status: string; count: number }>;
   const map = new Map(rows.map((row) => [row.status, row.count]));
   return {
@@ -206,14 +207,16 @@ export function listScheduledTasks(query: ScheduledTaskQuery = {}): ScheduledTas
 
   const whereClause = filters.length > 0 ? ` WHERE ${filters.join(" AND ")}` : "";
   const orderBy = normalizedStatus ? " ORDER BY next_run IS NULL, next_run ASC, created_at DESC" : " ORDER BY created_at DESC";
-  const rows = db
-    .prepare(`SELECT * FROM scheduled_tasks${whereClause}${orderBy} LIMIT ?`)
-    .all(...params, limit) as ScheduledTask[];
+  return db.transaction(() => {
+    const rows = db
+      .prepare(`WITH tasks AS (${canonicalScheduledTasksSql}) SELECT id FROM tasks${whereClause}${orderBy} LIMIT ?`)
+      .all(...params, limit) as { id: string }[];
 
-  return {
-    counts: getTaskCounts(),
-    tasks: rows.map((row) => mapTaskRow(row, includeLatestRunLog, includeRunLogs, runLogLimit)),
-  };
+    return {
+      counts: getTaskCounts(),
+      tasks: rows.map(row => mapTaskRow(readCanonicalScheduledTask(db, row.id)!, includeLatestRunLog, includeRunLogs, runLogLimit)),
+    };
+  })();
 }
 
 export function getScheduledTaskInspection(taskId: string, options: Omit<ScheduledTaskQuery, "id" | "limit"> = {}): ScheduledTaskInspectionRecord | null {
