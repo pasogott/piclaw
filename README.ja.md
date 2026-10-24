@@ -89,7 +89,7 @@ docker run -d \
 - [質問する](https://github.com/rcarmo/piclaw/issues/new?template=question.md)
 - [プロジェクトボードを見る](https://github.com/users/rcarmo/projects/13)
 
-問題の報告には issue テンプレートを使ってください。コードを変更する場合は[開発ガイド](docs/development.md)と[リポジトリの作業手順](AGENTS.md)を読み、プルリクエストで提出してください。
+問題の報告には issue テンプレートを使ってください。コードを変更する場合は[開発ガイド](docs/development.md)、[ネイティブ検証](docs/native-validation.md)、[リポジトリの作業手順](AGENTS.md)を読み、プルリクエストで提出してください。`make ci-full` はホスト側のチェックとオフラインのネイティブ検証の両方を必須とし、`make ci-fast` はホスト側のみを対象とします。
 
 ## クレジット
 

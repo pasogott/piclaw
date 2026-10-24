@@ -78,7 +78,7 @@
       "semanticReaderOccurrences": 0
     },
     "tooling": {
-      "referencedNames": 89,
+      "referencedNames": 96,
       "directReaderNames": 43,
       "directReaderOccurrences": 71,
       "helperReaderNames": 0,
@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 151,
+      "referencedNames": 150,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -371,6 +371,21 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/workspace-index-core.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_APPLICATION_CASE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": []
         }
@@ -1247,7 +1262,6 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            ".github/workflows/ci.yml",
             ".github/workflows/integration-gate.yml",
             "Makefile",
             "docs/compaction-models-and-deadlines.md",
@@ -1289,7 +1303,8 @@
             "scripts/audit-piclaw-env-surface.ts",
             "scripts/audit-queue-session-threading-replay.ts",
             "scripts/audit-session-turn-management-regression.sh",
-            "scripts/integration-test-suite.ts"
+            "scripts/integration-test-suite.ts",
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": [
             "runtime/scripts/benchmark-cold-session.ts",
@@ -1371,6 +1386,16 @@
           "semanticReaders": 0,
           "files": [
             "docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261017.md"
+          ],
+          "readerFiles": []
+        },
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": []
         }
@@ -2449,6 +2474,21 @@
       }
     },
     {
+      "name": "PICLAW_ISOLATED_APPLICATION_CASE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
       "name": "PICLAW_KEYCHAIN_KEY",
       "scopes": {
         "docsDeploy": {
@@ -2956,6 +2996,21 @@
       }
     },
     {
+      "name": "PICLAW_NATIVE_CORE_CHILD",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
       "name": "PICLAW_OOBE_TEST_CONTAINER",
       "scopes": {
         "tooling": {
@@ -3191,6 +3246,21 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/agent-dir.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_PLAN_QUALIFICATION_CASE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": []
         }
@@ -4019,13 +4089,13 @@
     {
       "name": "PICLAW_REQUIRE_DURABLE_ENGINE",
       "scopes": {
-        "docsDeploy": {
+        "tooling": {
           "referenced": true,
           "directReaders": 0,
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            ".github/workflows/ci.yml"
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": []
         }
@@ -7922,6 +7992,21 @@
           "semanticReaders": 0,
           "files": [
             "docs/performance/browser-widget-state-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_WORKFLOW_CASE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "scripts/native-test-suite.ts"
           ],
           "readerFiles": []
         }

@@ -489,6 +489,13 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     let shutdown!: (signal: string) => Promise<void>;
     let settled = false;
     const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
+    const deadlineTimers: ReturnType<typeof setTimeout>[] = [];
+    const schedule = globalThis.setTimeout;
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: (...args: any[]) => void, ms?: number, ...args: any[]) => {
+      const timer = schedule(run, ms, ...args);
+      if (ms === 15000) deadlineTimers.push(timer);
+      return timer;
+    }) as typeof setTimeout);
     const deps = bootstrapDepsForFailure({
       createShutdownHandler,
       registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; },
@@ -546,6 +553,10 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     } finally {
       scheduler.resolve(); queue.resolve(); pool.resolve(); web.resolve();
       owner.release(); // Offline fixture cleanup only, including fail-closed case.
+      // Production failures retain the backstop; this completed fixture must not
+      // restore real process.exit while its retained timers can kill later tests.
+      deadlineTimers.forEach(clearTimeout);
+      timers.mockRestore();
       exit.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }

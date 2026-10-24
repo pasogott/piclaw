@@ -17,7 +17,11 @@ if (mode === "normal-exit") process.exit(0);
 // under test, not the shutdown logic or ownership implementation.
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = ((fn: TimerHandler, ms?: number, ...args: unknown[]) =>
-  realSetTimeout(fn, mode === "backstop" && ms === 15000 ? 1 : mode === "queue-timeout" && ms === 5000 ? 1 : ms, ...args)) as typeof setTimeout;
+  realSetTimeout(fn, mode === "backstop" && ms === 15000 ? 1
+    : mode === "queue-timeout" && ms === 15000 ? 250
+    : mode === "queue-timeout" && ms === 5000 ? 1 : ms, ...args)) as typeof setTimeout;
+// An uncertain queue join retains the production backstop. Shorten that later
+// deadline too, after the queue timeout has recorded its failure.
 let shutdown!: (signal: string) => Promise<void>;
 const request = () => {
   void shutdown("fixture").catch(error => console.log(JSON.stringify({ error: error.name })));

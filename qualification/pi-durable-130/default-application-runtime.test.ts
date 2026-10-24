@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symli
 import { createHash } from "node:crypto";
 import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
 import { createDefaultApplicationRuntime, assertFreshApplicationHistory } from "../../runtime/durable-engine/src/default-application-runtime.js";
@@ -62,7 +62,9 @@ function factoryTest(scenario: string, name: string, body: () => Promise<void>) 
     delete env.PICLAW_TEST_FS_ISOLATION_ROOT;
     const isolation = ensureTestFilesystemIsolation(env);
     try {
-      const child = Bun.spawn([process.execPath, "test", import.meta.path], {
+      // The nested cold-start case needs its own completion artifact too;
+      // a premature successful child exit cannot certify its parent case.
+      const child = Bun.spawn([process.execPath, resolve(import.meta.dir, '../../runtime/scripts/local-test-priority.ts'), '--cwd', import.meta.dir, '--', process.execPath, 'test', import.meta.path], {
         cwd: import.meta.dir, env: { ...env, PICLAW_DEFAULT_FACTORY_CASE: scenario }, stdout: "pipe", stderr: "pipe",
       });
       const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);

@@ -89,7 +89,7 @@ docker run -d \
 - [提问](https://github.com/rcarmo/piclaw/issues/new?template=question.md)
 - [查看项目看板](https://github.com/users/rcarmo/projects/13)
 
-报告问题时请使用 issue 模板。修改代码前，请阅读[开发文档](docs/development.md)和[仓库工作流](AGENTS.md)，并通过拉取请求提交修改。
+报告问题时请使用 issue 模板。修改代码前，请阅读[开发文档](docs/development.md)、[原生验证](docs/native-validation.md)和[仓库工作流](AGENTS.md)，并通过拉取请求提交修改。`make ci-full` 要求主机侧检查和离线原生运行时验证全部通过；`make ci-fast` 仅检查主机侧。
 
 ## 鸣谢
 
