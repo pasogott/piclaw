@@ -294,7 +294,7 @@ erDiagram
 
 ## Indexes
 
-[Timeline and accepted-payload index setup](development/sqlite-query-indexes.md) describes schema owners, migration guards and query-plan tests.
+[Timeline and accepted-payload index setup](development/sqlite-query-indexes.md) describes schema owners, migration guards and query-plan tests. [Service-work and outbox upgrades](development/service-effect-schema-upgrades.md) covers queue membership, delivery certainty and linked-history preservation.
 
 - `messages(timestamp)` for chronological queries
 - `messages(chat_jid)` for timeline paging

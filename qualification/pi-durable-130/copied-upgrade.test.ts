@@ -310,8 +310,19 @@ test("copied upgrade: single host messages.db preserves original rows through lo
     expect(conversations).toEqual(originalConversations);
     expect(conversations.filter(c => before!.binding!.branches.some(b => b.engineConversationId === c.id))).toHaveLength(2);
     expect(f.hostSnapshot(journal)).toEqual(f.originalHost);
-    for (const connection of [journal.query("PRAGMA database_list").all(), await sdk.all("PRAGMA database_list")]) {
-      expect(connection).toEqual([{ seq: 0, name: "main", file: f.owner.path }]);
+    const connections = [journal.query("PRAGMA database_list").all(), await sdk.all("PRAGMA database_list")] as
+      { seq: number; name: string; file: string }[][];
+    for (const [index, connection] of connections.entries()) {
+      // ALTER TABLE during the owned core rebuild allocates SQLite's internal
+      // temp namespace. Permit only that empty namespace and the SAME root file:
+      // never another attached store or a second source of execution state.
+      expect(connection.filter(row => row.name !== "temp")).toEqual([{ seq: 0, name: "main", file: f.owner.path }]);
+      const temp = connection.filter(row => row.name === "temp");
+      if (temp.length) {
+        expect(temp).toEqual([{ seq: 1, name: "temp", file: "" }]);
+        expect(index === 0 ? journal.query("SELECT name FROM temp.sqlite_schema").all()
+          : await sdk.all("SELECT name FROM temp.sqlite_schema")).toEqual([]);
+      }
     }
     expect(journal.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     expect(await sdk.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
