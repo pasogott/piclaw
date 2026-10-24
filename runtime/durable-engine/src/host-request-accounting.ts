@@ -76,7 +76,7 @@ export async function reserveHostRequest(options: {
     assertCurrent(); signal.throwIfAborted();
     if (readStoredProviderUsageAccountRef(model.provider, options.authPath) !== accountRef) throw Error("Native request account changed");
   };
-  const accounting = modelRequestAccounting({ authorise: current, documentedFree: false }, database);
+  const accounting = modelRequestAccounting({ authorise: current, documentedFree: false, usageSource: options.maintenanceWorkId ? "compaction" : "assistant" }, database);
   const binding = { id, workId, chatJid: options.chatJid, providerId: model.provider, modelId: model.id, accountRef, amountMicros: amount.amountMicros };
   let dispatchStarted = false;
   let settled = false;

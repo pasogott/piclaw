@@ -1,9 +1,9 @@
 /**
- * db/token-usage.ts – Records LLM token consumption and cost per agent run.
+ * db/token-usage.ts – Token/cost reporting projections.
  *
- * After each agent turn completes, the agent pool (agent-pool/usage.ts)
- * calls storeTokenUsage() to persist the token counts, cost breakdown, and
- * model/provider metadata.
+ * Actual request settlement commits the immutable event payload and report in
+ * one frame. Compatibility session callbacks retain their weaker event identity
+ * or unlinked legacy provenance. Replay repairs from the stored event.
  *
  * Consumers:
  *   - agent-pool/usage.ts calls storeTokenUsage() after every agent run.
@@ -14,6 +14,7 @@
 import type Database from 'bun:sqlite';
 import { getDb } from "./connection.js";
 import { insertBudgetUsageEvent } from "./budget-limits.js";
+import { decodeUsageReport, encodeUsageReport, projectUsageEvent, readUsageProjectionEvent, tokenReportColumns, usageReportRecord, type UsageReportOrigin, unlinkedUsageReportPredicate } from "./usage-report-projection.js";
 
 /** Overall token/cost totals for a chat across all runs. */
 export interface TokenUsageTotalsSummary {
@@ -155,102 +156,30 @@ export interface TokenUsageRecord {
   execution_kind?: import("../budget/types.js").BudgetExecutionKind | null;
 }
 
-/** Insert a token-usage record for a completed agent run. */
-export function storeTokenUsage(record: TokenUsageRecord, db: Database = getDb()): void {
+/** Commit a reporting observation once; existing event bytes own replay. */
+export function storeTokenUsage(record: TokenUsageRecord, db: Database = getDb(), origin: UsageReportOrigin = { kind: "recorder_event" }): void {
   db.transaction(() => {
-    const result = db.prepare(
-    `INSERT OR IGNORE INTO token_usage (
-      chat_jid,
-      run_at,
-      input_tokens,
-      output_tokens,
-      reasoning_tokens,
-      cache_read_tokens,
-      cache_write_tokens,
-      cache_read_reported,
-      cache_write_reported,
-      total_tokens,
-      cost_input,
-      cost_output,
-      cost_cache_read,
-      cost_cache_write,
-      cost_total,
-      provider_cost_total,
-      catalogue_cost_total,
-      cost_provenance,
-      model,
-      response_model,
-      provider,
-      api,
-      usage_source,
-      turns,
-      work_id,
-      invocation_id,
-      usage_event_id,
-      api_equivalent_cost_microusd,
-      api_equivalent_cost_known,
-      valuation_provenance,
-      api_equivalent_known_subtotal_microusd,
-      api_equivalent_unknown_categories,
-      pricing_currency,
-      pricing_source,
-      pricing_version,
-      pricing_context_tier,
-      pricing_cache_fallbacks
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    record.chat_jid,
-    record.run_at,
-    record.input_tokens,
-    record.output_tokens,
-    record.reasoning_tokens ?? 0,
-    record.cache_read_tokens,
-    record.cache_write_tokens,
-    record.cache_read_reported == null ? null : Number(record.cache_read_reported),
-    record.cache_write_reported == null ? null : Number(record.cache_write_reported),
-    record.total_tokens,
-    record.cost_input,
-    record.cost_output,
-    record.cost_cache_read,
-    record.cost_cache_write,
-    record.cost_total,
-    record.provider_cost_total ?? null,
-    record.catalogue_cost_total ?? null,
-    record.cost_provenance ?? null,
-    record.model ?? null,
-    record.response_model ?? null,
-    record.provider ?? null,
-    record.api ?? null,
-    record.usage_source ?? "assistant",
-    record.turns ?? null,
-    record.work_id ?? null,
-    record.invocation_id ?? null,
-    record.usage_event_id ?? null,
-    record.api_equivalent_cost_microusd ?? null,
-    record.api_equivalent_cost_known == null ? null : Number(record.api_equivalent_cost_known),
-    record.valuation_provenance ?? null,
-    record.api_equivalent_known_subtotal_microusd ?? null,
-    record.api_equivalent_unknown_categories ?? null,
-    record.pricing_currency ?? null,
-    record.pricing_source ?? null,
-    record.pricing_version ?? null,
-    record.pricing_context_tier ?? null,
-    record.pricing_cache_fallbacks ?? null,
-  );
+    const existing = record.usage_event_id ? readUsageProjectionEvent(db, record.usage_event_id) : null;
+    // Replayed parent/tool observations retain the original charge owner and
+    // provider valuation. Caller text is never repair authority.
+    if (existing) { projectUsageEvent(db, existing); return; }
+    const values = usageReportRecord(record);
+    const result = db.query(`INSERT OR IGNORE INTO main.token_usage (${tokenReportColumns.join(",")})
+      VALUES (${tokenReportColumns.map(() => "?").join(",")})`).run(...tokenReportColumns.map(column => values[column]));
     if (result.changes !== 1 || !record.usage_event_id) return;
-    insertBudgetUsageEvent({
-      workId: record.work_id ?? null,
-      invocationId: record.invocation_id ?? null,
-      usageEventId: record.usage_event_id,
-      executionKind: record.execution_kind ?? null,
-      tokenUsageId: Number(result.lastInsertRowid),
-      chatJid: record.chat_jid,
-      accountedAt: record.run_at,
-      apiUsdMicros: record.api_equivalent_cost_microusd ?? null,
-      apiUsdKnown: record.api_equivalent_cost_known === true,
-      valuationProvenance: record.valuation_provenance ?? "unavailable",
-      usageSource: record.usage_source ?? "assistant",
-    }, db);
+    const payload = encodeUsageReport(record, origin);
+    if (origin.kind === "host_request") {
+      const request = db.query("SELECT binding_sha256,state,work_id,chat_jid,provider_id,model_id FROM main.budget_request_reservations WHERE id=?").get(origin.request_id) as { binding_sha256: string; state: string; work_id: string; chat_jid: string; provider_id: string; model_id: string } | null;
+      if (!request || !["dispatched","unresolved"].includes(request.state) || request.binding_sha256 !== origin.binding_sha256 || request.work_id !== record.work_id
+        || request.chat_jid !== record.chat_jid || request.provider_id !== record.provider || request.model_id !== record.model) throw Error("Usage request binding mismatch");
+    }
+    insertBudgetUsageEvent({ workId: record.work_id ?? null, invocationId: record.invocation_id ?? null, usageEventId: record.usage_event_id,
+      executionKind: record.execution_kind ?? null, tokenUsageId: Number(result.lastInsertRowid), chatJid: record.chat_jid, accountedAt: record.run_at,
+      apiUsdMicros: record.api_equivalent_cost_microusd ?? null, apiUsdKnown: record.api_equivalent_cost_known === true,
+      valuationProvenance: record.valuation_provenance ?? "unavailable", usageSource: record.usage_source ?? "assistant",
+      reportPayloadJson: payload.json, reportPayloadSha256: payload.hash }, db);
+    const event = readUsageProjectionEvent(db, record.usage_event_id);
+    if (!event || !decodeUsageReport(event)) throw Error("Usage event was not committed");
   }).immediate();
 }
 
@@ -430,9 +359,9 @@ export function getLatestTokenUsageModel(chatJid: string): LatestTokenUsageModel
 }
 
 /**
- * Delete token_usage rows older than the given retention period.
- * All queries on this table use aggregations (SUM/COUNT/GROUP BY) or latest-row
- * lookups, so individual old rows are not needed for correctness.
+ * Delete only unlinked legacy reports older than the retention period.
+ * Event/request references retain accounting and replay evidence until their
+ * owners explicitly retire it. This function never releases a request hold.
  *
  * @returns Number of deleted rows.
  */
@@ -440,6 +369,6 @@ export function pruneOldTokenUsage(retentionDays = 90): number {
   const db = getDb();
   const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
   const result = db.prepare(`DELETE FROM token_usage
-    WHERE run_at < ? AND id NOT IN (SELECT token_usage_id FROM budget_usage_events)`).run(cutoff);
+    WHERE run_at < ? AND ${unlinkedUsageReportPredicate("token_usage")}`).run(cutoff);
   return result.changes;
 }
