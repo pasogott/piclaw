@@ -2,10 +2,9 @@
 import type { Database } from "bun:sqlite";
 import { applyOwnedMigrations } from "../../src/db/migrations.js";
 
-export const acceptedPayloadRecoveryIndex = "idx_piclaw_durable_bindings_payload_recovery_v1";
-const recoveryIndexSql = `CREATE INDEX IF NOT EXISTS ${acceptedPayloadRecoveryIndex}
-  ON piclaw_durable_bindings_v1(incarnation,chat_jid,source_id,payload_ref)`;
-const recoveryIndexMigration = { owner: "host.native-bindings", id: "accepted-payload-index-v1", order: 1, sql: recoveryIndexSql } as const;
+import { nativeBindingRecoveryIndex as acceptedPayloadRecoveryIndex, nativeBindingRecoveryMigration as recoveryIndexMigration } from "../../src/db/native-host-schema-contract.js";
+export { nativeBindingRecoveryIndex as acceptedPayloadRecoveryIndex } from "../../src/db/native-host-schema-contract.js";
+const recoveryIndexSql = recoveryIndexMigration.sql;
 const definitions = [
   `CREATE TABLE IF NOT EXISTS piclaw_durable_bindings_v1 (
       domain TEXT NOT NULL, incarnation TEXT NOT NULL,
