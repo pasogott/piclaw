@@ -38,6 +38,7 @@ import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.
 import { enableSqliteWal } from "./sqlite-journal.js";
 import { isZfsFilesystem, registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
 import { ensureOwnedMigrationLedger } from "./migrations.js";
+import { retireAttachmentRowidIndex } from "./attachment-index-retirement.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
 import { installScheduledRunCompositionSchema } from "../service-effects/current-piclaw/scheduled-run-schema.js";
 
@@ -257,7 +258,6 @@ function createSchema(database: Database): void {
       PRIMARY KEY (message_rowid, media_id),
       FOREIGN KEY (media_id) REFERENCES media(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_message_media_message_rowid ON message_media(message_rowid);
     CREATE INDEX IF NOT EXISTS idx_message_media_media_id ON message_media(media_id);
 
     CREATE TABLE IF NOT EXISTS thinking_content (
@@ -952,6 +952,7 @@ function initializeSchema(database: Database): void {
   migrateLegacyConfigTables(database);
   createSchema(database);
   ensureOwnedMigrationLedger(database);
+  retireAttachmentRowidIndex(database);
   ensureChatBranchConstraints(database);
   initializeChatProjects(database);
   ensureMessageColumns(database);
