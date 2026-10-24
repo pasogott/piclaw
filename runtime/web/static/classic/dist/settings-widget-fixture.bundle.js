@@ -2008,5 +2008,5 @@ ${D}`;if(!window.confirm(_))return;if(H&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Am(){$m(),Cm(),Pm();let e=new URLSearchParams(window.location.search);Yl(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",Mt(u`<${Tm} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:Zt})}Am();
 
-//# debugId=5537F24A1D1BEA2064756E2164756E21
+//# debugId=4AD6DD2DC504147164756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map
