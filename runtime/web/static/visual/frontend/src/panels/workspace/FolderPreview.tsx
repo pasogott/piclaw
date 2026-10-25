@@ -6,7 +6,7 @@ import {
   type ChildInfo,
   type FolderChartSegment,
 } from "../workspace-panel-helpers";
-import { formatBytes } from "../../utils/formatBytes";
+import { formatBytes } from "../../utils/format";
 import {
   getErrorMessage,
   toUserFacingMessage,

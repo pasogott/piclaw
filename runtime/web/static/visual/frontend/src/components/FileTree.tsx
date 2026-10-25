@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from "preact/hooks";
-import { formatBytes } from "../utils/formatBytes";
+import { formatBytes } from "../utils/format";
 import { getChatJid } from "../api/chat-jid";
 import { FileIcon } from "./FileIcon";
 import { safeGetItem, safeSetItem, safeRemoveItem, safeParseJSON } from "../utils/storage";

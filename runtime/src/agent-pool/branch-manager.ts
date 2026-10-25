@@ -464,8 +464,8 @@ export class AgentBranchManager {
     // materialize a blank runtime (or realize the deferred seed) for an
     // archived chat between prune and restore.
     this.options.cancelSessionWarmup?.(chatJid);
-    // NOTE: do not clearDeferredBranchSeed here — .branch-seed.json is the
-    // only persisted copy of the forked context until the session is realized,
+    // Keep .branch-seed.json here: it is the only persisted copy of the
+    // forked context until the session is realized,
     // and a subsequent restoreChatBranch() must be able to pick it back up.
 
     return archived;

@@ -346,8 +346,3 @@ export function restoreClaimedDeferredBranchSeed(chatJid: string): void {
 export function finalizeClaimedDeferredBranchSeed(chatJid: string): void {
   rmSync(getClaimedDeferredBranchSeedPath(chatJid), { force: true });
 }
-
-export function clearDeferredBranchSeed(chatJid: string): void {
-  rmSync(getDeferredBranchSeedPath(chatJid), { force: true });
-  rmSync(getClaimedDeferredBranchSeedPath(chatJid), { force: true });
-}
