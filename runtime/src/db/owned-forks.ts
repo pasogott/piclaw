@@ -2,6 +2,7 @@ import type Database from "bun:sqlite";
 import type { AuthenticatedPrincipal } from "../core/access-types.js";
 import { createUuid } from "../utils/ids.js";
 import { ChatAccessDenied, resolveAuthorisedChat } from "./session-ownership.js";
+import { requireLegacyRoutingMutation } from "./native-routing-policy.js";
 
 export interface OwnedForkRecord {
   branch_id: string;
@@ -59,6 +60,7 @@ export function commitOwnedFork(database: Database, principal: AuthenticatedPrin
   JSON.parse(seedJson);
   return database.transaction(() => {
     const existing = findOwnedFork(database, principal, sourceChatJid, requestId);
+    requireLegacyRoutingMutation(database, "owned legacy child fork");
     if (existing) return existing;
     const source = ownedBranch(database, principal, sourceChatJid, "session.fork");
     const branchId = createUuid("branch");

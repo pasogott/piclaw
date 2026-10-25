@@ -151,7 +151,7 @@ function validateApplicationMapping(root: ReturnType<typeof getDb>, value: unkno
     ["chatJid", "branchId", "conversationId", "sessionId"].some(key => new Set(m.bindings.map(b => b?.[key as keyof typeof b])).size !== m.bindings.length) ||
     m.bindings.some(b => !b || !canonical(b.chatJid) || !canonical(b.branchId) || !canonical(b.sessionId) || !Number.isSafeInteger(b.conversationId) || b.conversationId <= 1 ||
       !root.query("SELECT 1 FROM conversations WHERE id=?").get(b.conversationId) ||
-      !root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(b.chatJid, b.branchId))) throw Error("Invalid durable application conversation manifest");
+      !root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=?").get(b.chatJid, b.branchId))) throw Error("Invalid durable application conversation manifest");
 }
 
 /** Validate persisted SDK storage, conversation identities and execution routes. */
@@ -176,8 +176,8 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
     mapping = materialized as ApplicationMapping;
     validateApplicationMapping(root, mapping);
     for (const b of mapping.bindings) {
-      const row = root.query(`SELECT r.content FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind='"app.application-identity"' AND d.owner_id=? AND d.retired_at IS NULL ORDER BY r.seq DESC LIMIT 1`).get(b.conversationId) as { content: string } | null;
-      if (!row || row.content !== JSON.stringify({ domain: mapping.domain, chatJid: b.chatJid, branchId: b.branchId, sessionId: b.sessionId })) throw Error("Invalid durable application identity");
+      const rows = root.query(`SELECT r.kind,r.version,r.content FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind='"app.application-identity"' AND d.scope_kind='conversation' AND d.owner_id=? AND d.retired_at IS NULL ORDER BY r.seq`).all(b.conversationId) as { kind: string; version: number; content: string }[];
+      if (rows.length !== 1 || rows[0]!.kind !== "base" || rows[0]!.version !== 1 || rows[0]!.content !== JSON.stringify({ domain: mapping.domain, chatJid: b.chatJid, branchId: b.branchId, sessionId: b.sessionId })) throw Error("Invalid durable application identity");
     }
   }
   if (mapping) for (const table of ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"]) {
@@ -945,47 +945,49 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let harness: Awaited<ReturnType<typeof Harness.open>> | undefined;
   let mapping!: { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
   let primary: unknown;
+  async function publishApplicationBinding(tx: import("@earendil-works/pi-durable").Tx, domain: string, chatJid: string, branchId: string) {
+    assert(); check(ref, lifetime.signal);
+    const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
+    if (doc.domain !== domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
+    const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+    const instructions = instructionsFor(chatJid);
+    await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
+    (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
+    const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
+    const identity = { domain, chatJid, branchId, sessionId: binding.sessionId };
+    const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
+    await tx.doc(token, conversation.id);
+    doc.bindings.push(binding);
+    assert(); check(ref, lifetime.signal);
+    return Object.freeze(binding);
+  }
   let failed = false;
   try {
     assert();
     harness = await Harness.open(await SqliteStorage.open(storage), harnessOptions, context);
-    const app = await harness.root(context);
-    // The SDK document is the sole routing authority; host binding tables link accepted sources only.
-    mapping = await app.commit(async tx => {
-      const doc = await tx.doc(ApplicationConversations, app.id);
-      if (!doc.domain) {
-        const instructions = instructionsFor();
-        await configure(tx, app.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
-        (await tx.doc(HostManagedInstructions, app.id)).managedHash = instructionHash(instructions);
-      }
-      return JSON.parse(JSON.stringify(doc)) as typeof mapping;
-    }, context);
-    if (!mapping.domain) {
-      // A fresh host may not have its initial web header until WebChannel construction.
-      storeChatMetadata("web:default", new Date().toISOString());
-      const chats = root.query("SELECT c.jid, b.branch_id FROM chats c JOIN chat_branches b ON b.chat_jid=c.jid WHERE b.archived_at IS NULL ORDER BY c.jid").all() as { jid: string; branch_id: string }[];
-      const bindings = [] as typeof mapping.bindings;
-      for (const chat of chats) {
-        assert();
-        const conversation = await app.commit(async tx => {
-          const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
-          const instructions = instructionsFor(chat.jid);
-          await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
-          (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
-          return conversation;
-        }, context);
-        bindings.push({ chatJid: chat.jid, branchId: chat.branch_id, conversationId: conversation.id, sessionId: crypto.randomUUID() });
-      }
-      mapping = { version: 1, domain: crypto.randomUUID(), bindings };
-      for (const binding of bindings) {
-        const identity = { domain: mapping.domain, chatJid: binding.chatJid, branchId: binding.branchId, sessionId: binding.sessionId };
-        // Initial creation stores one base, independently anchoring root routing identities.
-        const conversation = (await harness.conversation(binding.conversationId as ConversationId, context))!;
-        const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
-        await conversation.commit(async tx => { await tx.doc(token, conversation.id); }, context);
-      }
-      await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
-    }
+    // One application publication: root config, every initial conversation,
+    // creation anchor and populated manifest share the public root-creation commit.
+    const initial = !root.query("SELECT 1 FROM documents WHERE kind='\"app.application-conversations\"' AND scope_kind='conversation' AND owner_id=1 AND retired_at IS NULL").get();
+    if (initial) storeChatMetadata("web:default", new Date().toISOString());
+    const initialBranches = initial ? root.query("SELECT c.jid,b.branch_id FROM chats c JOIN chat_branches b ON b.chat_jid=c.jid WHERE b.archived_at IS NULL ORDER BY c.jid").all() as { jid: string; branch_id: string }[] : [];
+    const assertInitial = () => {
+      assert();
+      for (const branch of initialBranches) if (!root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(branch.jid, branch.branch_id)) throw Error("Initial application branch changed");
+    };
+    const app = await storage.withAdmissionGuard(assertInitial, () => harness!.root(context, { init: async (tx, id) => {
+      assertInitial();
+      const doc = await tx.doc(ApplicationConversations, id);
+      if (doc.domain || doc.bindings.length) throw Error("Application mapping conflict");
+      doc.domain = crypto.randomUUID();
+      const instructions = instructionsFor();
+      await configure(tx, id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
+      (await tx.doc(HostManagedInstructions, id)).managedHash = instructionHash(instructions);
+      for (const branch of initialBranches) await publishApplicationBinding(tx, doc.domain, branch.jid, branch.branch_id);
+      assertInitial();
+    } }));
+    const persisted = await harness.snapshot(ApplicationConversations, app.id, context);
+    validateApplicationMapping(root, persisted);
+    mapping = JSON.parse(JSON.stringify(persisted));
     // Older native bootstrap omitted thinkingLevel entirely. Repair only that
     // omission through the public SDK; an explicitly selected off is preserved.
     const missingThinking = await app.commit(async tx => {
@@ -1154,22 +1156,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         !Number.isFinite(physical.maxTokens) || physical.maxTokens < 0) throw Error("Model context unavailable");
       return { provider: choice.provider, modelId: choice.id };
     },
-    async createConversation(tx, chatJid, branchId) {
-      assert(); check(ref, lifetime.signal);
-      const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
-      if (doc.domain !== mapping.domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
-      const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
-      const instructions = instructionsFor(chatJid);
-      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
-      (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
-      const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
-      const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
-      const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
-      await tx.doc(token, conversation.id);
-      doc.bindings.push(binding);
-      assert(); check(ref, lifetime.signal);
-      return Object.freeze(binding);
-    },
+    historicalBindings: true,
+    async createConversation(tx, chatJid, branchId) { return publishApplicationBinding(tx, mapping.domain, chatJid, branchId); },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
   if (remotePeer) {

@@ -1,3 +1,4 @@
+import { hasNativeRouting, requireLegacyRoutingMutation } from "../db/native-routing-policy.js";
 /**
  * agent-pool/branch-manager.ts – Branch identity, listing, and fork lifecycle helpers.
  *
@@ -277,7 +278,7 @@ export class AgentBranchManager {
     const session = this.options.pool.get(chatJid)?.runtime.session ?? null;
     if (owner) {
       const renamed = renameOwnedSessionHandle(getDb(), owner, chatJid, options.agentName ?? "");
-      if (session) session.setSessionName(renamed.agent_name);
+      if (session && !hasNativeRouting(getDb())) session.setSessionName(renamed.agent_name);
       return getChatBranchByChatJid(chatJid)!;
     }
     this.ensureBranchRegistration(chatJid, session);
@@ -287,7 +288,7 @@ export class AgentBranchManager {
       agent_name: nextAgentName,
     });
 
-    if (session) {
+    if (session && !hasNativeRouting(getDb())) {
       try {
         session.setSessionName(renamed.agent_name);
       } catch (err) {
@@ -320,6 +321,7 @@ export class AgentBranchManager {
     if (!next) throw new Error("New JID is required.");
     if (old === next) throw new Error("Old and new JID are identical.");
 
+    requireLegacyRoutingMutation(getDb(), "address rename");
     if (this.options.isActive(old)) {
       throw new Error("Cannot rename a chat while it has an active turn.");
     }
@@ -402,6 +404,7 @@ export class AgentBranchManager {
   async mergeChatBranchIntoParent(
     chatJid: string,
   ): Promise<ReturnType<typeof mergeChatBranchIntoParentDb>> {
+    requireLegacyRoutingMutation(getDb(), "legacy merge");
     if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
     const normalizedChatJid = String(chatJid || "").trim();
     if (!normalizedChatJid) throw new Error("chat_jid is required");
@@ -472,6 +475,7 @@ export class AgentBranchManager {
     chatJid: string,
   ): Promise<{ branch: ChatBranchRecord; removedSessionArtifacts: string[] }> {
     if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
+    requireLegacyRoutingMutation(getDb(), "legacy purge");
     const normalizedChatJid = String(chatJid || "").trim();
     if (!normalizedChatJid) throw new Error("chat_jid is required");
     if (this.options.isActive(normalizedChatJid)) {
@@ -545,6 +549,7 @@ export class AgentBranchManager {
     sourceChatJid: string,
     options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
+    requireLegacyRoutingMutation(getDb(), "legacy child fork");
     const owner = requireOwnedSessionExecution(sourceChatJid);
     if (owner) {
       const existing = findOwnedFork(getDb(), owner, sourceChatJid, options.requestId ?? "");

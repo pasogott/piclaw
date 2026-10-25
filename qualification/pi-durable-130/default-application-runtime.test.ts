@@ -131,7 +131,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -646,6 +646,47 @@ for (const scenario of ["native-usage-projection", "native-scheduler-definition"
     expect(existsSync(mcpMarker)).toBe(false);
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     owner.release(); closeDatabase(); return;
+  }
+  if (scenario === "native-routing-initial-rollback" || scenario === "native-routing-initial-ack") {
+    const actual = BunSqliteDatabase.prototype.transaction;
+    let failures = 0;
+    const published = () => !!root.query("SELECT 1 FROM sqlite_schema WHERE name='documents'").get()
+      && !!root.query("SELECT 1 FROM documents WHERE kind='\"app.application-conversations\"' AND owner_id=1").get()
+      && (root.query("SELECT count(*) n FROM conversations").get() as { n: number }).n > 1;
+    const fault = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementation(async function<T>(this: BunSqliteDatabase, callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+      const value = await actual.call<BunSqliteDatabase, [(tx: SqliteExecutor) => Promise<T>], Promise<T>>(this, async tx => {
+        const value = await callback(tx);
+        // Read the candidate executor: the separate host connection cannot see
+        // uncommitted SDK writes and would inject into a later transaction.
+        const candidateSchema = await tx.get("SELECT 1 FROM sqlite_schema WHERE name='conversations'");
+        const candidatePublished = candidateSchema ? await tx.get<{ n: number }>("SELECT count(*) n FROM conversations") : undefined;
+        if (!failures && scenario.endsWith("rollback") && (candidatePublished?.n ?? 0) > 1) { failures++; throw Error("initial publication rollback"); }
+        return value;
+      });
+      if (!failures && scenario.endsWith("ack") && published()) { failures++; throw Error("initial publication ACK lost"); }
+      return value;
+    });
+    try { await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("initial publication"); }
+    finally { fault.mockRestore(); }
+    expect(failures).toBe(1); expect(calls).toBe(0);
+    expect(root.query("SELECT id FROM tasks").all()).toEqual([]);
+    if (scenario.endsWith("rollback")) {
+      expect(root.query("SELECT id FROM conversations").all()).toEqual([]);
+      expect(root.query("SELECT id FROM documents").all()).toEqual([]);
+      // The SDK schema prefix has no published domain. Never guess/reset/adopt
+      // it on restart; an explicit matching checkpoint is required.
+      await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("must reject before models"); })).rejects.toThrow("manifest");
+    } else {
+      const identities = root.query("SELECT id,record FROM conversations ORDER BY id").all();
+      const anchors = root.query("SELECT r.* FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind IN ('\"app.application-conversations\"','\"app.application-identity\"') ORDER BY r.document_id,r.seq").all();
+      const reopened = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(reopened.sessionOptions.getDurableSession!("web:default")).toBeDefined();
+      expect(root.query("SELECT id,record FROM conversations ORDER BY id").all()).toEqual(identities);
+      expect(root.query("SELECT r.* FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind IN ('\"app.application-conversations\"','\"app.application-identity\"') ORDER BY r.document_id,r.seq").all()).toEqual(anchors);
+      expect(calls).toBe(0); reopened.stop(); await reopened.close();
+    }
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
   }
   let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>>;
   if (scenario === "native-drawio-prepare-held") {
@@ -1561,6 +1602,100 @@ for (const scenario of ["native-usage-projection", "native-scheduler-definition"
     expect(observedResults.size).toBe(2);
     expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
     backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
+  if (scenario === "native-routing-create-race") {
+    expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+    const branches = await import("../../runtime/src/db/chat-branches.js");
+    const chat = "web:archive-before-publication";
+    storeChatMetadata(chat, new Date().toISOString());
+    const before = root.query("SELECT id FROM conversations ORDER BY id").all();
+    let entered!: () => void, release!: () => void, armed = true;
+    const ready = new Promise<void>(resolve => { entered = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+    const actual = BunSqliteDatabase.prototype.transaction;
+    const fault = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementation(async function<T>(this: BunSqliteDatabase, callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+      if (armed) { armed = false; entered(); await held; }
+      return actual.call<BunSqliteDatabase, [(tx: SqliteExecutor) => Promise<T>], Promise<T>>(this, callback);
+    });
+    const pending = bound.prepareInputSourceAdmission!(chat); void pending.catch(() => {});
+    try {
+      await ready;
+      expect(branches.archiveChatBranch(chat).archived_at).not.toBeNull();
+      release(); await expect(pending).rejects.toThrow("Root branch changed");
+      expect(root.query("SELECT id FROM conversations ORDER BY id").all()).toEqual(before);
+      expect(backend.sessionOptions.getDurableSession!(chat)).toBeUndefined();
+      branches.restoreChatBranchIdentity({ chat_jid: chat });
+      // The commit attempt boundary was crossed. Even this proven fixture
+      // refusal does not authorise the runtime to guess/reallocate without reopen.
+      await expect(bound.prepareInputSourceAdmission!(chat)).rejects.toThrow();
+      expect(root.query("SELECT id FROM conversations ORDER BY id").all()).toEqual(before);
+    } finally { release(); await pending.catch(() => {}); fault.mockRestore(); }
+    backend.stop(); await backend.close(); await pool.shutdown(); await base.queue.shutdown(); await channel.stop();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+    const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    const reopened = backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool });
+    await reopened.prepareInputSourceAdmission!(chat);
+    expect(backend.sessionOptions.getDurableSession!(chat)).toBeDefined();
+    expect(root.query("SELECT id FROM conversations ORDER BY id").all()).toHaveLength(before.length + 1);
+    expect(calls).toBe(1);
+    backend.stop(); await backend.close(); await reopenedPool.shutdown(); await reopenedBase.queue.shutdown();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
+  if (scenario === "native-routing-policy") {
+    expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+    const branches = await import("../../runtime/src/db/chat-branches.js");
+    const created = await pool.createRootChatSession("routing-metadata");
+    await bound.prepareInputSourceAdmission!(created.chat_jid);
+    const position = backend.sessionOptions.getDurableSession!(created.chat_jid)!;
+    const identity = { sessionId: position.sessionId, branchId: position.branchId };
+    const input = { ...message, id: "routing-history", chat_jid: created.chat_jid, content: "retain native routing history" };
+    const rowId = root.transaction(() => { const id = storeMessage(input); bound.getInputSourceAdmission!(created.chat_jid)!({ message: input, rowId: id, database: root }); return id; })();
+    expect(() => branches.archiveChatBranch(created.chat_jid)).toThrow("accepted, queued or uncertain work");
+    expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).toBeNull();
+    expect(await bound.dispatchAcceptedInput!(created.chat_jid, input.id, rowId)!()).toBe("settled");
+    expect(calls).toBe(2);
+    const anchorsSql = "SELECT d.kind,d.owner_id,r.* FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind IN ('\"app.application-conversations\"','\"app.application-identity\"') ORDER BY r.document_id,r.seq";
+    const anchors = root.query(anchorsSql).all();
+    const nativeInputs = root.query("SELECT * FROM piclaw_durable_bindings_v1 ORDER BY conversation_id,source_seq").all();
+    const history = root.query("SELECT * FROM entries ORDER BY id").all();
+    expect((await pool.renameChatBranch(created.chat_jid, { agentName: "native-friendly" })).branch_id).toBe(created.branch_id);
+    expect(backend.sessionOptions.getDurableSession!(created.chat_jid)).toMatchObject(identity);
+    await expect(pool.renameChatJid(created.chat_jid, "web:must-not-move")).rejects.toThrow("Durable chat identity rename unavailable");
+    await expect(pool.createForkedChatBranch(created.chat_jid)).rejects.toThrow("Native routing identities are immutable");
+    expect(root.query(anchorsSql).all()).toEqual(anchors);
+    expect((await pool.pruneChatBranch(created.chat_jid)).archived_at).not.toBeNull();
+    await expect(pool.permanentPurgeChatBranch(created.chat_jid)).rejects.toThrow("Native routing identities are immutable");
+    storeChatMetadata(created.chat_jid, new Date().toISOString());
+    expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).not.toBeNull();
+    expect(backend.sessionOptions.getDurableSession!(created.chat_jid)).toBeUndefined();
+    expect(() => bound.getInputSourceAdmission!(created.chat_jid)).toThrow("Unbound application conversation");
+    await expect(bound.prepareInputSourceAdmission!(created.chat_jid)).rejects.toThrow("archived");
+    backend.stop(); await backend.close(); await pool.shutdown(); await base.queue.shutdown(); await channel.stop();
+    closeDatabase(); initDatabase(); root = getDb();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    expect(backend.sessionOptions.getDurableSession!(created.chat_jid)).toBeUndefined();
+    expect(root.query(anchorsSql).all()).toEqual(anchors);
+    expect(root.query("SELECT * FROM piclaw_durable_bindings_v1 ORDER BY conversation_id,source_seq").all()).toEqual(nativeInputs);
+    expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(history);
+    const restoredPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    expect((await restoredPool.restoreChatBranch(created.chat_jid)).agent_name).toBe("native-friendly");
+    expect(backend.sessionOptions.getDurableSession!(created.chat_jid)).toMatchObject(identity);
+    expect(root.query(anchorsSql).all()).toEqual(anchors); expect(calls).toBe(2);
+    const unmapped = "web:unpublished-restore";
+    storeChatMetadata(unmapped, new Date().toISOString()); branches.archiveChatBranch(unmapped);
+    const priorPolicy = branches.getChatBranchByChatJid(unmapped);
+    await expect(restoredPool.restoreChatBranch(unmapped)).rejects.toThrow("Exact native restore binding unavailable");
+    expect(branches.getChatBranchByChatJid(unmapped)).toEqual(priorPolicy);
+    expect(root.query(anchorsSql).all()).toEqual(anchors);
+    await restoredPool.shutdown(); backend.stop(); await backend.close();
+    const anchor = root.query("SELECT r.document_id,r.seq,r.content FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind='\"app.application-identity\"' AND d.owner_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid=? LIMIT 1)").get(created.chat_jid) as { document_id: number; seq: number; content: string };
+    root.query("UPDATE document_revisions SET content=? WHERE document_id=? AND seq=?").run(JSON.stringify({ ...JSON.parse(anchor.content), branchId: "forged" }), anchor.document_id, anchor.seq);
+    let modelLookups = 0;
+    await expect(createDefaultApplicationRuntime(owner, async () => { modelLookups++; return services; })).rejects.toThrow("identity");
+    expect(modelLookups).toBe(0); expect(calls).toBe(2);
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;
   }

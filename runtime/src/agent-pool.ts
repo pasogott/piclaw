@@ -75,6 +75,7 @@ import {
   listRecentChatJids,
   pruneOldTokenUsage,
   reclaimFreelistPages,
+  restoreChatBranchIdentity,
   shrinkDatabaseMemory,
   upsertSshConfig,
 } from "./db.js";
@@ -780,7 +781,17 @@ export class AgentPool {
     chatJid: string,
     options: { agentName?: string | null } = {},
   ): Promise<ChatBranchRecord> {
-    if (this.durableApplication) throw new Error("Durable branch restore unavailable");
+    if (this.durableApplication) {
+      if (readAccessConfig().mode !== "single-user") throw Error("Native restore requires single-user policy");
+      return getDb().transaction(() => {
+        const restored = restoreChatBranchIdentity({ chat_jid: chatJid,
+          ...(options.agentName !== undefined ? { agent_name: options.agentName } : {}) });
+        const position = this.durableSessionLookup?.(restored.chat_jid);
+        if (!position || position.branchId !== restored.branch_id) throw Error("Exact native restore binding unavailable");
+        position.assertCurrent?.();
+        return restored;
+      }).immediate();
+    }
     return this.branchManager.restoreChatBranch(chatJid, options);
   }
 

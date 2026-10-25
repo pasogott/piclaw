@@ -47,12 +47,12 @@ function queuedInputProvenance(item: QueuedFollowupItem): string {
   return `application:queued:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)))}:${hashCanonicalRequest({ content: item.queuedContent })}`;
 }
 /** Validate existing host routing before any import/journal/schema write. */
-export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[]) {
+export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[], historicalBindings = false) {
   for (const binding of manifest) {
     const row = root.query("SELECT branch_id, archived_at FROM chat_branches WHERE chat_jid=?").get(binding.chatJid) as
       { branch_id: string; archived_at: string | null } | null;
     // Keep the existing explicit synthetic main binding contract unchanged.
-    if (binding.branchId !== "main" && (!row || row.branch_id !== binding.branchId || row.archived_at !== null))
+    if (binding.branchId !== "main" && (!row || row.branch_id !== binding.branchId || !historicalBindings && row.archived_at !== null))
       throw Error("Exact application branch manifest required");
   }
 }
@@ -79,6 +79,9 @@ export interface ApplicationBootstrapOptions {
   /** Original host session identities, not a new bootstrap-generated identity. */
   sessions: ReadonlyMap<string, string>;
   offlineInitialize?: boolean;
+  /** Validated default manifest retains archived historical bindings. Admission
+   * still requires current active host policy; copied/import plans stay strict. */
+  historicalBindings?: boolean;
   /** Publish the existing runtime before recovery can schedule any provider. */
   onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: RuntimeOptions["onOperationSettled"];
@@ -130,7 +133,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     throw Error("Exact application branch manifest required");
   // Root branches already have distinct chat JIDs (UNIQUE in chat_branches).
   // Never invent a branch or choose a first/default row for an existing chat.
-  assertApplicationBranchRoutes(root, manifest);
+  assertApplicationBranchRoutes(root, manifest, config.historicalBindings === true);
   const routeIndex = new Map(manifest.map(b => [b.chatJid, Object.freeze({ ...b, sessionId: sessions.get(b.chatJid)! })]));
   const lookup = (chat: string, branch: string) => {
     const binding = routeIndex.get(chat);
@@ -349,7 +352,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     };
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
-      if (!binding) return undefined;
+      if (!binding || !lookup(chat, binding.branchId)) return undefined;
       const assertCurrent = () => {
         assertLive();
         if (routeIndex.get(chat) !== binding || lookup(chat, binding.branchId)?.conversationId !== binding.conversationId) throw Error("Host control binding changed");
@@ -404,7 +407,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     function prepareInputSourceAdmission(chat: string): Promise<void> {
       assert(); config.assertAdmission?.();
       if (closing || shutdown.signal.aborted) return Promise.reject(Error("Application closing"));
-      if (routeIndex.has(chat)) return Promise.resolve();
+      const published = routeIndex.get(chat);
+      if (published) return lookup(chat, published.branchId) ? Promise.resolve() : Promise.reject(Error("Native branch is archived or changed"));
       const pending = preparing.get(chat); if (pending) return pending;
       let committedPossible = false;
       const promise = (async () => {
@@ -412,16 +416,21 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (!createConversation) throw Error("Unbound application conversation");
         const row = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
         if (!row || !canonical(chat)) throw Error("Existing root branch required");
-        const binding = await candidateDatabase.withAdmissionGuard(() => { assertLive(); config.assertAdmission?.(); },
+        const assertRoot = () => {
+          assertLive(); config.assertAdmission?.();
+          const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
+          if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
+        };
+        const binding = await candidateDatabase.withAdmissionGuard(assertRoot,
           () => activeController.addConversation(async tx => {
           assertLive(); config.assertAdmission?.();
           const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
           if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
           const created = await createConversation(tx, chat, row.branch_id);
-          assertLive(); config.assertAdmission?.();
+          assertRoot();
           return created;
-        }, () => { assertLive(); config.assertAdmission?.(); committedPossible = true; }));
-        assertLive();
+        }, () => { assertRoot(); committedPossible = true; }));
+        assertRoot();
         // One publication point. Every ingress and session lookup uses this record.
         routeIndex.set(chat, Object.freeze({ ...binding }));
       })().then(() => { if (preparing.get(chat) === promise) preparing.delete(chat); }, error => {
