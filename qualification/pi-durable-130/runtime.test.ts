@@ -658,11 +658,12 @@ test("runtime: open captures identity, manifest and bound ports before storage f
   await f.runtime.close(); f.setOwner(true);
   const entered = barrier(), hold = barrier(), storageFactory = f.options.openStorage;
   const ids = [...f.options.existingConversationIds];
-  let released = 0;
+  let released = 0, wakes = 0;
+  const identity = { userAgent: { custom: "captured-fixture" }, attribution: { name: "Fixture", url: "https://fixture.invalid" } };
   const owner = { assert() { expect(this).toBe(owner); f.options.owner.assert(); },
     release() { expect(this).toBe(owner); released++; } };
   const options = { ...f.options, owner, existingConversationIds: ids,
-    harnessOptions: { ...f.options.harnessOptions }, work: { ...f.options.work },
+    harnessOptions: { ...f.options.harnessOptions, identity, onWake() { expect(this).toBe(options.harnessOptions); wakes++; } }, work: { ...f.options.work },
     terminal: { getTerminal: f.options.terminal.getTerminal.bind(f.options.terminal), commitTerminal: f.options.terminal.commitTerminal.bind(f.options.terminal), getTerminalByKey: f.options.terminal.getTerminalByKey.bind(f.options.terminal) },
     bindings: { ...f.options.bindings },
     async openStorage() { entered.release(); await hold.promise; return storageFactory(); } };
@@ -673,12 +674,16 @@ test("runtime: open captures identity, manifest and bound ports before storage f
   ids.splice(0); Object.assign(options.owner, { assert: fail, release: fail });
   Object.assign(options.work, { getOperation: fail, acceptCancellation: fail, bindHarness: fail });
   Object.assign(options.terminal, { getTerminal: fail, commitTerminal: fail }); Object.assign(options.bindings, { getOrBind: fail });
-  Object.assign(options.harnessOptions, { models: null, registry: null });
+  Object.assign(options.harnessOptions, { models: null, registry: null, onWake: fail });
+  identity.attribution.name = "changed-after-snapshot";
   hold.release(); const runtime = await pending;
   try {
     const input = await f.accept();
     expect(await runtime.submit(input)).toBeGreaterThan(0);
     expect((await runtime.reconcile(input)).submissionId).not.toBeNull();
+    const captured = (runtime as unknown as { options: RuntimeOptions }).options.harnessOptions;
+    expect(captured.identity?.attribution?.name).toBe("Fixture"); expect(captured.identity).not.toBe(identity);
+    expect(wakes).toBeGreaterThan(0);
   } finally { await runtime.close(); }
   expect(released).toBe(1);
 }));

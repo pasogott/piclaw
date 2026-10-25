@@ -3,9 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { SqliteStorage, type SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { SqliteStorage, applySqliteMigrations, SQLITE_MIGRATIONS, type SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { registerStorageConformance } from "../../runtime/durable-engine/qualification/testing.ts";
-import { AssistantEntry } from "../../runtime/durable-engine/qualification/durable.ts";
+import { AssistantEntry, Harness, defineTask, defineExtension, type TaskId } from "../../runtime/durable-engine/qualification/durable.ts";
+import { readSchemaInventory } from "../../runtime/scripts/lib/schema-ownership.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 
@@ -260,3 +261,87 @@ describe("public Harness on actual disk SQLite", () => {
     } finally { await fresh.close(); }
   }));
 });
+
+// Upgrade qualification only: the immutable v1 migration is the real 1.3
+// producer. No live store or downloaded old implementation is opened.
+test("SDK 1.4 upgrades v1 task storage losslessly and refuses down-level reopen", () => disk(async path => {
+  const db = new BunSqliteDatabase(path);
+  let storage: SqliteStorage | undefined;
+  try {
+    await applySqliteMigrations(db, SQLITE_MIGRATIONS.slice(0, 1));
+    const records = [
+      { id: 21, conversationId: 1, kind: "app.retained", version: 1, input: { sourceId: "unchanged", bytes: "original" }, background: false, abortRequested: false,
+        state: { status: "pending", checkpoint: { phase: "wait" } } },
+      { id: 22, conversationId: 1, kind: "app.retained", version: 1, input: { sourceId: "completed" }, background: false, abortRequested: false,
+        state: { status: "terminal", outcome: { status: "completed", result: { receipt: "original" } } } },
+    ];
+    await db.transaction(async tx => {
+      await tx.run("INSERT INTO conversations(id,record) VALUES(1,?)", JSON.stringify({ id: 1 }));
+      await tx.run("INSERT INTO record_ids VALUES(1,'conversation')");
+      for (const record of records) {
+        await tx.run("INSERT INTO record_ids VALUES(?,'task')", record.id);
+        await tx.run("INSERT INTO tasks(id,conversation_id,kind,status,abort_requested,background,record) VALUES(?,1,?,?,0,0,?)",
+          record.id, JSON.stringify(record.kind), record.state.status, JSON.stringify(record));
+      }
+      await tx.run("UPDATE durable_metadata SET next_id='23'");
+    });
+    const rows = await db.all("SELECT * FROM tasks ORDER BY id");
+    const root = new Database(path, { readonly: true });
+    try {
+      const before = readSchemaInventory(root);
+      storage = await SqliteStorage.open(db);
+      expect(await db.get("SELECT version FROM durable_schema WHERE singleton=1")).toEqual({ version: 2 });
+      expect(await db.all("SELECT * FROM tasks ORDER BY id")).toEqual(rows);
+      for (const record of records) expect(await storage.task(record.id as TaskId, context)).toEqual(JSON.parse(JSON.stringify(record)));
+      const after = readSchemaInventory(root);
+      expect(after.filter(object => !before.some(prior => JSON.stringify(prior) === JSON.stringify(object))).map(object => `${object.kind}:${object.name}`)).toEqual(["table:tasks"]);
+      console.log("SDK_140_TASK_SCHEMA=" + JSON.stringify(after.find(object => object.name === "tasks")));
+      await expect(applySqliteMigrations(db, SQLITE_MIGRATIONS.slice(0, 1))).rejects.toThrow("newer");
+      expect(await db.all("SELECT * FROM tasks ORDER BY id")).toEqual(rows);
+      expect(root.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(root.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally { root.close(); }
+  } finally { if (storage) await storage.close(context); else await db.close(); }
+}));
+
+test("SDK 1.4 sleeping task preserves deadline and next phase across cold reopen without replay", () => disk(async path => {
+  const base = await openFixture({ acquired: true });
+  await base.close();
+  let clock = 1000, waits = 0, effects = 0;
+  const wakes: { active: boolean; at?: number }[] = [];
+  const delay = defineTask<{ at: number }, { phase: "wait" } | { phase: "deliver" }, null>({
+    name: "app.upgrade-delay", version: 1, initial: () => ({ phase: "wait" }),
+    phases: {
+      wait(task, runtime, ctx) { waits++; return runtime.sleepUntil(task.input.at, { phase: "deliver" }, ctx); },
+      async deliver(_task, runtime, ctx) { effects++; await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), ctx); },
+    },
+    abort: (_task, runtime, ctx) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
+  });
+  base.registry.install(defineExtension({ name: "upgrade-delay", tasks: [delay] }));
+  const options = { models: base.models, registry: base.registry, now: () => clock, onWake: (wake: { active: boolean; at?: number }) => { wakes.push({ ...wake }); } };
+  let harness = await Harness.open(await storageAt(path), options, context);
+  try {
+    const root = await harness.root(context);
+    const id = await root.commit(tx => tx.createTask(delay, { at: 2000 }, { ownership: { kind: "conversation" } }), context);
+    harness.resume();
+    const deadline = Date.now() + 1500;
+    while ((await harness.getTask(id, context))?.state.status !== "sleeping" && Date.now() < deadline) await Bun.sleep(1);
+    const sleeping = await harness.getTask(id, context);
+    expect(sleeping?.state).toEqual({ status: "sleeping", until: 2000, checkpoint: { phase: "deliver" } });
+    expect(waits).toBe(1); expect(effects).toBe(0);
+    await harness.close(context);
+    harness = await Harness.open(await storageAt(path), options, context);
+    expect((await harness.getTask(id, context))?.state).toEqual(sleeping!.state);
+    harness.resume();
+    await Bun.sleep(5); expect(waits).toBe(1); expect(effects).toBe(0);
+    expect(wakes.some(wake => wake.at === 2000)).toBe(true);
+    clock = 2000; harness.resume();
+    const result = await harness.waitForTask(id, context);
+    expect(result.state.outcome).toEqual({ status: "completed", result: null });
+    expect(waits).toBe(1); expect(effects).toBe(1);
+    await harness.close(context);
+    harness = await Harness.open(await storageAt(path), options, context);
+    harness.resume(); await Bun.sleep(5);
+    expect(effects).toBe(1); expect(base.host.modelCalls).toBe(0);
+  } finally { await harness.close(context); }
+}));

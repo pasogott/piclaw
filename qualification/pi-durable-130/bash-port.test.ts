@@ -13,7 +13,7 @@ import { withAbortSignal } from "../../runtime/durable-engine/qualification/cont
 import type { ToolExecutionApi } from "../../runtime/durable-engine/qualification/durable.ts";
 import { createHostBashTool } from "../../runtime/durable-engine/src/index.js";
 
-// Actual root Pi 1.2.0 SDK, not a candidate coding tool or copied executor.
+// Actual root Pi 1.4.0 SDK, not a candidate coding tool or copied executor.
 // The untouched public local backend remains BLOCKED as a host-effect port:
 // it awaits fsAccess after exec admission. The opt-in tracked port below instead
 // fences its actual spawn after keychain/env resolution; it does not fix the SDK.

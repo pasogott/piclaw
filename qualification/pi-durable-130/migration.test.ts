@@ -69,7 +69,7 @@ type Mapping = { sourceEntryId: string; durableEntryId: number };
 type Manifest = { binding: null | { schemaVersion: number; sourceHash: string; chatJid: string; branchId: string;
   metadataRef: string; requestId: string; sourceSessionId: string; engineConversationId: number; entries: Mapping[] } };
 const ImportManifest = defineDoc<Manifest>({ kind: "app.legacy-import", version: 1, scope: "conversation",
-  history: "latest", fork: "initial", initial: () => ({ binding: null }) });
+  history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => ({ binding: null }) });
 
 // Bounded H5 test helper only. NO production migration runner or live sessions directory.
 function prepare(input: LegacyHistory) {
@@ -176,9 +176,9 @@ async function empty(f: Fixture) {
 }
 
 describe("H5 bounded copied existing-history qualification (not production migration)", () => {
-  test("current public SDK is 1.2.0; 5 copied records retain IDs, attachments, exact context and execute nothing", () => using(async f => {
+  test("current public SDK is 1.4.0; 5 copied records retain IDs, attachments, exact context and execute nothing", () => using(async f => {
     const pkg = await Bun.file(new URL("../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url)).json();
-    expect(pkg.version).toBe("1.2.0");
+    expect(pkg.version).toBe("1.4.0");
     expect(import.meta.resolve("@earendil-works/pi-coding-agent")).toBe(pathToFileURL(realpathSync(fileURLToPath(new URL(
       "../../node_modules/@earendil-works/pi-coding-agent/dist/index.js", import.meta.url)))).href);
     const manager = representative(), input = copied(manager), original = input.jsonl;
@@ -476,7 +476,7 @@ type AdvancedBinding = { chatJid: string; branchId: string; sourceSessionId: str
   engineConversationId: number; sourceLeafId: string | null; sourceHash: string;
   topology: { id: string; parentId: string | null }[]; entries: Mapping[] };
 const AdvancedManifest = defineDoc<{ binding: AdvancedBinding | null }>({ kind: "app.advanced-import", version: 1,
-  scope: "conversation", history: "latest", fork: "initial", initial: () => ({ binding: null }) });
+  scope: "conversation", history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => ({ binding: null }) });
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 function advancedFixture(compact = false) {
   const manager = SessionManager.inMemory(process.env.PICLAW_WORKSPACE!, { id: "qualification-advanced" });
