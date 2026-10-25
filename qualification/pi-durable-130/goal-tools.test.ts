@@ -96,8 +96,9 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-complete", "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting", "steer-complete", "steer-ordinary"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-complete", "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "compacted-accounting", "compacted-foreign-boundary", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting", "steer-complete", "steer-ordinary"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const continuation = mode === "continuation";
+  const compactedMode = mode === "compacted-accounting" || mode === "compacted-foreign-boundary";
   const steer = mode === "steer-accounting" || mode === "steer-complete" || mode === "steer-ordinary";
   const terminalSteer = mode === "steer-complete", ordinarySteer = mode === "steer-ordinary";
   const rejectRequestAuthority = mode === true;
@@ -105,7 +106,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
   const stopped = mode === "stop" || mode === "stop-accounting";
-  const accountingOnly = mode === "stop-accounting" || mode === "complete-accounting" || mode === "update-accounting";
+  const accountingOnly = mode === "stop-accounting" || mode === "complete-accounting" || mode === "compacted-accounting" || mode === "update-accounting";
   const terminalStatus = stopped ? "stopped" : "complete";
   const terminalTool = stopped ? "goal_stop" : mode === "update-accounting" ? "update_goal" : "goal_complete";
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
@@ -136,10 +137,29 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     const proof = await f.runtime!.captureToolSource(conversation, task, call);
     expect(proof.operation.chatJid).toBe(f.chatJid); captures++; return proof;
   } }) });
-  let steerText = "", steered = false;
+  let steerText = "", steered = false, compacted = false;
   const capturedCounts: number[] = [];
   const extension = defineExtension({ name: "native-goal-fixture", tools, hooks: [{ task: "pi.generation", handlers: {
-    async afterTools() {
+    async afterTools(...[_assistant, results, api, hookContext]: Parameters<import("../../runtime/durable-engine/qualification/durable.ts").GenerationHooks["afterTools"]>) {
+      if (compactedMode && !compacted) {
+        compacted = true;
+        // Use the live harness public transaction API to commit the same head
+        // marker as automatic compaction, without another provider request.
+        const harness = (f.runtime as unknown as { harness: Awaited<ReturnType<typeof Harness.open>> }).harness;
+        await harness.commit(async tx => {
+          // Cross a public entries page as well as the compaction head.
+          for (let index = 0; index < 101; index++) await tx.appendEntry(api.conversationId, { kind: "test.usage-padding", data: { index } });
+          await tx.appendEntry(api.conversationId, {
+            kind: "pi.compaction", head: results.at(-1)!, data: { reason: "auto" },
+            model: [{ role: "user", content: "Compacted Goal history; continue the accepted operation.", timestamp: Date.now() }],
+          });
+          if (mode === "compacted-foreign-boundary") await tx.appendEntry(api.conversationId, {
+            kind: "host.accepted", data: { operationId: "foreign-operation", sourceSeq: 999, requestId: "foreign-input" },
+          });
+        }, hookContext);
+        const conversation = await harness.conversation(api.conversationId, hookContext);
+        expect((await conversation!.context(hookContext)).entries.some(entry => entry.kind === "host.accepted")).toBe(false);
+      }
       if (!steer || steered) return;
       steered = true;
       const { createDurableConversationAdapter } = await import("../../runtime/src/agent-pool/durable-runtime-adapter.js");
@@ -209,6 +229,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     }
     return verified;
   };
+  const usageErrors: string[] = [];
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async prepareGoalContext(...args) {
       if (snapshotRace) await withExtensionKvAuthority({extensionId:"goal",chatJid:f.chatJid,assertCurrent(){},
@@ -246,8 +267,10 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       return captured;
     },
     async readCommittedRunUsage(conversation, task) {
-      const receipts = await f.runtime!.readCommittedRunUsage(conversation, task);
-      usageReads.push(receipts); return receipts;
+      try {
+        const receipts = await f.runtime!.readCommittedRunUsage(conversation, task);
+        usageReads.push(receipts); return receipts;
+      } catch (error) { usageErrors.push((error as Error).message); throw error; }
     },
     readCapturedInputText: inputs => f.runtime!.readCapturedInputText(inputs),
     hasGoalTerminalResult: readTerminalProof,
@@ -305,6 +328,15 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (mode === "compacted-foreign-boundary") {
+      expect(compacted).toBe(true);
+      expect(usageErrors).toEqual(["Intervening usage input boundary"]);
+      expect(modelEntries).toBe(1);
+      expect(captures).toBe(1);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 0, status: "active" });
+      return;
+    }
+    if (mode === "compacted-accounting") expect(usageErrors).toEqual([]);
     if (steer) {
       expect(steered).toBe(true);
       expect(capturedCounts).toEqual(terminalSteer ? [1, 2, 2, 2] : [1, 2]);
@@ -442,7 +474,8 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     expect(prompts[1]).toContain("Active Goal");
     // Active Goal rules are system instructions, not historical user messages.
     const activeMessages = JSON.parse(prompts[1]!);
-    expect(activeMessages.filter((m: any) => m.role === "system")).toEqual(
+    // Compaction can recreate the SDK system/settings projection.
+    if (mode !== "compacted-accounting") expect(activeMessages.filter((m: any) => m.role === "system")).toEqual(
       JSON.parse(prompts[0]!).filter((m: any) => m.role === "system"));
     expect(activeMessages.filter((m: any) => m.role === "system").some((m: any) => m.content.includes("Active Goal"))).toBe(true);
     expect(activeMessages.filter((m: any) => m.role === "user").some((m: any) => JSON.stringify(m.content).includes("Active Goal"))).toBe(false);
