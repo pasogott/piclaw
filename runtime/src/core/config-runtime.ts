@@ -921,6 +921,22 @@ export function getProgressWatchdogSafetyWarning(): string | null {
   return null;
 }
 
+/** Reject a native/UI change which a valid compatibility override would mask.
+ * Reuse the domain field parser and precedence; never rewrite process env. */
+export function assertAutoCompactionSettingWritable(enabled: boolean): void {
+  const field = compactionDomainSchema.fields.autoCompactionEnabled;
+  const env = getDomainConfigOptions().env ?? process.env;
+  for (const alias of field.compatibilityEnv ?? []) {
+    const raw = env[alias.envKey];
+    if (raw === undefined) continue;
+    let enforced: boolean;
+    try { enforced = field.validate(alias.parse ? alias.parse(raw) : raw); }
+    catch (error) { if (alias.skipInvalid) continue; throw error; }
+    if (enforced !== enabled) throw Error(`autoCompactionEnabled is overridden by ${alias.envKey}. No settings were changed.`);
+    return;
+  }
+}
+
 export function getCompactionRuntimeConfig(): Readonly<CompactionRuntimeConfig> {
   const domain = getCompactionDomainConfig();
   const resolved: CompactionRuntimeConfig = {

@@ -24,14 +24,6 @@ export interface WatchdogPhase {
   lastHeartbeat?: string;
 }
 
-export interface CompactionBackoff {
-  chatJid: string;
-  failureCount: number;
-  lastFailedAt: string;
-  backoffUntil: string;
-  lastErrorMessage: string | null;
-}
-
 export interface WorkspaceSettings {
   webTerminalEnabled?: boolean;
   vncAllowDirect?: boolean;
@@ -88,23 +80,9 @@ export interface SettingsData {
   themes?: Theme[];
   /* compaction */
   autoCompactionEnabled?: boolean;
-  smartCompactionMethod?: "selective" | "pipelined";
-  compactionModel?: string;
-  compactionLatencyEstimate?: {
-    provider: string; model: string; inputBucketMin: number; inputBucketMax: number; sampleCount: number;
-    oldestSampleAt: string; newestSampleAt: string; medianDurationMs: number; p90DurationMs: number;
-    medianTtftMs: number | null; p90TtftMs: number | null; warning: boolean; warningText: string | null;
-  } | null;
-  remoteCompactionEnabled?: boolean;
-  remoteCompactionTimeoutSec?: number;
-  remoteCompactionSupportedProviders?: string[];
-  compactionTimeoutSec?: number;
-  compactionBackoffBaseMin?: number;
-  compactionBackoffMaxMin?: number;
-  compactionThresholdPercent?: number;
+  compactionPolicy?: "pi-durable";
   progressWatchdogEnabled?: boolean;
   progressWatchdogTimeoutSec?: number;
-  compactionBackoffs?: CompactionBackoff[];
   progressWatchdogPhases?: WatchdogPhase[];
   localLitePromptProfileEnabled?: boolean;
   toolResultCompactionEnabled?: boolean;

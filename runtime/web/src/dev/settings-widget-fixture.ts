@@ -95,15 +95,8 @@ const mockSettingsData = {
   thinking_level: 'medium',
   supports_thinking: true,
   available_thinking_levels: ['off', 'minimal', 'low', 'medium', 'high'],
-  compactionModel: fixtureModelOptions[0].label,
-  compactionLatencyEstimate: {
-    provider: fixtureModelOptions[0].provider, model: fixtureModelOptions[0].id,
-    inputBucketMin: 32768, inputBucketMax: 65536, sampleCount: 5,
-    oldestSampleAt: '2026-08-28T10:00:00Z', newestSampleAt: '2026-08-30T10:00:00Z',
-    medianDurationMs: 240000, p90DurationMs: 290000, medianTtftMs: 180000, p90TtftMs: 220000,
-    warning: true,
-    warningText: 'Observed compaction may approach the configured deadline. Consider a faster/smaller compaction model, progressive compaction, or a longer deadline.',
-  },
+  autoCompactionEnabled: true,
+  compactionPolicy: 'pi-durable',
   themes: [
     { id: 'system', label: 'System', dark: false },
     { id: 'ipad-pro', label: 'iPad Pro', dark: true },
@@ -192,8 +185,7 @@ function installMockFetch() {
     if (!mockMode) return originalFetch(input, init);
 
     if (url.pathname === '/agent/settings-data') {
-      const configuredModel = new URLSearchParams(window.location.search).get('compaction_model');
-      return json(configuredModel === null ? mockSettingsData : { ...mockSettingsData, compactionModel: configuredModel });
+      return json(mockSettingsData);
     }
     if (url.pathname === '/agent/models') return json(mockModelsPayload);
     if (url.pathname === '/agent/addons') return json(mockAddonsPayload);
@@ -207,12 +199,12 @@ function installMockFetch() {
     if (url.pathname === '/agent/settings/budget/action') return json({ ...mockBudgetPayload, continuation_required: true });
     if (url.pathname === '/agent/scheduled-tasks') return json(mockScheduledTasksPayload);
     if (url.pathname === '/agent/scheduled-tasks/action') return json({ ok: true, action: 'fixture', task: mockScheduledTasksPayload.tasks[0] });
-    if (url.pathname === '/agent/settings/compaction/probe') {
-      const body = init?.body ? JSON.parse(String(init.body)) : {};
-      return json({ ok: true, model: body.model || mockSettingsData.current, contextWindow: 128000, timeoutMs: 30000, responseReceived: true, credentialStatus: 'verified', stage: 'completed', timeToFirstTokenMs: 42, durationMs: 84, compactionLatencyEstimate: mockSettingsData.compactionLatencyEstimate, error: null });
-    }
     if (url.pathname === '/agent/settings/widget-token/regenerate') return json({ ok: true, settings: { ...mockSettingsData, widgetToken: `piclaw_widget_fixture_regenerated_${Date.now()}` } });
     if (url.pathname.startsWith('/agent/default/message')) return json({ command: { status: 'success', message: 'Fixture command accepted.' } });
+    if (url.pathname === '/agent/settings/compaction' && method === 'POST') {
+      Object.assign(mockSettingsData, JSON.parse(String(init?.body || '{}')));
+      return json({ ok: true, settings: mockSettingsData });
+    }
     if (url.pathname.startsWith('/agent/settings/')) return json({ ok: true, settings: mockSettingsData, items: [], entries: [] });
     if (url.pathname === '/agent/client-perf') return json({ ok: true });
 

@@ -27,7 +27,7 @@ import {
 } from "../handlers/addons.js";
 import { handleBudgetSettingsAction, handleBudgetSettingsRead } from "../handlers/budget-settings.js";
 import { handleMcpSettings } from "../handlers/mcp-settings.js";
-import { getCompactionSettingsData, resetCompactionBackoff, saveCompactionSettings } from "../handlers/compaction-settings.js";
+import { getCompactionSettingsData, saveCompactionSettings } from "../handlers/compaction-settings.js";
 import {
   buildGeneralSettingsProfileUpdate,
   getGeneralSettingsData,
@@ -572,35 +572,12 @@ const EXACT_AGENT_ROUTES: ExactAgentRoute[] = [
   {
     method: "POST",
     path: "/agent/settings/compaction/probe",
-    handle: async (channel, req) => {
-      try {
-        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-        const model = typeof body.model === "string" ? body.model.trim() : "";
-        if (!model) return channel.json({ error: "Provide an exact provider/model compaction model." }, 400);
-        const result = await channel.agentPool.probeCompactionModel(model);
-        return channel.json(result, result.ok ? 200 : 422);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return channel.json({ error: message || "Compaction model probe failed." }, 400);
-      }
-    },
+    handle: (channel) => channel.json({ error: "Native compaction uses the active conversation model; separate compaction-model probes are unsupported." }, 410),
   },
   {
     method: "POST",
     path: "/agent/settings/compaction/reset-backoff",
-    handle: async (channel, req) => {
-      try {
-        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-        const chatJid = typeof body.chatJid === "string" ? body.chatJid.trim() : "";
-        if (!chatJid) {
-          return channel.json({ error: "Provide chatJid." }, 400);
-        }
-        return channel.json({ ok: true, settings: resetCompactionBackoff(chatJid) });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return channel.json({ error: message || "Failed to reset compaction backoff." }, 400);
-      }
-    },
+    handle: (channel) => channel.json({ error: "Native compaction does not use legacy chat backoffs; historical records are preserved." }, 410),
   },
   // ── Keychain management ──────────────────────────────────────────────
   {
