@@ -12,7 +12,7 @@
  */
 
 import type Database from 'bun:sqlite';
-import type { TokenUsageRecord } from "./usage-report-types.js";
+import type { TokenUsageRecord, TokenUsageSource, TokenUsageCostProvenance } from "./usage-report-types.js";
 import { getDb } from "./connection.js";
 import { insertBudgetUsageEvent } from "./budget-limits.js";
 import { decodeUsageReport, encodeUsageReport, projectUsageEvent, readUsageProjectionEvent, tokenReportColumns, usageReportRecord, type UsageReportOrigin, unlinkedUsageReportPredicate } from "./usage-report-projection.js";
@@ -34,10 +34,10 @@ export interface TokenUsageTotalsSummary {
 }
 
 /** Source category for a persisted usage record. */
-export type TokenUsageSource = "assistant" | "tool" | "compaction" | "branch_summary" | "unknown";
+export type { TokenUsageSource } from "./usage-report-types.js";
 
 /** Provenance for the effective per-run total cost. */
-export type TokenUsageCostProvenance = "provider_reported" | "catalogue_estimate" | "unavailable";
+export type { TokenUsageCostProvenance } from "./usage-report-types.js";
 
 /** Latest token/cost record for a chat, including cache-hit telemetry. */
 export interface LatestTokenUsageSummary extends TokenUsageTotalsSummary {

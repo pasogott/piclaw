@@ -68,3 +68,7 @@ export interface TokenUsageRecord {
   pricing_cache_fallbacks?: string | null;
   execution_kind?: import("../budget/types.js").BudgetExecutionKind | null;
 }
+
+export type TokenUsageSource = "assistant" | "tool" | "compaction" | "branch_summary" | "unknown";
+
+export type TokenUsageCostProvenance = "provider_reported" | "catalogue_estimate" | "unavailable";
