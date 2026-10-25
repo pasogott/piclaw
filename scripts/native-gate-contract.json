@@ -102,6 +102,7 @@
     "model-failure.test.ts",
     "models.test.ts",
     "native-admission-boundary.test.ts",
+    "native-compaction-settings.test.ts",
     "native-control-bootstrap.test.ts",
     "native-core-consumers.test.ts",
     "native-critical-controls.test.ts",
