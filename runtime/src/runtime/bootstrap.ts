@@ -112,14 +112,25 @@ export async function createRecoverableRuntimeBackend(prepare: () => Promise<Run
       channelBindings = current.bind(binding);
       // The channel captures callbacks during construction. Future calls must use
       // freshly prepared admission scopes, never the closed backend callbacks.
-      return Object.freeze(Object.fromEntries(Object.entries(channelBindings).map(([key, value]) => [key,
-        typeof value === "function" ? (...args: unknown[]) => {
-          assertLive();
-          const callback = (channelBindings as unknown as Record<string, unknown>)[key];
-          if (typeof callback !== "function") throw Error("Native channel binding unavailable: " + key);
-          return Reflect.apply(callback, channelBindings, args);
-        } : value,
-      ]))) as Readonly<WebChannelOpts>;
+      const forward = (key: string, member?: "waitForPending") => (...args: unknown[]) => {
+        assertLive();
+        const callback = (channelBindings as unknown as Record<string, unknown>)[key];
+        if (typeof callback !== "function") throw Error("Native channel binding unavailable: " + key);
+        if (member) {
+          const method = (callback as unknown as Record<string, unknown>)[member];
+          if (typeof method !== "function") throw Error("Native channel binding method unavailable: " + key + "." + member);
+          return Reflect.apply(method, callback, args);
+        }
+        return Reflect.apply(callback, channelBindings, args);
+      };
+      return Object.freeze(Object.fromEntries(Object.entries(channelBindings).map(([key, value]) => {
+        if (typeof value !== "function") return [key, value];
+        const callback = forward(key);
+        // Dispatch is callable and owns a pending observer. Both must follow the
+        // replacement backend; copying its old method would retain closed ownership.
+        if (key === "dispatchAcceptedInput") Object.assign(callback, { waitForPending: forward(key, "waitForPending") });
+        return [key, callback];
+      }))) as Readonly<WebChannelOpts>;
     },
     async attachChannel(value: Parameters<NonNullable<RuntimeBackend["attachChannel"]>>[0]) { await ready(); channel = value; await current.attachChannel?.(value); },
     stop() { if (stopping) return; stopping = true; current.stop(); },

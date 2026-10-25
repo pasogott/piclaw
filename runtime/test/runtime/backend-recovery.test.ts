@@ -121,3 +121,53 @@ test("channel callbacks captured at startup use fresh admission scopes after reo
   expect(trace.filter(value => value.endsWith(":prepare"))).toEqual(["old:prepare", "new:prepare"]);
   await backend.close();
 });
+
+function observingFixture(name: string, trace: string[]) {
+  const f = fixture(name, trace);
+  const dispatch = Object.assign(async () => { trace.push(name + ":dispatch"); return "pending" as const; }, {
+    async waitForPending(this: unknown, identity: { chatJid: string; messageId: string; rowId: number }) {
+      expect(this).toBe(dispatch);
+      trace.push(name + ":observe:" + identity.messageId);
+      return "settled" as const;
+    },
+  });
+  f.backend.bind = options => Object.freeze({ ...options, dispatchAcceptedInput: dispatch });
+  return f;
+}
+
+test("channel recovery facade preserves callable pending observer before first recovery", async () => {
+  const trace: string[] = [], f = observingFixture("initial", trace);
+  const backend = await createRecoverableRuntimeBackend(async () => f.backend);
+  const coordinator = backend.bind({} as any).dispatchAcceptedInput!;
+  const wait = coordinator.waitForPending.bind(coordinator); // Actual web handler call shape.
+  expect(await coordinator("web:test", "accepted", 1)).toBe("pending");
+  expect(await wait({ chatJid: "web:test", messageId: "accepted", rowId: 1 })).toBe("settled");
+  expect(trace).toEqual(["initial:dispatch", "initial:observe:accepted"]);
+  await backend.close();
+});
+
+test("captured pending observer follows replacement ownership and rejects after close", async () => {
+  const trace: string[] = [], a = observingFixture("old", trace), b = observingFixture("new", trace);
+  let prepares = 0;
+  failAbort(a);
+  const backend = await createRecoverableRuntimeBackend(async () => (++prepares === 1 ? a : b).backend);
+  const coordinator = backend.bind({} as any).dispatchAcceptedInput!;
+  const wait = coordinator.waitForPending.bind(coordinator);
+  expect(await backend.sessionOptions.getDurableSession!("web:test")!.abort!()).toBe(true);
+  expect(await coordinator("web:test", "accepted", 1)).toBe("pending");
+  expect(await wait({ chatJid: "web:test", messageId: "accepted", rowId: 1 })).toBe("settled");
+  expect(trace.filter(value => value.includes(":dispatch") || value.includes(":observe:"))).toEqual(["new:dispatch", "new:observe:accepted"]);
+  expect(b.state.calls).toEqual([original]);
+  await backend.close();
+  expect(() => wait({ chatJid: "web:test", messageId: "accepted", rowId: 1 })).toThrow("Native runtime closing");
+});
+
+test("missing backend pending observation fails closed instead of settling accepted work", async () => {
+  const f = fixture("invalid", []);
+  f.backend.bind = options => ({ ...options, dispatchAcceptedInput: (async () => "pending") as any });
+  const backend = await createRecoverableRuntimeBackend(async () => f.backend);
+  const coordinator = backend.bind({} as any).dispatchAcceptedInput!;
+  expect(() => coordinator.waitForPending({ chatJid: "web:test", messageId: "accepted", rowId: 1 }))
+    .toThrow("Native channel binding method unavailable: dispatchAcceptedInput.waitForPending");
+  await backend.close();
+});
