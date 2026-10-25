@@ -212,8 +212,9 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
         await base.close();
         writeFileSync(join(dir, "task.txt"), "MUTATED_FILE_CONTENT");
         expect(cleared).toBe(1);
-        const now = Date.now() + 11_000;
-        clock = spyOn(Date, "now").mockReturnValue(now);
+        // Advance the clock past expiry without freezing SDK wake/observation scheduling.
+        const realNow = Date.now.bind(Date);
+        clock = spyOn(Date, "now").mockImplementation(() => realNow() + 11_000);
         base = await open();
         expect(await deadlines()).toEqual(originalDeadlines);
         base.harness.resume();

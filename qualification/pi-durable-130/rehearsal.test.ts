@@ -77,7 +77,7 @@ async function using(run: (dir: string, f: ReturnType<typeof fixture>) => Promis
 async function invoke(dir: string, destination: string, extra: string[] = [], source = join(dir, "copied.jsonl")) {
   const child = Bun.spawn([process.execPath, "--preload", join(dir, "guard.ts"), cli,
     "--source", source, "--manifest", join(dir, "manifest.json"), "--destination", destination, ...extra], {
-    cwd: dir, env: { HOME: join(dir, "home"), PATH: "/usr/bin:/bin", PI_CODING_AGENT_DIR: join(dir, "home", "agent"),
+    cwd: dir, env: { PICLAW_LOG_LEVEL: "debug", HOME: join(dir, "home"), PATH: "/usr/bin:/bin", PI_CODING_AGENT_DIR: join(dir, "home", "agent"),
       PICLAW_WORKSPACE: dir, PICLAW_STORE: join(dir, "unused-store") }, stdout: "pipe", stderr: "pipe",
   });
   let timedOut = false;

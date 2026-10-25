@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeEnvValue } from "../../src/core/env.js";
 /** INACTIVE, source-executed copied-store rehearsal. Never imports the host application. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -86,7 +87,7 @@ export async function rehearse(args: string[]) {
     const rootRequire = createRequire(new URL("../../../package.json", import.meta.url));
     const packagePath = rootRequire.resolve("@earendil-works/pi-coding-agent/package.json");
     const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
-    check(pkg.version === "1.2.0", "import_unsupported");
+    check(pkg.version === "1.4.0", "import_unsupported");
     const legacy = await import("../../src/durable-legacy-sdk.js");
     const bridge: GetLegacyContext = (entries, leaf) => {
       const detached = json([...entries]);
@@ -157,6 +158,8 @@ export async function rehearse(args: string[]) {
 }
 
 if (import.meta.main) {
+  // Machine-readable CLI stdout must not include asynchronous checkpoint diagnostics.
+  writeEnvValue("PICLAW_LOG_LEVEL", "error");
   try { console.log(JSON.stringify(await rehearse(process.argv.slice(2)))); }
   catch (error) {
     // Never print raw exceptions: SDK/assertion errors can contain prompts or paths.
