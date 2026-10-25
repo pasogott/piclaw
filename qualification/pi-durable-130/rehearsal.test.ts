@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SessionManager, buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
+import { RehearsalSqliteDatabase } from "../../runtime/durable-engine/src/rehearsal-sqlite.js";
 
 const cli = resolve(import.meta.dir, "../../runtime/durable-engine/src/rehearse.ts");
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -92,6 +93,52 @@ async function invoke(dir: string, destination: string, extra: string[] = [], so
     console.info(`[rehearsal-cli] ${Math.round(performance.now() - started)}ms`);
   }
 }
+
+test("rehearsal SQLite keeps FULL durability, rolls back, expires handles and drains admitted work before close", () => using(async dir => {
+  const path = join(dir, "adapter.sqlite");
+  await writeFile(path, "", { mode: 0o600, flag: "wx" });
+  const db = new RehearsalSqliteDatabase(path);
+  try {
+    expect(await db.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
+    expect(await db.get("PRAGMA synchronous")).toEqual({ synchronous: 2 });
+    expect(await db.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
+    expect(await db.get("PRAGMA secure_delete")).toEqual({ secure_delete: 1 });
+    expect(await db.get("PRAGMA busy_timeout")).toEqual({ timeout: 0 });
+    expect(await db.get("PRAGMA wal_autocheckpoint")).toEqual({ wal_autocheckpoint: 1000 });
+    await db.exec("CREATE TABLE evidence (id INTEGER PRIMARY KEY)");
+    await expect(db.transaction(async tx => {
+      await tx.run("INSERT INTO evidence VALUES (?)", 1);
+      throw new Error("injected rollback");
+    })).rejects.toThrow("injected rollback");
+    expect(await db.all("SELECT * FROM evidence")).toEqual([]);
+    let expired!: Parameters<Parameters<typeof db.transaction>[0]>[0];
+    await db.transaction(async tx => {
+      expired = tx;
+      await expect(db.get("SELECT 1")).rejects.toThrow("transaction handle");
+      await expect(db.close()).rejects.toThrow("transaction handle");
+      await tx.run("INSERT INTO evidence VALUES (?)", 2);
+    });
+    await expect(expired.get("SELECT 1")).rejects.toThrow("expired");
+    const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const write = db.transaction(async tx => {
+      started.resolve();
+      await release.promise;
+      await tx.run("INSERT INTO evidence VALUES (?)", 3);
+    });
+    await started.promise;
+    const read = db.all("SELECT * FROM evidence ORDER BY id");
+    const closing = db.close();
+    await expect(db.get("SELECT 1")).rejects.toThrow("closed");
+    release.resolve();
+    await write;
+    expect(await read).toEqual([{ id: 2 }, { id: 3 }]);
+    await closing;
+    expect(db.close()).toBe(closing);
+  } finally { await db.close(); }
+  const reopened = new RehearsalSqliteDatabase(path);
+  try { expect(await reopened.all("SELECT * FROM evidence ORDER BY id")).toEqual([{ id: 2 }, { id: 3 }]); }
+  finally { await reopened.close(); }
+}));
 
 test("CLI imports all four leaves with original identities, tools/images/compaction; closes and publicly reopens paused", () => using(async (dir, f) => {
   const before = await readFile(join(dir, "copied.jsonl"));
