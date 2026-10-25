@@ -518,7 +518,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
           ...(stopped ? { stopSummary: "Verified live transition" } : { completionSummary: "Verified live transition" }) } } });
     } finally { await reader.close(context); }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); await f.close(); await rm(dir, { recursive: true, force: true }); }
-});
+}, 30_000); // File-backed harness/receipt integration under bounded CI resources.
 
 test("prepared Goal text and accepted source commit together; stale lifecycle rolls admission back", async () => {
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
