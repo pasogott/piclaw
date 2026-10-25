@@ -131,6 +131,7 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
     const readFiles = createHostDelegateFileReader(dir);
     let fire: (() => void) | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const realNow = Date.now.bind(Date);
     const realTimer = globalThis.setTimeout, realClear = globalThis.clearTimeout;
     const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number, ...args: unknown[]) => {
       if (ms !== undefined && ms <= 10000 && new Error().stack?.split("\n")[3]?.includes("host-delegate-tool.ts")) {
@@ -212,8 +213,9 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
         await base.close();
         writeFileSync(join(dir, "task.txt"), "MUTATED_FILE_CONTENT");
         expect(cleared).toBe(1);
-        // Advance the clock past expiry without freezing SDK wake/observation scheduling.
-        const realNow = Date.now.bind(Date);
+        // Advance beyond A's persisted deadline, but keep time moving: SDK 1.4
+        // paces awaited progress commits against its Harness clock. Freezing it
+        // prevents the replay from getting past progress publication to expiry.
         clock = spyOn(Date, "now").mockImplementation(() => realNow() + 11_000);
         base = await open();
         expect(await deadlines()).toEqual(originalDeadlines);

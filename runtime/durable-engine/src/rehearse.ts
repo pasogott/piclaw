@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { writeEnvValue } from "../../src/core/env.js";
 /** INACTIVE, source-executed copied-store rehearsal. Never imports the host application. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -10,7 +9,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { Harness, createRegistry, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { BunSqliteDatabase } from "./bun-sqlite.js";
+import { RehearsalSqliteDatabase } from "./rehearsal-sqlite.js";
 import { importCopiedLegacyTree, prepareLegacyTreeImport, LegacyImportManifest, LegacyTreeImportManifest,
   type CopiedLegacyTreeInput, type GetLegacyContext } from "./legacy-import.js";
 
@@ -82,7 +81,7 @@ export async function rehearse(args: string[]) {
       hostBranchBindings: manifest.hostBranchBindings as CopiedLegacyTreeInput["hostBranchBindings"] };
 
     stage = "import_unsupported";
-    // Root Pi120 public export, anchored OUTSIDE the candidate dependency graph.
+    // Root SDK1.4 public export, anchored OUTSIDE the engine dependency graph.
     // Only detached JSON crosses this bridge; no contexts, engines or SDK runtimes.
     const rootRequire = createRequire(new URL("../../../package.json", import.meta.url));
     const packagePath = rootRequire.resolve("@earendil-works/pi-coding-agent/package.json");
@@ -116,7 +115,7 @@ export async function rehearse(args: string[]) {
     writeFileSync(join(destination, "rehearsal.sqlite"), "", { mode: 0o600, flag: "wx" });
     const denied = async (): Promise<never> => { throw new Error("Rehearsal denies credential access"); };
     const open = async () => {
-      const db = new BunSqliteDatabase(join(destination, "rehearsal.sqlite"));
+      const db = new RehearsalSqliteDatabase(join(destination, "rehearsal.sqlite"));
       try {
         const storage = await SqliteStorage.open(db);
         return await Harness.open(storage, { models: createModels({ authContext: { env: denied, fileExists: denied } }),
@@ -158,8 +157,6 @@ export async function rehearse(args: string[]) {
 }
 
 if (import.meta.main) {
-  // Machine-readable CLI stdout must not include asynchronous checkpoint diagnostics.
-  writeEnvValue("PICLAW_LOG_LEVEL", "error");
   try { console.log(JSON.stringify(await rehearse(process.argv.slice(2)))); }
   catch (error) {
     // Never print raw exceptions: SDK/assertion errors can contain prompts or paths.

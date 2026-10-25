@@ -54,6 +54,8 @@ test("1.4.0 public SDK, MCP and ToolLoadout.getPromptGuidelines types compile wi
   expect(MCP_VERSION).toBe("1.4.0");
   expect(MCP_GIT_HEAD).toBe("4a080252f06caf63a525d7873c5d94d3c23887e0");
   const receipt = checkMcpPublic140(root);
+  const fresh = JSON.parse(readFileSync(resolve(root, "docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-140-mcp-public.json"), "utf8"));
+  expect(receipt).toEqual(fresh.compile);
   expect(receipt).toMatchObject({ version: "1.4.0", referenceGitHead: "4a080252f06caf63a525d7873c5d94d3c23887e0", positive: "pass", scope: "public_type_contract_only", nativeParity: "not_qualified", productionActivation: false });
   expect(receipt.packages).toEqual(["pi-coding-agent", "pi-mcp", "pi-codemode"].map(name => ({ name: "@earendil-works/" + name, version: "1.4.0" })));
   expect(receipt.negative).toEqual([
