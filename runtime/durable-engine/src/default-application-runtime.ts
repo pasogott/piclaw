@@ -256,6 +256,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const officeViewer = qualifyInstalledOfficeViewer(catalog, WORKSPACE_DIR);
   const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR), goal = await qualifyInstalledGoal(catalog, WORKSPACE_DIR);
   const lifetime = new AbortController();
+  let notifyStorageFailure!: (error: unknown) => void;
+  const storageFailure = new Promise<unknown>(resolve => { notifyStorageFailure = resolve; });
   const remotePeer = await qualifyInstalledAddon(catalog, WORKSPACE_DIR, "remote-peer");
   const remoteNative = remotePeer?.nativeExports["native.ts"] as any;
   let remotePorts: any;
@@ -1158,7 +1160,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     historicalBindings: true,
     async createConversation(tx, chatJid, branchId) { return publishApplicationBinding(tx, mapping.domain, chatJid, branchId); },
-    runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
+    runtime: { onStorageFailure: notifyStorageFailure, incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
   if (remotePeer) {
     const native = await import(pathToFileURL(join(remotePeer.source.packageDir, "native.ts")).href);
@@ -1221,7 +1223,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   }
   if (!offlineMaintenance) await bundle.retryRecoveredWork();
   let closing: Promise<void> | undefined;
-  const backend: RuntimeBackend = { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
+  const backend: RuntimeBackend = { storageFailure, sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
       const position = bundle.sessionOptions.getDurableSession?.(chat);
       return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
     },

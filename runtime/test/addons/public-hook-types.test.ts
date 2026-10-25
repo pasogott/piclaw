@@ -3,10 +3,12 @@ import{mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync}from'node:fs';imp
 // Packing, extraction and each independent compiler retain their own deadline.
 // The parent budget must cover all four serial subprocesses plus fixture cleanup.
 const stageTimeoutMs=30_000;
-const testTimeoutMs=4*stageTimeoutMs+5_000;
-function runStage(stage:string,command:string[],cwd?:string){
+// A cold pack scans the full payload under the capped local gate; compiler deadlines stay unchanged.
+const packTimeoutMs=60_000;
+const testTimeoutMs=packTimeoutMs+3*stageTimeoutMs+5_000;
+function runStage(stage:string,command:string[],cwd?:string,timeoutMs=stageTimeoutMs){
  const start=performance.now();
- const result=Bun.spawnSync(command,{cwd,stdout:"pipe",stderr:"pipe",timeout:stageTimeoutMs,killSignal:"SIGKILL"});
+ const result=Bun.spawnSync(command,{cwd,stdout:"pipe",stderr:"pipe",timeout:timeoutMs,killSignal:"SIGKILL"});
  console.info(`[public-hook-types] ${stage}: ${Math.round(performance.now()-start)}ms`);
  if(result.exitCode!==0||result.signalCode)throw Error(`${stage} failed (exit=${result.exitCode}, signal=${result.signalCode??"none"}):\n${result.stdout.toString()}${result.stderr.toString()}`);
  return result;
@@ -14,7 +16,7 @@ function runStage(stage:string,command:string[],cwd?:string){
 test('packed public declarations compile independently and match core contracts',async()=>{
  const root=join(import.meta.dir,'../../..');const temp=mkdtempSync(join(tmpdir(),'addon-hook-types-'));
  try{
-  const archive=join(temp,'piclaw.tgz');const pack=runStage('pack',['bun','pm','pack','--ignore-scripts','--filename',archive],root);if(pack.exitCode)throw Error(pack.stderr.toString());
+  const archive=join(temp,'piclaw.tgz');const pack=runStage('pack',['bun','pm','pack','--ignore-scripts','--filename',archive],root,packTimeoutMs);if(pack.exitCode)throw Error(pack.stderr.toString());
   const installed=join(temp,'node_modules/piclaw');mkdirSync(installed,{recursive:true});const extract=runStage('extract',['tar','xzf',archive,'--strip-components=1','-C',installed]);expect(extract.exitCode).toBe(0);
   writeFileSync(join(temp,'consumer.ts'),`import type {ComposerDictationAddonApi,AuthenticatedSocketAddonApi} from 'piclaw/runtime/public/addon-hooks';
 export function register(web:ComposerDictationAddonApi,sockets:AuthenticatedSocketAddonApi){

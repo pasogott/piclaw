@@ -6,10 +6,13 @@ import type { NativeTurnViewChannel } from "../channels/web/agent/native-turn-vi
 import { AgentPool } from "../agent-pool.js";
 import { assertDurableEngineDependencies } from "./durable-engine-dependencies.js";
 import type { AgentPoolOptions } from "../agent-pool.js";
+import type { DurableAbortScope } from "../agent-pool/durable-runtime-adapter.js";
 import type { WebChannelOpts } from "../channels/web.js";
 
 /** One prepared backend, owned by bootstrap from construction through queue join. */
 export interface RuntimeBackend {
+  /** Resolves only after a failed public SDK session has closed its storage. */
+  readonly storageFailure?: Promise<unknown>;
   readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
@@ -19,6 +22,115 @@ export interface RuntimeBackend {
   /** Close the borrowed scope after queue join, never the application's global owner. */
   close(): Promise<void>;
 }
+/** Recreate only a backend whose public SDK session has finished failed-storage cleanup. */
+export async function createRecoverableRuntimeBackend(prepare: () => Promise<RuntimeBackend>): Promise<RuntimeBackend> {
+  let current = await prepare();
+  let recovery: Promise<void> | undefined;
+  let failed: RuntimeBackend | undefined;
+  let stopping = false;
+  let closing: Promise<void> | undefined;
+  let binding: Parameters<RuntimeBackend["bind"]>[0] | undefined;
+  let channelBindings: Readonly<WebChannelOpts> | undefined;
+  let channel: Parameters<NonNullable<RuntimeBackend["attachChannel"]>>[0] | undefined;
+  const log = createLogger("runtime.storage-recovery");
+  const assertLive = () => { if (stopping) throw Error("Native runtime closing"); };
+  const ready = async () => { assertLive(); if (recovery) await recovery; assertLive(); };
+  const observe = (backend: RuntimeBackend) => {
+    if (!backend.storageFailure) return;
+    void backend.storageFailure.then(error => {
+      if (stopping || current !== backend) return;
+      failed = backend;
+      log.error("Native session failed; reopening after confirmed storage closure", { operation: "native_storage.recover", err: error });
+      recovery = Promise.resolve().then(async () => {
+        backend.stop();
+        // Cleanup uncertainty retains ownership and prevents a replacement from opening.
+        await backend.close();
+        if (stopping) return;
+        const next = await prepare();
+        if (stopping) { next.stop(); await next.close(); return; }
+        current = next;
+        try {
+          if (binding) channelBindings = next.bind(binding);
+          if (channel) await next.attachChannel?.(channel);
+        } catch (error) {
+          next.stop();
+          try { await next.close(); } catch (cleanup) { throw new AggregateError([error, cleanup], "Native recovery cleanup uncertain"); }
+          throw error;
+        }
+        observe(next);
+        log.info("Native session reopened from persisted work", { operation: "native_storage.recovered" });
+      });
+      void recovery.catch(error => log.error("Native recovery failed; automatic retry disabled", { operation: "native_storage.recovery_failed", err: error }));
+    }).catch(error => log.error("Invalid native storage-failure notification", { operation: "native_storage.notification_failed", err: error }));
+  };
+  observe(current);
+  const getDurableSession: NonNullable<RuntimeBackend["sessionOptions"]["getDurableSession"]> = chat => {
+    assertLive();
+    const backend = current;
+    const port = backend.sessionOptions.getDurableSession?.(chat);
+    if (!port) return undefined;
+    const abort = (method: "abort" | "abortRetry") => port[method] ? async (expected?: DurableAbortScope) => {
+      assertLive();
+      const live = await port.readAbortScope?.();
+      if (live === null) return false;
+      if (expected && (!live || expected.operationId !== live.operationId || expected.conversationId !== live.conversationId || expected.sourceSeq !== live.sourceSeq)) return false;
+      const scope = live && Object.freeze({ operationId: live.operationId, conversationId: live.conversationId, sourceSeq: live.sourceSeq });
+      if (scope && (typeof scope.operationId !== "string" || !scope.operationId || !Number.isSafeInteger(scope.conversationId) || scope.conversationId <= 0 || !Number.isSafeInteger(scope.sourceSeq) || scope.sourceSeq <= 0)) throw Error("Invalid abort recovery scope");
+      try { return await port[method]!(scope); }
+      catch (error) {
+        // Never replay arbitrary controls, tools, dispatches or a newer operation.
+        if (!scope || failed !== backend || !recovery) throw error;
+        await ready();
+        const next = current.sessionOptions.getDurableSession?.(chat);
+        if (!next || next.sessionId !== port.sessionId || next.branchId !== port.branchId || !next[method]) throw error;
+        return next[method]!(scope);
+      }
+    } : undefined;
+    return Object.freeze({ ...port, abort: abort("abort"), abortRetry: abort("abortRetry") });
+  };
+  const sessionOptions: RuntimeBackend["sessionOptions"] = Object.freeze({
+    getDurableSession,
+    dispatchScheduledAgent: current.sessionOptions.dispatchScheduledAgent ? async (...args) => {
+      await ready();
+      if (!current.sessionOptions.dispatchScheduledAgent) throw Error("Native scheduled dispatch unavailable");
+      return current.sessionOptions.dispatchScheduledAgent(...args);
+    } : undefined,
+    dispatchSidePrompt: current.sessionOptions.dispatchSidePrompt ? async (...args) => {
+      await ready();
+      if (!current.sessionOptions.dispatchSidePrompt) throw Error("Native side dispatch unavailable");
+      return current.sessionOptions.dispatchSidePrompt(...args);
+    } : undefined,
+    dispatchHostCommand: current.sessionOptions.dispatchHostCommand ? async (...args) => {
+      await ready();
+      if (!current.sessionOptions.dispatchHostCommand) throw Error("Native command dispatch unavailable");
+      return current.sessionOptions.dispatchHostCommand(...args);
+    } : undefined,
+  });
+  return Object.freeze({ sessionOptions,
+    bind(options: Parameters<RuntimeBackend["bind"]>[0]) {
+      assertLive(); binding = { queue: options.queue, agentPool: options.agentPool };
+      channelBindings = current.bind(binding);
+      // The channel captures callbacks during construction. Future calls must use
+      // freshly prepared admission scopes, never the closed backend callbacks.
+      return Object.freeze(Object.fromEntries(Object.entries(channelBindings).map(([key, value]) => [key,
+        typeof value === "function" ? (...args: unknown[]) => {
+          assertLive();
+          const callback = (channelBindings as unknown as Record<string, unknown>)[key];
+          if (typeof callback !== "function") throw Error("Native channel binding unavailable: " + key);
+          return Reflect.apply(callback, channelBindings, args);
+        } : value,
+      ]))) as Readonly<WebChannelOpts>;
+    },
+    async attachChannel(value: Parameters<NonNullable<RuntimeBackend["attachChannel"]>>[0]) { await ready(); channel = value; await current.attachChannel?.(value); },
+    stop() { if (stopping) return; stopping = true; current.stop(); },
+    close() { return closing ??= (async () => {
+      stopping = true; current.stop();
+      if (recovery) await recovery;
+      await current.close();
+    })(); },
+  });
+}
+
 export { RuntimeStartupCleanupError } from "./shutdown.js";
 import assert from "node:assert/strict";
 import { WebChannel } from "../channels/web.js";
@@ -175,7 +287,8 @@ async function prepareDefaultApplicationBackend(owner: RuntimeLockHandle, models
     throw cause;
   }
   if (typeof engine.createDefaultApplicationRuntime !== "function") throw new Error("Durable engine contract missing createDefaultApplicationRuntime");
-  return engine.createDefaultApplicationRuntime(owner, models);
+  const prepare = engine.createDefaultApplicationRuntime;
+  return createRecoverableRuntimeBackend(() => prepare(owner, models));
 }
 
 export function createDefaultRuntimeBootstrapDeps(
