@@ -227,6 +227,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
 export class HostConversationRuntime {
   private closed = false;
   private changingModel = false;
+  private sessionCommandChat?: string;
   private storageClosing = false;
   private readonly storageEnded: Promise<void>;
   private commandBash = new Map<string, AbortController>();
@@ -716,6 +717,7 @@ export class HostConversationRuntime {
     });
   }
   runSessionBash(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}, command: string) {
+    binding = Object.freeze({ ...binding });
     if (!command.trim() || command.length > 65536) return Promise.reject(Error("Usage: /bash <command> (maximum 64KiB)"));
     if (this.commandBash.has(binding.chatJid)) return Promise.reject(Error("Bash command is already running"));
     const controller = new AbortController(); this.commandBash.set(binding.chatJid, controller);
@@ -723,7 +725,7 @@ export class HostConversationRuntime {
       let output = "", truncated = false, exitCode: number | null = null, executionError: unknown;
       const decoder = new TextDecoder();
       try {
-        const bash = createTrackedBashOperations({ validateSpawn: () => { this.fence(); return !controller.signal.aborted; } });
+        const bash = createTrackedBashOperations({ validateSpawn: () => { this.assertSessionCommandBinding(binding); return !controller.signal.aborted; } });
         const result = await withChatContext(binding.chatJid, binding.chatJid.startsWith("web:") ? "web" : "unknown", () => bash.exec(command, process.cwd(), {
           signal: controller.signal, timeout: 30,
           onData(data) { const text = decoder.decode(data, {stream:true}); const left = 20000 - output.length; output += text.slice(0, Math.max(0,left)); if(text.length > left) truncated = true; },
@@ -757,20 +759,31 @@ export class HostConversationRuntime {
     if (wait) await this.commandBashWaits.get(binding.chatJid)?.catch(() => {});
     this.fence(); return true;
   }
-  private async runSessionCommand<T>(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}, body: (conversation: NonNullable<Awaited<ReturnType<Harness["conversation"]>>>) => Promise<T>): Promise<T> {
+  /** Synchronous branch-policy fence over the runtime's existing control state. */
+  assertBranchControlsIdle(chats: readonly string[]): void {
+    this.fence();
+    if (chats.some(chat => this.commandBash.has(chat) || this.sessionCommandChat === chat || this.maintenanceBinding?.chatJid === chat))
+      throw Error("Native branch has active native controls");
+  }
+  private assertSessionCommandBinding(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}): void {
     this.options.assertAdmission?.(); this.fence();
     if (binding.incarnation !== this.options.incarnation || this.options.conversationFor(binding.chatJid,binding.branchId) !== binding.conversationId) throw Error("Host binding conflict");
+  }
+  private async runSessionCommand<T>(binding: {incarnation: string; chatJid: string; branchId: string; conversationId: number}, body: (conversation: NonNullable<Awaited<ReturnType<Harness["conversation"]>>>) => Promise<T>): Promise<T> {
+    binding = Object.freeze({ ...binding });
+    this.assertSessionCommandBinding(binding);
     if (!this.options.withIdleModelGuard || this.changingModel || this.maintenanceBinding || this.active.size) throw Error("Runtime is not idle");
-    this.changingModel = true;
+    this.changingModel = true; this.sessionCommandChat = binding.chatJid;
     const operation = Promise.resolve().then(() => this.options.withIdleModelGuard!(async () => {
-      const snapshot = await this.harness.inspect(this.context); this.fence();
+      this.assertSessionCommandBinding(binding);
+      const snapshot = await this.harness.inspect(this.context); this.assertSessionCommandBinding(binding);
       if (snapshot.tasks.length || snapshot.submissions.length) throw Error("Runtime is not idle");
-      const conversation = await this.harness.conversation(binding.conversationId as ConversationId,this.context); this.fence();
+      const conversation = await this.harness.conversation(binding.conversationId as ConversationId,this.context); this.assertSessionCommandBinding(binding);
       if (!conversation) throw Error("Missing existing conversation");
       return body(conversation);
     }));
     this.active.add(operation);
-    try { return await operation; } finally { this.active.delete(operation); this.changingModel = false; }
+    try { return await operation; } finally { this.active.delete(operation); this.changingModel = false; this.sessionCommandChat = undefined; }
   }
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
     this.options.assertAdmission?.();

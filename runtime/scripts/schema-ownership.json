@@ -188,10 +188,15 @@
         "runtime/src/db/owned-forks.ts",
         "runtime/src/db/session-handles.ts"
       ],
-      "sourceOfTruth": "Canonical host branch/chat/parent/handle identity and archive metadata; native SDK conversation bindings are a separate authority. Active handle uniqueness is the current partial-index policy, not historical agent_name table uniqueness.",
-      "replayRetention": "No universal reconstruction or age-expiry guarantee. Preserve persisted identity, history and FK/receipt obligations; changes belong to the cited owner APIs. This read-only inventory adds no deletion, pruning, replay or migration authority.",
+      "sourceOfTruth": "Host stable branch identity, friendly handles/display names, owner namespace and archive policy. The SDK application manifest alone binds native conversation/session IDs. Native address/reparent/destructive legacy mutations are fenced; registration cannot unarchive or rename a native branch. Copied/native routing is never inferred from metadata or a first/default row.",
+      "replayRetention": "Keep native identity metadata while manifest, accepted-source, imported-history and accounting references require it. Native archive retains immutable bindings/history and gates current admission. Default-native restore requires the exact existing route in one synchronous metadata frame. Legacy Dream/startup cleanup and owned/deferred fork writers cannot remove or create dangling native identities. Explicit owner-specific retirement remains separate (#1691/#1702).",
       "references": [
-        "runtime/src/db/connection.ts"
+        "runtime/src/db/connection.ts",
+        "runtime/src/db/native-routing-policy.ts",
+        "runtime/durable-engine/src/default-application-runtime.ts",
+        "runtime/durable-engine/src/application-bootstrap.ts",
+        "runtime/src/agent-pool.ts",
+        "runtime/src/db/owned-forks.ts"
       ]
     },
     "core:chat_cursors": {
@@ -1126,11 +1131,15 @@
         "runtime/durable-engine/src/default-application-runtime.ts",
         "runtime/durable-engine/src/host-managed-instructions.ts"
       ],
-      "sourceOfTruth": "Native application-conversation binding/identity documents and managed-instruction hash. SDK owns persistence; core owns these exact document payload invariants.",
-      "replayRetention": "conversation-scoped latest history, initial fork; exact native app identity checks retained, never fabricated from inventory.",
+      "sourceOfTruth": "One immutable branch/chat-to-native-conversation/session binding authority, plus exact single-base creation anchors. A single public SDK publisher serves atomic root initialisation and lazy root allocation. Host names/ownership/archive policy remains separate; current active admission cross-validates SQL without overwriting anchors. Managed instructions remain a derived SDK document.",
+      "replayRetention": "Preserve native domain, branch/conversation/session IDs, accepted-source hashes and imported mappings. Archived default-native bindings stay historically valid but cannot admit inputs/controls. Unknown publication ACK requires reopen, never duplicate allocation. Interrupted unbound SDK schema prefix remains fail-closed until explicit matching checkpoint recovery. No physical schema, document-version, migration or cleanup authority added.",
       "references": [
         "runtime/durable-engine/src/default-application-runtime.ts",
-        "runtime/durable-engine/src/host-managed-instructions.ts"
+        "runtime/durable-engine/src/host-managed-instructions.ts",
+        "runtime/src/db/native-routing-policy.ts",
+        "runtime/durable-engine/src/application-bootstrap.ts",
+        "runtime/durable-engine/src/host-application-input.ts",
+        "docs/development/native-routing-identity.md"
       ]
     },
     "archive:copied-legacy-documents": {

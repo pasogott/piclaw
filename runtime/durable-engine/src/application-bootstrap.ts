@@ -38,6 +38,7 @@ import type { ConversationId } from "@earendil-works/pi-durable";
 import { createDurableQueuedSteering } from "../../src/agent-pool/durable-queued-steering.js";
 import { storeWebMessage } from "../../src/channels/web/messaging/message-store.js";
 import { createApplicationHostInput } from "./host-application-input.js";
+import { registerNativeBranchControlGuard } from "../../src/db/native-routing-policy.js";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Keep the full queue intent proof, plus a payload digest that remains verifiable
@@ -47,12 +48,12 @@ function queuedInputProvenance(item: QueuedFollowupItem): string {
   return `application:queued:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)))}:${hashCanonicalRequest({ content: item.queuedContent })}`;
 }
 /** Validate existing host routing before any import/journal/schema write. */
-export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[]) {
+export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[], historicalBindings = false) {
   for (const binding of manifest) {
     const row = root.query("SELECT branch_id, archived_at FROM chat_branches WHERE chat_jid=?").get(binding.chatJid) as
       { branch_id: string; archived_at: string | null } | null;
     // Keep the existing explicit synthetic main binding contract unchanged.
-    if (binding.branchId !== "main" && (!row || row.branch_id !== binding.branchId || row.archived_at !== null))
+    if (binding.branchId !== "main" && (!row || row.branch_id !== binding.branchId || !historicalBindings && row.archived_at !== null))
       throw Error("Exact application branch manifest required");
   }
 }
@@ -79,6 +80,9 @@ export interface ApplicationBootstrapOptions {
   /** Original host session identities, not a new bootstrap-generated identity. */
   sessions: ReadonlyMap<string, string>;
   offlineInitialize?: boolean;
+  /** Validated default manifest retains archived historical bindings. Admission
+   * still requires current active host policy; copied/import plans stay strict. */
+  historicalBindings?: boolean;
   /** Publish the existing runtime before recovery can schedule any provider. */
   onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: RuntimeOptions["onOperationSettled"];
@@ -116,6 +120,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const prepareInputText = config.prepareInputText?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
+  let releaseBranchControlGuard: (() => void) | undefined;
   try {
   const manifest = Object.freeze(config.manifest.map(b => Object.freeze({ ...b })));
   const sessions = new Map(config.sessions);
@@ -130,7 +135,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     throw Error("Exact application branch manifest required");
   // Root branches already have distinct chat JIDs (UNIQUE in chat_branches).
   // Never invent a branch or choose a first/default row for an existing chat.
-  assertApplicationBranchRoutes(root, manifest);
+  assertApplicationBranchRoutes(root, manifest, config.historicalBindings === true);
   const routeIndex = new Map(manifest.map(b => [b.chatJid, Object.freeze({ ...b, sessionId: sessions.get(b.chatJid)! })]));
   const lookup = (chat: string, branch: string) => {
     const binding = routeIndex.get(chat);
@@ -273,7 +278,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     } });
     const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
-    const hostControls = new Set<Promise<unknown>>();
+    const hostControls = new Map<Promise<unknown>, string>();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
@@ -310,14 +315,19 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       };
     };
     const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
-      assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
-      return ({ chatJid, item, database: connection }) => {
+      const scope = routeIndex.get(chat);
+      const check = () => {
         assert(); config.assertAdmission?.();
+        if (!scope || routeIndex.get(chat) !== scope || lookup(chat, scope.branchId) !== scope) throw Error("Unbound queued input chat");
+      };
+      check();
+      return ({ chatJid, item, database: connection }) => {
+        check();
         if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued admission required");
         work.acceptSourceInTransaction(sealed({ effect: { ...effect(`queue:${item.source_id}`),
           provenanceRef: queuedInputProvenance(item) }, chatJid: chat, sourceId: item.source_id, kind: "message",
           payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), root);
-        assert();
+        check();
       };
     };
     const getQueuedInputMaterialization: NonNullable<WebChannelOpts["getQueuedInputMaterialization"]> = chat => {
@@ -349,7 +359,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     };
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
-      if (!binding) return undefined;
+      if (!binding || !lookup(chat, binding.branchId)) return undefined;
       const assertCurrent = () => {
         assertLive();
         if (routeIndex.get(chat) !== binding || lookup(chat, binding.branchId)?.conversationId !== binding.conversationId) throw Error("Host control binding changed");
@@ -388,7 +398,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           assertCurrent(); config.assertAdmission?.();
           // Register before callback entry so close can join credential writes.
           const running = Promise.resolve().then(() => { assertCurrent(); config.assertAdmission?.(); return operation(); });
-          hostControls.add(running);
+          hostControls.set(running, chat);
           void running.finally(() => hostControls.delete(running)).catch(() => {});
           return running;
         },
@@ -413,7 +423,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     function prepareInputSourceAdmission(chat: string): Promise<void> {
       assert(); config.assertAdmission?.();
       if (closing || shutdown.signal.aborted) return Promise.reject(Error("Application closing"));
-      if (routeIndex.has(chat)) return Promise.resolve();
+      const published = routeIndex.get(chat);
+      if (published) return lookup(chat, published.branchId) ? Promise.resolve() : Promise.reject(Error("Native branch is archived or changed"));
       const pending = preparing.get(chat); if (pending) return pending;
       let committedPossible = false;
       const promise = (async () => {
@@ -421,16 +432,21 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (!createConversation) throw Error("Unbound application conversation");
         const row = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
         if (!row || !canonical(chat)) throw Error("Existing root branch required");
-        const binding = await candidateDatabase.withAdmissionGuard(() => { assertLive(); config.assertAdmission?.(); },
+        const assertRoot = () => {
+          assertLive(); config.assertAdmission?.();
+          const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
+          if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
+        };
+        const binding = await candidateDatabase.withAdmissionGuard(assertRoot,
           () => activeController.addConversation(async tx => {
           assertLive(); config.assertAdmission?.();
           const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
           if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
           const created = await createConversation(tx, chat, row.branch_id);
-          assertLive(); config.assertAdmission?.();
+          assertRoot();
           return created;
-        }, () => { assertLive(); config.assertAdmission?.(); committedPossible = true; }));
-        assertLive();
+        }, () => { assertRoot(); committedPossible = true; }));
+        assertRoot();
         // One publication point. Every ingress and session lookup uses this record.
         routeIndex.set(chat, Object.freeze({ ...binding }));
       })().then(() => { if (preparing.get(chat) === promise) preparing.delete(chat); }, error => {
@@ -443,12 +459,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       preparing.set(chat, promise); return promise;
     }
     let bound = false, closing: Promise<void> | undefined;
+    releaseBranchControlGuard = registerNativeBranchControlGuard(root, chats => {
+      assertLive(); runtime.assertBranchControlsIdle(chats);
+      if ([...hostControls.values()].some(chat => chats.includes(chat))) throw Error("Native branch has active native controls");
+      return undefined;
+    });
     async function allocateSidePromptConversation(raw: AcceptedInput): Promise<AcceptedInput> {
       const input = Object.freeze({ ...raw });
       const scope = routeIndex.get(input.chatJid);
       const check = () => {
         assertLive(); config.assertAdmission?.();
-        if (!scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
+        if (!scope || routeIndex.get(input.chatJid) !== scope || lookup(input.chatJid, scope.branchId) !== scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
           !/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.sourceId) ||
           input.requestId !== input.sourceId || input.payloadRef !== input.sourceId) throw Error("Side prompt source authority unavailable");
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
@@ -639,8 +660,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (prompt.length > 100_000) throw Error("Invalid side prompt");
       const scope = routeIndex.get(chatJid);
       if (!scope) throw Error("Unbound side prompt chat");
+      const checkScope = () => {
+        assertLive(); config.assertAdmission?.();
+        if (!scope || routeIndex.get(chatJid) !== scope || lookup(chatJid, scope.branchId) !== scope) throw Error("Unbound side prompt chat");
+      };
+      checkScope();
       if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");
-      assertLive();
+      checkScope();
       const context = getBudgetWorkContext();
       if (context && context.chatJid !== chatJid) throw Error("Side prompt budget context mismatch");
       const parentWorkId = options.budgetParentWorkId ?? context?.workId ?? null;
@@ -658,7 +684,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const sourceId = retryId ? sidePromptSourceId(chatJid, retryId) : `side-prompt:${crypto.randomUUID()}`;
       const prior = work.getAcceptedSource(chatJid, sourceId);
       if (prior) {
-        const storedPrompt = await content(sourceId, prior); assertLive();
+        const storedPrompt = await content(sourceId, prior); checkScope();
         if (storedPrompt !== prompt || prior.kind !== "internal") throw Error("Side prompt retry identity conflict");
         const row = root.query(`SELECT o.operation_id FROM service_effect_s01_operations o
           JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
@@ -667,10 +693,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const retryWork = retryId ? getBudgetWork(retryId, root) : null;
         if (!row || !budget || (retryId ? budget.parent_work_id !== retryId || !retryWork || retryWork.chat_jid !== chatJid ||
           retryWork.execution_kind !== "side_prompt" || retryWork.parent_work_id !== parentWorkId : budget.parent_work_id !== parentWorkId)) throw Error("Side prompt retry identity conflict");
-        const committed = value(await terminal.getTerminal(row.operation_id)); assertLive();
+        const committed = value(await terminal.getTerminal(row.operation_id)); checkScope();
         if (!committed) { assertParent(); return reconcileSidePrompt(chatJid, sourceId); }
         if (committed.disposition !== "completed") return { status: "error", result: null, thinking: null, model: null, error: "Side prompt cancelled", stopReason: "aborted" };
-        const payload = await config.answers.resolver.resolve(`side-result:${sourceId}`); assertLive();
+        const payload = await config.answers.resolver.resolve(`side-result:${sourceId}`); checkScope();
         if (!payload || payload.ref !== `side-result:${sourceId}` || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Side prompt result unavailable");
         const bytes = Uint8Array.from(payload.bytes);
         if (bytes.byteLength !== payload.byteLength || createHash("sha256").update(bytes).digest("hex") !== payload.sha256) throw Error("Side prompt result unavailable");
@@ -685,9 +711,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       }
       assertParent();
       // Immutable payload may outlive denied admission; it never grants authority.
-      await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
+      await config.answers.put(sourceId, prompt); checkScope(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
-        assertLive(); config.assertAdmission?.(); assertParent();
+        checkScope(); assertParent();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
         const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
           { consumed_through_source_seq: number; active_operation_id: string | null } | null;
@@ -701,7 +727,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           ensureBudgetWork({ id: retryId, chatJid, executionKind: "side_prompt", parentWorkId }, root);
         }
         ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId: retryId ?? parentWorkId }, root);
-        return accepted;
+        checkScope(); return accepted;
       }).immediate();
       let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {
@@ -834,8 +860,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       stop() { inputProjection = undefined; shutdown.abort(); },
       close() { inputProjection = undefined; return closing ??= (async () => {
         shutdown.abort();
-        await Promise.allSettled([...hostControls]);
+        await Promise.allSettled([...hostControls.keys()]);
         await activeController.close();
+        releaseBranchControlGuard?.();
       })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
       assertProcessControlIdle(): void;
@@ -854,6 +881,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     try {
       if (controller) await controller.close();
       else await database?.close();
+      releaseBranchControlGuard?.();
       lease.release();
     } catch (cleanupError) {
       throw new RuntimeStartupCleanupError([error, cleanupError], "Application backend preparation cleanup uncertain");

@@ -1,8 +1,10 @@
+import { hasNativeRouting, requireLegacyRoutingMutation, assertNativeBranchPolicyIdle } from "./native-routing-policy.js";
 import { unlinkedUsageReportPredicate } from "./usage-report-projection.js";
 /**
  * db/chat-branches.ts – Explicit branch/session registry for web chat branches.
  *
- * Branch identity is defined entirely by the `agent_name` handle.
+ * branch_id is the stable host identity; agent_name is a mutable friendly handle.
+ * Native conversation/session routing belongs to the immutable SDK manifest.
  * The legacy `display_name` column is dropped on first startup via migration.
  */
 
@@ -185,6 +187,12 @@ export function ensureChatBranch(input: {
 
   if (existing) {
     requireLegacyHandleNamespace(chatJid);
+    if (hasNativeRouting(db)) {
+      if (input.root_chat_jid != null && input.root_chat_jid !== existing.root_chat_jid
+        || input.parent_branch_id !== undefined && (input.parent_branch_id || null) !== existing.parent_branch_id) requireLegacyRoutingMutation(db, "reparent");
+      if (input.agent_name && normalizeBranchAgentName(input.agent_name) !== existing.agent_name) throw Error("Native branch metadata requires explicit handle rename");
+      return existing; // Registration never restores or rewrites a native identity.
+    }
     const rootChatJid = String(input.root_chat_jid || existing.root_chat_jid || chatJid).trim() || chatJid;
     const parentBranchId = input.parent_branch_id === undefined ? existing.parent_branch_id : (input.parent_branch_id || null);
     const requestedAgentName = input.agent_name ? normalizeBranchAgentName(input.agent_name) : existing.agent_name;
@@ -214,6 +222,7 @@ export function ensureChatBranch(input: {
 
   const rootChatJid = String(input.root_chat_jid || chatJid).trim() || chatJid;
   requireLegacyHandleNamespace(rootChatJid);
+  if (hasNativeRouting(db) && (input.parent_branch_id || rootChatJid !== chatJid)) requireLegacyRoutingMutation(db, "legacy child fork");
   const branchId = createUuid("branch");
   const agentName = getUniqueAgentName(input.agent_name || deriveBaseAgentName(chatJid));
   const parentBranchId = input.parent_branch_id ? String(input.parent_branch_id).trim() : null;
@@ -261,43 +270,46 @@ export function renameChatBranchIdentity(input: {
 }
 
 export function archiveChatBranch(chatJid: string): ChatBranchRecord {
-  const normalizedChatJid = String(chatJid || "").trim();
-  if (!normalizedChatJid) throw new Error("chat_jid is required");
+  return getDb().transaction(() => {
+    const normalizedChatJid = String(chatJid || "").trim();
+    if (!normalizedChatJid) throw new Error("chat_jid is required");
 
-  const existing = getChatBranchByChatJid(normalizedChatJid);
-  if (!existing) throw new Error(`Unknown chat branch: ${normalizedChatJid}`);
+    const existing = getChatBranchByChatJid(normalizedChatJid);
+    if (!existing) throw new Error(`Unknown chat branch: ${normalizedChatJid}`);
 
-  const isRootChat = existing.chat_jid === existing.root_chat_jid;
-  if (isRootChat && existing.chat_jid === "web:default") {
-    throw new Error("Cannot archive the default chat session.");
-  }
-  if (isRootChat) {
-    const db = getDb();
-    const row = db.prepare(
-      `SELECT COUNT(*) AS count
-         FROM chat_branches
-        WHERE root_chat_jid = ?
-          AND chat_jid != ?
-          AND archived_at IS NULL`
-    ).get(existing.chat_jid, existing.chat_jid) as { count?: number } | undefined;
-    if (Number(row?.count || 0) > 0) {
-      throw new Error("Cannot archive a root chat session while it still has active branch sessions.");
+    const isRootChat = existing.chat_jid === existing.root_chat_jid;
+    if (isRootChat && existing.chat_jid === "web:default") {
+      throw new Error("Cannot archive the default chat session.");
     }
-  }
-  if (existing.archived_at) {
-    return existing;
-  }
+    if (isRootChat) {
+      const db = getDb();
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count
+           FROM chat_branches
+          WHERE root_chat_jid = ?
+            AND chat_jid != ?
+            AND archived_at IS NULL`
+      ).get(existing.chat_jid, existing.chat_jid) as { count?: number } | undefined;
+      if (Number(row?.count || 0) > 0) {
+        throw new Error("Cannot archive a root chat session while it still has active branch sessions.");
+      }
+    }
+    if (existing.archived_at) {
+      return existing;
+    }
 
-  const now = new Date().toISOString();
-  const db = getDb();
-  db.prepare(
-    `UPDATE chat_branches
-        SET archived_at = ?,
-            updated_at = ?
-      WHERE branch_id = ?`
-  ).run(now, now, existing.branch_id);
+    assertNativeBranchPolicyIdle(getDb(), existing.branch_id);
+    const now = new Date().toISOString();
+    const db = getDb();
+    db.prepare(
+      `UPDATE chat_branches
+          SET archived_at = ?,
+              updated_at = ?
+        WHERE branch_id = ?`
+    ).run(now, now, existing.branch_id);
 
-  return getChatBranchByChatJid(normalizedChatJid)!;
+    return getChatBranchByChatJid(normalizedChatJid)!;
+  }).immediate();
 }
 
 export interface ArchivedBranchPurgePreview {
@@ -623,6 +635,7 @@ export interface MergeChatBranchIntoParentResult {
 }
 
 export function mergeChatBranchIntoParent(chatJid: string): MergeChatBranchIntoParentResult {
+  requireLegacyRoutingMutation(getDb(), "legacy merge");
   const normalizedChatJid = String(chatJid || "").trim();
   if (!normalizedChatJid) throw new Error("chat_jid is required");
 
@@ -746,6 +759,7 @@ export function mergeChatBranchIntoParent(chatJid: string): MergeChatBranchIntoP
 }
 
 export function permanentDeleteArchivedBranch(chatJid: string): PermanentDeleteArchivedBranchResult {
+  requireLegacyRoutingMutation(getDb(), "legacy purge");
   const preview = previewPermanentDeleteArchivedBranch(chatJid);
   const branch = preview.branch;
   const mediaIds = getArchivedBranchMediaIds(branch.chat_jid);
@@ -816,6 +830,7 @@ export interface RenameChatJidResult {
  * legacy `:branch:` and modern hierarchical JID forms.
  */
 export function renameChatJid(oldJid: string, newJid: string): RenameChatJidResult {
+  requireLegacyRoutingMutation(getDb(), "address rename");
   const old = String(oldJid || "").trim();
   const next = String(newJid || "").trim();
   if (!old) throw new Error("oldJid is required");
@@ -963,7 +978,6 @@ export function restoreChatBranchIdentity(input: {
     : normalizeBranchAgentName(input.agent_name || "");
   const nextAgentName = getUniqueAgentName(requestedAgent || existing.agent_name, existing.branch_id);
 
-  if (existing.archived_at)
   if (!existing.archived_at && nextAgentName === existing.agent_name) {
     return existing;
   }

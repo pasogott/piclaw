@@ -1,4 +1,5 @@
 import { unlinkedUsageReportPredicate } from "./db/usage-report-projection.js";
+import { hasNativeRouting } from "./db/native-routing-policy.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { join, relative, resolve } from "path";
 
@@ -241,6 +242,7 @@ function buildDreamChatJid(chatJid: string, mode: "manual" | "auto"): string {
  */
 function reapDreamArtifacts(excludeDreamChatJid?: string | null): void {
   // Native identities and accepted inputs are not disposable legacy Dream artifacts.
+  if (hasNativeRouting(getDb())) return;
   const excluded = new Set<string>();
   if (excludeDreamChatJid) {
     const base = sanitiseJid(excludeDreamChatJid);
@@ -287,6 +289,7 @@ function reapDreamArtifacts(excludeDreamChatJid?: string | null): void {
 }
 
 async function cleanupDreamChat(agentPool: AgentPool, dreamChatJid: string, checkAccess: () => void): Promise<void> {
+  if (hasNativeRouting(getDb())) return;
   try {
     await agentPool.disposeChatSession(dreamChatJid);
   } catch (error) {
