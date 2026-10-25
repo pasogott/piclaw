@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 61
     },
     "docsDeploy": {
-      "referencedNames": 154,
+      "referencedNames": 155,
       "directReaderNames": 18,
       "directReaderOccurrences": 42,
       "helperReaderNames": 0,
@@ -636,6 +636,17 @@
     {
       "name": "PICLAW_AUTO_COMPACTION_ENABLED",
       "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/compaction-models-and-deadlines.md",
+            "docs/configuration.md"
+          ],
+          "readerFiles": []
+        },
         "production": {
           "referenced": true,
           "directReaders": 0,
@@ -1102,7 +1113,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "docs/compaction-models-and-deadlines.md"
+            "docs/archive/legacy-compaction-models-and-deadlines.md"
           ],
           "readerFiles": []
         },
@@ -1282,8 +1293,8 @@
           "files": [
             ".github/workflows/integration-gate.yml",
             "Makefile",
+            "docs/archive/legacy-compaction-models-and-deadlines.md",
             "docs/archive/legacy-queue-audit/audit-queue-session-threading-replay.ts.txt",
-            "docs/compaction-models-and-deadlines.md",
             "docs/configuration.md",
             "docs/design/local-note-retrieval-lifecycle-tests.md",
             "docs/development.md",
@@ -5092,7 +5103,6 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "docs/configuration.md",
             "docs/pipelined-compaction.md"
           ],
           "readerFiles": []
