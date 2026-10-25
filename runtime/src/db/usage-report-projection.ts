@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type Database from "bun:sqlite";
-import type { TokenUsageRecord } from "./token-usage.js";
+import type { TokenUsageRecord } from "./usage-report-types.js";
 import { applyOwnedMigrations } from "./migrations.js";
 
 /** The existing event owns accounting identity and valuation. These two columns
