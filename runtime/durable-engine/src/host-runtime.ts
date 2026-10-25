@@ -116,6 +116,7 @@ export interface RuntimeOptions {
    * through EF-S02's existing payload resolver with the effect's exact redaction class;
    * media must already be bound to this operation. No provider execution is granted here. */
   readonly materializeAnswer?: (ref: string, answer: SettledAnswer, operation: OperationSnapshot) => Promise<MaterializedAnswer>;
+  readonly onStorageFailure?: (error: unknown) => void;
   readonly sessionId: string;
   readonly lane: string;
   readonly generation: number;
@@ -183,6 +184,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
     codemodeExecute: o.codemodeExecute,
+    onStorageFailure: o.onStorageFailure?.bind(o),
     assertAdmission: o.assertAdmission?.bind(o),
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     withSessionResetGuard: o.withSessionResetGuard?.bind(o),
@@ -216,6 +218,8 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
 export class HostConversationRuntime {
   private closed = false;
   private changingModel = false;
+  private storageClosing = false;
+  private readonly storageEnded: Promise<void>;
   private commandBash = new Map<string, AbortController>();
   private commandBashWaits = new Map<string, Promise<unknown>>();
   private authorizingMaintenance = false;
@@ -244,7 +248,14 @@ export class HostConversationRuntime {
     return promise;
   }
   private constructor(private readonly options: RuntimeSnapshot, private readonly harness: Harness,
-    private readonly storage: Storage, private readonly context: Context) {}
+    private readonly storage: Storage, private readonly context: Context) {
+    harness.subscribeClose(() => { this.storageClosing = true; });
+    this.storageEnded = harness.closed.then(end => {
+      if (end.reason === "failed") options.onStorageFailure?.(end.error);
+    });
+    // Join notification/cleanup failures during close; never detach an unhandled rejection.
+    void this.storageEnded.catch(() => {});
+  }
 
   static async open(config: RuntimeOptions, context: Context): Promise<HostConversationRuntime> {
     const options = runtimeSnapshot(config);
@@ -1823,6 +1834,10 @@ export class HostConversationRuntime {
       const terminal = await this.settleInput(copy); this.fence();
       if (!terminal) throw Error("Abort terminal settlement pending");
       return true;
+    }).catch(async error => {
+      // Publish the public failed-storage proof before a caller considers recovery.
+      if (this.storageClosing) await this.storageEnded;
+      throw error;
     });
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */
@@ -2050,7 +2065,8 @@ export class HostConversationRuntime {
         await beforeStorageClose?.();
         this.options.owner.assert();
       }
-      await this.harness.close(withoutAbortSignal(this.context)); // May wait for cooperative providers/tools; no bounded-close claim.
+      await this.harness.close(withoutAbortSignal(this.context));
+      await this.storageEnded; // May wait for cooperative providers/tools; no bounded-close claim.
       await this.options.owner.release(); // Only after confirmed resource cleanup.
     })();
   }

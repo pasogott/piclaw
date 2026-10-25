@@ -45,6 +45,12 @@ export interface DurableContextUsage {
   readonly contextWindow: number | null;
 }
 
+export interface DurableAbortScope {
+  readonly operationId: string;
+  readonly conversationId: number;
+  readonly sourceSeq: number;
+}
+
 export interface DurableSessionPositionPort {
   readonly readContextUsage?: () => Promise<DurableContextUsage>;
   readonly readMetadata?: () => Promise<DurableSessionMetadata>;
@@ -62,8 +68,10 @@ export interface DurableSessionPositionPort {
   readonly setThinkingLevel?: (level: string) => Promise<void>;
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
   readonly reset?: () => Promise<void>;
-  readonly abort?: () => Promise<boolean>;
-  readonly abortRetry?: () => Promise<boolean>;
+  /** Capture the operator target before touching the SDK; retries cannot cancel a successor. */
+  readonly readAbortScope?: () => Promise<DurableAbortScope | null>;
+  readonly abort?: (expected?: DurableAbortScope) => Promise<boolean>;
+  readonly abortRetry?: (expected?: DurableAbortScope) => Promise<boolean>;
   readonly restart?: () => Promise<void>;
   readonly runBash?: (command: string) => Promise<{output: string; exitCode: number | null; cancelled: boolean}>;
   readonly abortBash?: () => Promise<boolean>;

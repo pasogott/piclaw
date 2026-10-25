@@ -18,7 +18,7 @@ import type { WebChannelOpts } from "../../src/channels/web.js";
 import type { EffectPayloadResolver } from "../../src/service-effects/contracts/payload-resolver.js";
 import { createCurrentPiclawServiceWorkStore } from "../../src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../src/service-effects/current-piclaw/terminal-settlement-store.js";
-import { createDurableConversationAdapter } from "../../src/agent-pool/durable-runtime-adapter.js";
+import { createDurableConversationAdapter, type DurableAbortScope } from "../../src/agent-pool/durable-runtime-adapter.js";
 import { createDurableQueueDispatch } from "../../src/agent-pool/durable-queue-dispatch.js";
 import { createDurableRecoveryDispatch } from "../../src/agent-pool/durable-recovery-dispatch.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service-effects/contracts/common.js";
@@ -98,7 +98,7 @@ export interface ApplicationBootstrapOptions {
   assertInputAdmission?: (chatJid: string, content: string) => void;
   prepareInputText?: NonNullable<WebChannelOpts["prepareInputText"]>;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
-  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute">;
+  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute" | "onStorageFailure">;
   /** Existing application payload store, with immutable answer references. */
   answers: { resolver: EffectPayloadResolver; put(ref: string, text: string): void | Promise<void> };
   /** Optional acknowledgement boundary; the supplied operation still performs the real wait. */
@@ -354,12 +354,21 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assertLive();
         if (routeIndex.get(chat) !== binding || lookup(chat, binding.branchId)?.conversationId !== binding.conversationId) throw Error("Host control binding changed");
       };
-      const abort = async (retryOnly = false) => {
+      const readAbortScope = async (): Promise<DurableAbortScope | null> => {
+        assertCurrent();
+        const frontier = value(await work.getChatFrontier(chat)); assertCurrent();
+        if (!frontier.activeOperationId) return null;
+        const operation = value(await work.getOperation(frontier.activeOperationId)); assertCurrent();
+        if (!operation || operation.terminal) return null;
+        return Object.freeze({ operationId: operation.operationId, conversationId: binding.conversationId, sourceSeq: operation.primarySourceSeq });
+      };
+      const abort = async (retryOnly = false, expected?: DurableAbortScope) => {
           assertCurrent();
           const frontier = value(await work.getChatFrontier(chat)); assertLive();
           if (!frontier.activeOperationId) return false;
           const operation = value(await work.getOperation(frontier.activeOperationId)); assertLive();
           if (!operation || operation.terminal) return false;
+          if (expected && (expected.operationId !== operation.operationId || expected.conversationId !== binding.conversationId || expected.sourceSeq !== operation.primarySourceSeq)) return false;
           const input = await bindings.findSource(chat, operation.primarySourceSeq); assertLive();
           if (!input || input.operationId !== operation.operationId || input.conversationId !== binding.conversationId)
             throw Error("Exact ordinary abort binding required");
@@ -383,7 +392,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           void running.finally(() => hostControls.delete(running)).catch(() => {});
           return running;
         },
-        abort: () => abort(), abortRetry: () => abort(true),
+        readAbortScope, abort: (expected?: DurableAbortScope) => abort(false, expected), abortRetry: (expected?: DurableAbortScope) => abort(true, expected),
         runBash: (command: string) => { assertCurrent(); return runtime.runSessionBash({incarnation:r.incarnation,...binding}, command); },
         abortBash: () => { assertCurrent(); return runtime.abortSessionBash({incarnation:r.incarnation,...binding}); },
         async restart() {
