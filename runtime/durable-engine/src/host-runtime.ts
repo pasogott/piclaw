@@ -178,6 +178,12 @@ type RuntimeSnapshot = Omit<RuntimeOptions, "work" | "terminal"> & {
   readonly work: Pick<ServiceWorkStore, "getOperation" | "acceptCancellation" | "bindHarness"> & Partial<Pick<CurrentPiclawServiceWorkStore, "finishHarness">>;
   readonly terminal: Pick<TerminalSettlementStore, "getTerminal" | "commitTerminal">;
 };
+function currentHarnessModels(options: HarnessOptions) {
+  return typeof options.models === "function" ? options.models() : options.models;
+}
+function currentHarnessSettings(options: HarnessOptions) {
+  return typeof options.settings === "function" ? options.settings() : options.settings;
+}
 function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
@@ -207,8 +213,11 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
         recordSubmission: bindings.intents.recordSubmission.bind(bindings.intents), list: bindings.intents.list.bind(bindings.intents) }) }),
     existingConversationIds: [...existingConversationIds],
     // Catalogs and settings are intentionally live host APIs; detach their containing options only.
-    harnessOptions: Object.freeze({ models: h.models, registry: h.registry, settings: h.settings,
-      env: h.env?.bind(h), conversationCreated: h.conversationCreated?.bind(h), now: h.now?.bind(h), onReport: h.onReport?.bind(h) }),
+    harnessOptions: Object.freeze({ models: typeof h.models === "function" ? h.models.bind(h) : h.models, registry: h.registry,
+      settings: typeof h.settings === "function" ? h.settings.bind(h) : h.settings,
+      env: h.env?.bind(h), conversationCreated: h.conversationCreated?.bind(h), now: h.now?.bind(h), onReport: h.onReport?.bind(h),
+      identity: h.identity === undefined ? undefined : Object.freeze(structuredClone(h.identity)),
+      telemetry: h.telemetry, setTimer: h.setTimer?.bind(h), onWake: h.onWake?.bind(h) }),
   });
 }
 
@@ -292,7 +301,7 @@ export class HostConversationRuntime {
     this.options.assertAdmission?.();
     const choice = model && Object.freeze({ provider: model.provider, modelId: model.modelId });
     return this.observe(async () => {
-      const target = choice && this.options.harnessOptions.models.getModel(choice.provider, choice.modelId);
+      const target = choice && currentHarnessModels(this.options.harnessOptions).getModel(choice.provider, choice.modelId);
       if (choice && !target) throw Error("Model context unavailable");
       const parent = await this.harness.conversation(parentId, this.context); this.fence();
       if (!parent) throw Error("Unknown scheduled root");
@@ -406,7 +415,7 @@ export class HostConversationRuntime {
       if (!conversation) throw Error("Missing existing conversation");
       const view = await conversation.context(this.context); assertBinding();
       const agent = await conversation.agent(this.context); assertBinding();
-      const model = agent.model && this.options.harnessOptions.models.getModel(agent.model.provider, agent.model.modelId);
+      const model = agent.model && currentHarnessModels(this.options.harnessOptions).getModel(agent.model.provider, agent.model.modelId);
       const measured = estimateContextTokens(view.messages).tokens;
       const tokens = Number.isFinite(measured) && measured >= 0 ? measured : null;
       const window = model?.contextWindow;
@@ -450,7 +459,7 @@ export class HostConversationRuntime {
         const text = message.content.filter(block => block.type === "text").map(block => block.text).join("\n");
         if (text) lastAnswer = text;
       }
-      const model = agent.model ? o.harnessOptions.models.getModel(agent.model.provider, agent.model.modelId) : undefined;
+      const model = agent.model ? currentHarnessModels(o.harnessOptions).getModel(agent.model.provider, agent.model.modelId) : undefined;
       assertBinding();
       return { activeEntries: view.entries.length, userMessages, assistantMessages,
         contextWindow: model?.contextWindow ?? null, observedTokens, observedModel, lastAnswer, usage };
@@ -549,7 +558,7 @@ export class HostConversationRuntime {
     };
     check();
     const choice = Object.freeze({ provider: model.provider, modelId: model.modelId });
-    const target = o.harnessOptions.models.getModel(choice.provider, choice.modelId);
+    const target = currentHarnessModels(o.harnessOptions).getModel(choice.provider, choice.modelId);
     if (!target || !Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
       !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw new Error("Model context unavailable");
     if (thinkingLevel !== undefined && !getSupportedThinkingLevels(target).includes(thinkingLevel as ModelThinkingLevel)) throw new Error("Unsupported thinking level");
@@ -587,7 +596,7 @@ export class HostConversationRuntime {
   private async prepareContextAdmission(conversation: import("@earendil-works/pi-durable").Conversation, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<ModelContextAdmission> {
     return prepareModelContextAdmission({ conversation, context: this.context,
       registry: this.options.harnessOptions.registry,
-      defaultExtensions: () => this.options.harnessOptions.settings?.extensions,
+      defaultExtensions: () => currentHarnessSettings(this.options.harnessOptions)?.extensions,
       readAgentState: () => this.harness.snapshot(AgentDoc, conversation.id, this.context),
       measure: (messages, agent) => this.measurePromptSections(conversation, messages, model, thinkingLevel, agent),
       assertCurrent: () => this.fence(),

@@ -21,11 +21,11 @@ async function using(run: (fixture: Awaited<ReturnType<typeof openFixture>>) => 
 }
 
 describe("Q1 public candidate MemoryStorage only", () => {
-  test("independent public package graph is exactly 1.3.0", async () => {
+  test("independent public package graph is exactly 1.4.0", async () => {
     for (const name of ["chord", "pi-ai", "pi-codemode", "pi-durable"]) {
       // Package metadata is a filesystem read, not an unexported package subpath import.
       const pkg = await Bun.file(new URL(`../../runtime/durable-engine/node_modules/@earendil-works/${name}/package.json`, import.meta.url)).json();
-      expect(pkg.version).toBe("1.3.0");
+      expect(pkg.version).toBe("1.4.0");
       expect(import.meta.resolve(`../../runtime/durable-engine/node_modules/@earendil-works/${name}`)).toStartWith(new URL("../../runtime/durable-engine/node_modules/", import.meta.url).href);
     }
   });
@@ -37,8 +37,10 @@ describe("Q1 public candidate MemoryStorage only", () => {
     const durable = anchored(engine.resolve("@earendil-works/pi-durable"));
     const ai = anchored(engine.resolve("@earendil-works/pi-ai"));
     const codemode = anchored(engine.resolve("@earendil-works/pi-codemode"));
+    const { estimateContextTokens, ...publicAI } = AI;
     const bridges = {
-      "@earendil-works/pi-ai": AI, "@earendil-works/pi-durable": Durable,
+      "@earendil-works/pi-ai": publicAI,
+      "@earendil-works/pi-ai/utils/estimate": { estimateContextTokens }, "@earendil-works/pi-durable": Durable,
       "@earendil-works/chord/context": Context, "@earendil-works/chord": Chord,
       "@earendil-works/pi-durable/storage/sqlite": Sqlite,
       "@earendil-works/pi-durable/testing": Testing,

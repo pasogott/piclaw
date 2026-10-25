@@ -13,7 +13,7 @@ export type LegacyImportBinding = {
 };
 export const LegacyImportManifest = defineDoc<{ binding: LegacyImportBinding | null }>({
   kind: "app.copied-legacy-import", version: 1, scope: "conversation", history: "latest",
-  fork: "initial", initial: () => ({ binding: null }),
+  fork: "initial", checkpointWhen: () => false, initial: () => ({ binding: null }),
 });
 export const DEFAULT_TREE_IMPORT_LIMITS = { ...DEFAULT_IMPORT_LIMITS, maxBranches: 16 } as const;
 export type LegacyTreeHostBinding = Readonly<{
@@ -27,5 +27,5 @@ export type LegacyTreeImportBinding = {
 };
 export const LegacyTreeImportManifest = defineDoc<{ binding: LegacyTreeImportBinding | null }>({
   kind: "app.copied-legacy-tree-import", version: 1, scope: "conversation", history: "latest",
-  fork: "initial", initial: () => ({ binding: null }),
+  fork: "initial", checkpointWhen: () => false, initial: () => ({ binding: null }),
 });

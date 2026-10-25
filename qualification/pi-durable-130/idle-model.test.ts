@@ -35,9 +35,11 @@ test("shared DB next-request model controls persist while destructive reset reta
   await f.close();
   const manifest = [{ chatJid: "web:idle", branchId: "main", conversationId: id }];
   const unused = async () => { throw Error("unused effect"); };
+  let modelReads = 0, settingsReads = 0;
   const config = { incarnation: "idle", owner: { assert() { owner.assert(); if (stale) throw Error("stale owner"); }, release() {} }, openStorage,
     withIdleModelGuard: <T>(body: () => Promise<T>) => { beforeGuard?.(); return sql.withIdleModelGuard(body); },
-    harnessOptions: { models: f.models, registry: f.registry },
+    harnessOptions: { models: () => { modelReads++; return f.models; }, registry: f.registry,
+      settings: () => { settingsReads++; return undefined; } },
     work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
     terminal: { getTerminal: unused, commitTerminal: unused } as any,
     bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
@@ -186,6 +188,7 @@ test("shared DB next-request model controls persist while destructive reset reta
     expect(await appFor().getCurrentModelLabel("web:idle")).toBe("alternate/other");
     expect(f.host.modelCalls).toBe(0);
     expect(f.host.credentialLookups).toBe(0);
+    expect(modelReads).toBeGreaterThan(0); expect(settingsReads).toBeGreaterThan(0);
   } finally { await runtime.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true }); }
 });
 
