@@ -10,8 +10,13 @@ const visualCss = readFileSync(join(repoRoot, "runtime/web/static/visual/css/she
 
 test("Classic Compaction opts into dense rows without changing shared Settings rows", () => {
   expect(classicComponent).toContain('class="settings-section settings-dense-form"');
-  expect(classicComponent.match(/settings-dense-row/g)?.length).toBeGreaterThanOrEqual(17);
-  expect(classicComponent).toContain("settings-dense-row-compound compaction-model-picker");
+  // Count rows, not modifier-class occurrences. Native auto plus the eight
+  // independent local-lite/tool/semantic/watchdog controls remain editable.
+  expect(classicComponent.match(/class="settings-row settings-dense-row[ "]/g)).toHaveLength(9);
+  expect(classicComponent).toContain("settings.compaction.enableAutomatic");
+  expect(classicComponent).not.toContain("compaction-model-picker");
+  expect(classicComponent).not.toContain("smartCompactionMethod");
+  expect(classicComponent).not.toContain("compactionModel");
   expect(classicCss).toContain(".settings-dense-row {");
   expect(classicCss).toContain("grid-template-columns: var(--settings-dense-label-width) var(--settings-dense-control-width) minmax(0, 1fr)");
   expect(classicCss).toContain(".settings-dense-row-compound");
@@ -20,8 +25,12 @@ test("Classic Compaction opts into dense rows without changing shared Settings r
 
 test("Visual Compaction uses a Visual-specific dense row primitive", () => {
   expect(visualComponent).toContain('className="settings-panel__section settings-panel__dense-form"');
-  expect(visualComponent.match(/settings-panel__dense-row/g)?.length).toBeGreaterThanOrEqual(15);
-  expect(visualComponent).toContain("settings-panel__dense-row--compound compaction-model-picker");
+  // Visual also exposes the independent compacted-tools allowlist.
+  expect(visualComponent.match(/className="settings-panel__field settings-panel__dense-row[ "]/g)).toHaveLength(10);
+  expect(visualComponent).toContain('id="autoCompactionEnabled"');
+  expect(visualComponent).not.toContain("compaction-model-picker");
+  expect(visualComponent).not.toContain("smartCompactionMethod");
+  expect(visualComponent).not.toContain("compactionModel");
   expect(visualCss).toContain(".settings-panel__dense-row {");
   expect(visualCss).toContain("--settings-panel-dense-label-width: 180px");
   expect(visualCss).toContain("--settings-panel-dense-control-width: 200px");
