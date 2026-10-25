@@ -13,7 +13,7 @@ export function createHostGoalPrompt(addon: {
   claimGoalBudgetWrapup(chat: string, expected: { goalId: string; generation: number }): unknown;
   isGoalBudgetInput(text: string): boolean;
   goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
-  resolveGoalInput(text: string, chat: string): { action: string };
+  resolveGoalInput(text: string, chat: string): { action: string; text?: string };
   accountGoalProgress(chat: string, tokens: number): unknown;
   accountTerminalGoalProgress(chat: string, expected: { goalId: string; generation: number }, tokens: number): unknown;
 }, options: {
@@ -105,12 +105,26 @@ export function createHostGoalPrompt(addon: {
       });
     };
     assertContributionCurrent();
+    // The queue stores the short visible input plus its lifecycle identity.
+    // Append expanded continuation instructions once as durable hidden user
+    // context, preserving previous snapshots and their exact cache prefixes.
+    const continuations = scope(() => texts.flatMap(text => {
+      const decision = addon.resolveGoalInput(text, captured.operation.chatJid);
+      return decision.action === "transform" && decision.text ? [{ type: "text" as const, text: decision.text }] : [];
+    }));
     const messages = await runtime.prepareGoalContext(api.conversationId, api.taskId, captured.inputs,
-      request.messages, [{ type: "text", text: prompt }], {
+      request.messages, continuations.length ? continuations : [{ type: "text", text: "Goal state is supplied by the system instructions for this request." }], {
         goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status as "active" | "budget_limited",
+        // Persist proof of the exact ephemeral system overlay. Plan/Goal
+        // context re-entry can recognise it without trusting arbitrary text.
+        systemPrompt: prompt,
+        ...(continuations.length ? { inputKey: JSON.stringify([captured.operation.operationId,
+          captured.inputs.map(input => input.sourceSeq)]) } : {}),
       }, assertContributionCurrent, context);
     assertContributionCurrent();
-    return { messages };
+    // Match the add-on system-prompt contract. Goal rules must not be demoted
+    // to user instructions; the objective is explicitly labelled user data.
+    return { messages: [...messages, { role: "system" as const, content: prompt, timestamp: 0 }] };
     } catch (error) {
       options.failClosed(error);
       throw Error("Goal request authority unavailable");

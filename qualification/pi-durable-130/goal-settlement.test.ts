@@ -183,7 +183,10 @@ for (const mode of ["continue", "human", "human-pending", "human-error", "human-
     if (budget) {
       expect(queued).toHaveLength(1);
       expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });
-      expect(addon.isGoalBudgetInput(queued[0]!.queuedContent)).toBe(true);
+      expect(queued[0]!.queuedContent).toStartWith("🎯 Goal budget reached:");
+      expect(withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent() {},
+        write() { throw Error("Read-only assertion"); } },
+        () => addon.isGoalBudgetInput(addon.resolveGoalInput(queued[0]!.queuedContent, chatJid).text))).toBe(true);
       expect(addon.goalInputIdentity(queued[0]!.queuedContent)).toMatchObject({ generation: 2 });
       expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ status: "budget_limited", budget_limit_reported: true, tokens_used: 7, lifecycle_generation: 2 });
       if (mode === "budget-pending") expect(value(await work.getChatFrontier(chatJid)).nextPendingSourceSeq)

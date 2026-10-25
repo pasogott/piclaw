@@ -1,3 +1,4 @@
+import { compactGoalInput } from "./host-goal-input.js";
 import type Database from "bun:sqlite";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
@@ -10,6 +11,7 @@ export function createHostGoalConfig(addon: {
     goal: { goal_id: string; lifecycle_generation: number; updated_at: string } | null;
     continuation?: string; reason: string | null; response: Record<string, unknown>;
   };
+  goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
   prepareGoalInput(text: string, chat: string): { decision: { action: string; text?: string } };
 }, options: {
   root: Database; assertAdmission(chat: string): void;
@@ -31,7 +33,7 @@ export function createHostGoalConfig(addon: {
           const prepared = addon.prepareGoalInput(result.continuation, chatJid).decision;
           if (!goal || prepared.action !== "transform" || !prepared.text) throw Error("Goal Settings input no longer executable");
           if (options.admit({ sourceId: `goal-settings:${goal.goal_id}:${goal.lifecycle_generation}`, chatJid,
-            text: prepared.text, queuedAt: goal.updated_at }) === null) throw Error("Goal Settings continuation admission unavailable");
+            text: compactGoalInput(addon, result.continuation, prepared), queuedAt: goal.updated_at }) === null) throw Error("Goal Settings continuation admission unavailable");
         }
         return { ...result.response, continuationQueued: Boolean(result.continuation), continuationReason: result.reason };
       });

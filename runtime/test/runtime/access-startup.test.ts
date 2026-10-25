@@ -40,7 +40,7 @@ test("runtime startup rejects a removed access mode before starting add-on API",
     expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
     expect(stderr).toContain("mode");
   } finally { rmSync(workspace, { recursive: true, force: true }); }
-});
+}, 30_000); // Cold native/subprocess setup under the bounded CI CPU quota.
 
 test("disk activation state survives reopen and rejects lost configuration without changing credentials", () => {
   const dir = mkdtempSync(join(tmpdir(), "piclaw-access-reopen-"));

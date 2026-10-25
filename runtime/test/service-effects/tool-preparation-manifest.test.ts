@@ -129,7 +129,7 @@ describe("WP-3C production-root coverage oracle", () => {
     expect(manifestByName.get("powershell")?.currentSource).toContain("runtime/extensions/platform/windows/powershell");
     expect(Object.hasOwn(inventory.registrationSites, "mcp")).toBeFalse();
     expect(manifestByName.get("mcp")?.currentSource).toContain("pi-mcp-adapter");
-  });
+  }, 30_000); // Whole-repository TypeScript scan under the bounded CI CPU quota.
 
   test("ignores an unreferenced registration", () => {
     const inventory = inventoryRepositoryToolFamilies(compositionTree());
