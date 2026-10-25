@@ -1,4 +1,6 @@
 import type Database from "bun:sqlite";
+import { writeScheduledTaskHead } from "../../db/scheduled-task-head.js";
+import { projectScheduledTask } from "../../db/scheduled-task-definitions.js";
 import { assertProcessAdmission } from "../../runtime/process-admission.js";
 import { Result, type Result as ResultValue } from "../contracts/result.js";
 
@@ -449,9 +451,11 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     return this.database.transaction(()=>{
       const replay=this.replayRecordOrRetained(key,'complete',request.effect.requestHash,request.runId);
       if(replay){
+        projectScheduledTask(this.database,replay.taskId,replay.runId);
         if(request.resultPayload && replay.durationMs !== null){
           projectScheduledHistory(this.database,request.runId,request);
           this.statement('history_projection');
+          projectScheduledTask(this.database,replay.taskId,replay.runId);
         }
         return Result.ok(replay);
       }
@@ -462,6 +466,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       if(completed.ok && request.resultPayload){
         projectScheduledHistory(this.database,request.runId,request);
         this.statement('history_projection');
+        projectScheduledTask(this.database,run.task_id,run.run_id);
       }
       return completed;
     }).immediate();
@@ -528,6 +533,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       this.statement("occurrence_terminal_update");
       const record = this.readRecord(run.run_id)!;
       this.writeDecision(`effect:${request.effect.idempotencyKey}`, "complete", request.effect.requestHash, run.run_id, record, request.completedAt);
+      projectScheduledTask(this.database,run.task_id,run.run_id);
       return Result.ok(record);
   }
 
@@ -535,7 +541,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `effect:${request.effect.idempotencyKey}`;
     return this.database.transaction(() => {
       const replay = this.replayRecordOrRetained(key, "abandon", request.effect.requestHash, request.runId);
-      if (replay) return Result.ok(replay);
+      if (replay) { projectScheduledTask(this.database,replay.taskId,replay.runId); return Result.ok(replay); }
       const run = this.requireFencedRun(request, hashScheduledLeaseToken(request.leaseToken));
       const snapshot = this.readSnapshot(run.task_id, run.task_revision);
       const decision = this.decideHead(run, snapshot, request.abandonedAt, request.retryAt);
@@ -552,6 +558,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       this.statement("occurrence_terminal_update");
       const record = this.readRecord(run.run_id)!;
       this.writeDecision(key, "abandon", request.effect.requestHash, run.run_id, record, request.abandonedAt);
+      projectScheduledTask(this.database,run.task_id,run.run_id);
       return Result.ok(record);
     }).immediate();
   }
@@ -567,11 +574,15 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         return Result.ok(result);
       }
       // Retain canonical rebuild/replay authority while an explicitly linked
-      // host payload survives. Legacy unlinked rows are never guessed into it.
+      // host payload survives, or the current paused head still references its
+      // successor decision. Legacy unlinked rows are never guessed into it.
       const protectedHistory = hasScheduledHistoryProjection(this.database)
         ? `AND NOT EXISTS (SELECT 1 FROM main.task_run_logs h WHERE h.occurrence_id=r.run_id OR (h.task_id=r.task_id AND r.result_ref='task_run_log:' || h.id))` : "";
       const rows = this.database.query(
-        `SELECT r.* FROM ${RUNS} r WHERE r.state IN ('completed','abandoned') AND r.settled_at<? ${protectedHistory} ORDER BY r.settled_at,r.run_id LIMIT ?`,
+        `SELECT r.* FROM ${RUNS} r WHERE r.state IN ('completed','abandoned') AND r.settled_at<? ${protectedHistory}
+          AND NOT EXISTS (SELECT 1 FROM ${TASKS} t WHERE t.task_id=r.task_id AND t.current_revision=r.task_revision
+            AND t.status='paused' AND t.next_run_at=r.scheduled_for)
+          ORDER BY r.settled_at,r.run_id LIMIT ?`,
       ).all(request.settledBefore, request.limit) as RunRow[];
       const runIds: string[] = [];
       for (const row of rows) {
@@ -660,10 +671,9 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
 
   private applyHeadDecision(run: RunRow, decision: ReturnType<CurrentPiclawScheduledRunStore["decideHead"]>, at: string): void {
     if (decision.disposition !== "advanced") return;
-    const changed = this.database.query(
-      `UPDATE ${TASKS} SET next_run_at=?,status=CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END,updated_at=? WHERE task_id=? AND current_revision=? AND status='active' AND next_run_at=?`,
-    ).run(decision.effectiveNext, decision.effectiveNext, at, run.task_id, run.task_revision, run.scheduled_for);
-    if (changed.changes !== 1) throw new AbortMutation(errorOf("task_revision_mismatch"));
+    const previous = { taskId: run.task_id, revision: run.task_revision, status: "active" as const, nextRunAt: run.scheduled_for };
+    if (!writeScheduledTaskHead(this.database,previous,{ ...previous, nextRunAt: decision.effectiveNext,
+      status: decision.effectiveNext === null ? "completed" : "active" },at)) throw new AbortMutation(errorOf("task_revision_mismatch"));
     this.statement("task_head_update");
   }
 

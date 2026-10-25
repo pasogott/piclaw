@@ -5,7 +5,9 @@
     "sdk": "@earendil-works/pi-durable@1.3.0",
     "nativeAddons": "e8aac2399148cbef638764ba2b5a1cd916cc5ecc",
     "approved-variant:table:chat_branches:ca1502052e5b89e1bea6419cf9448b2b81bf0c76dbfc585548d58bb2d11f5bc7": "Current migrateChatBranchAgentNameUniqueness rebuild quotes the table header; isolated historical chats/branches + legacy token_usage fixture; all other clauses/constraints unchanged. See runtime/src/db/connection.ts and qualification/pi-durable-130/schema-ownership-fixture.ts.",
-    "host.scheduled-history/occurrence-payload-v1": "{\"base\":\"047d08b1b8f78d5e3bd25b559da6c1917e1dd939\",\"owner\":\"host.scheduled-history\",\"id\":\"occurrence-payload-v1\",\"migration_order\":1,\"checksum\":\"7d717432ca22388076f53de373fb1ee710b92ad8368107bc7186a850cdae03f4\"}"
+    "host.scheduled-history/occurrence-payload-v1": "{\"base\":\"047d08b1b8f78d5e3bd25b559da6c1917e1dd939\",\"owner\":\"host.scheduled-history\",\"id\":\"occurrence-payload-v1\",\"migration_order\":1,\"checksum\":\"7d717432ca22388076f53de373fb1ee710b92ad8368107bc7186a850cdae03f4\"}",
+    "host.scheduled-definitions/versioned-payload-v1": "{\"base\":\"852e677276dc85e6504190e52286548ad1dcb54b\",\"owner\":\"host.scheduled-definitions\",\"id\":\"versioned-payload-v1\",\"migration_order\":1,\"checksum\":\"0e14073a0e90dcd92be152464e52faf4604777f2e6f6b1d75e88d3f894cfeb31\"}",
+    "host.usage-reports/event-payload-v1": "{\"base\":\"96172d04b369980f7066de99d118df790b303a06\",\"owner\":\"host.usage-reports\",\"id\":\"event-payload-v1\",\"migration_order\":1,\"checksum\":\"0da9f38aeba12085f66855a829c0277b225137d08de7acdf04d17391109484ed\"}"
   },
   "owners": {
     "core:access_state": {
@@ -139,21 +141,28 @@
         "runtime/src/db/budget-request-reservations.ts"
       ],
       "sourceOfTruth": "Host budget admission/audit ledger budget_request_reservations as defined by budget-limits-schema and its store APIs. Persisted cap, window, allowance, override, reservation, work and evidence identities are not reconstructed from transcript totals.",
-      "replayRetention": "No universal reconstruction or age-expiry guarantee. Preserve persisted identity, history and FK/receipt obligations; changes belong to the cited owner APIs. This read-only inventory adds no deletion, pruning, replay or migration authority.",
+      "replayRetention": "No universal reconstruction or age-expiry guarantee. Preserve persisted identity, history and FK/receipt obligations; changes belong to the cited owner APIs. This read-only inventory adds no deletion, pruning, replay or migration authority. Actual event payloads bind request/settlement hashes and require their reservation proof for reconstruction. Missing settled-event evidence stays an uncertain capacity hold. Report pruning cannot release any request or retire this semantic reference; #1702 must coordinate retirement.",
       "references": [
-        "runtime/src/db/budget-limits-schema.ts"
+        "runtime/src/db/budget-limits-schema.ts",
+        "runtime/src/db/usage-report-projection.ts",
+        "runtime/src/budget/usage-total.ts"
       ]
     },
     "core:budget_usage_events": {
       "category": "core",
-      "initializer": "runtime/src/db/budget-limits-schema.ts#initializeBudgetLimitsSchema",
+      "initializer": "runtime/src/db/budget-limits-schema.ts#initializeBudgetLimitsSchema → runtime/src/db/usage-report-projection.ts#initializeUsageReportProjection",
       "writers": [
-        "runtime/src/db/budget-limits.ts"
+        "runtime/src/db/budget-limits.ts",
+        "runtime/src/db/usage-report-projection.ts (one-time owned cutover payload capture only)"
       ],
-      "sourceOfTruth": "Append-only budget accounting ledger; distinct from prunable token_usage.",
-      "replayRetention": "Schema aborts UPDATE/DELETE; do not apply token_usage retention here.",
+      "sourceOfTruth": "Immutable event identity, original work/chat/time and API-equivalent valuation. Version1 hash-bound report payload extends this same event; actual host-request origin binds reservation/settlement hashes. Recorder observations retain their weaker identity; cutover captures existing reports as legacy_projection_capture, never as independent original provider evidence. No SDK usage totals are added a second time.",
+      "replayRetention": "Keep events and their mandatory token_usage numeric FK parent while accounting/replay evidence is required. Report-only cleanup never deletes them or changes reservations. Missing/malformed pre-cutover payloads remain unavailable, never recaptured from a later cache. Explicit bounded report repair changes only numeric/metadata projections, preserving existing mutable chat routing. Global retirement remains owner-specific #1702; main SQLite backup carries all event payloads and receipts.",
       "references": [
-        "runtime/src/db/budget-limits-schema.ts"
+        "runtime/src/db/budget-limits-schema.ts",
+        "runtime/src/db/usage-report-projection.ts",
+        "runtime/src/db/budget-request-reservations.ts",
+        "runtime/src/budget/evaluator.ts",
+        "runtime/src/budget/usage-total.ts"
       ]
     },
     "core:budget_work": {
@@ -464,20 +473,20 @@
       ]
     },
     "core:scheduled_tasks": {
-      "category": "core",
+      "category": "projection-cache",
       "initializer": "runtime/src/db/connection.ts#createSchema",
       "writers": [
-        "runtime/src/ipc.ts",
-        "runtime/src/db/chat-branches.ts",
-        "runtime/src/db/tasks.ts",
+        "runtime/src/db/scheduled-task-definitions.ts",
         "runtime/src/db/scheduled-task-authority.ts"
       ],
-      "sourceOfTruth": "Host task definitions synchronize into S07 heads/revision snapshots through scheduled-task-authority.ts; do not treat either side as free-to-rebuild.",
-      "replayRetention": "deleteTask removes host logs/definition and marks S07 authority deleted; S07 receipts have separate retention.",
+      "sourceOfTruth": "Compatibility/UI projection of the versioned host definition and S07 head/held-successor decision. Payload/status/next_run/revision are never execution authority. Legacy last_run/last_result remain auxiliary UI evidence only.",
+      "replayRetention": "Rebuild known definitions and head metadata without executing work. Historical unavailable payloads are never fabricated or adopted from cache. Explicit deletion belongs to the canonical owner and retires bodies/tombstones authority; preserve unlinked legacy result evidence until that explicit deletion.",
       "references": [
         "runtime/src/db/connection.ts",
         "runtime/src/db/tasks.ts",
-        "runtime/src/db/scheduled-task-authority.ts"
+        "runtime/src/db/scheduled-task-authority.ts",
+        "runtime/src/db/scheduled-task-definitions.ts",
+        "runtime/src/db/scheduled-task-head.ts"
       ]
     },
     "core:service_effect_s01_chats": {
@@ -716,7 +725,7 @@
         "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts"
       ],
       "sourceOfTruth": "S07 scheduler authority/history. Host scheduled_tasks synchronizes heads and immutable task snapshots; leases, source bindings, receipts and tombstones are not caches.",
-      "replayRetention": "cleanupTerminal replaces eligible completed/abandoned runs with tombstones, then deletes scoped per-run evidence; replayRecordOrRetained uses tombstones. No general tombstone/revision TTL established.",
+      "replayRetention": "cleanupTerminal replaces eligible completed/abandoned runs with tombstones, then deletes scoped per-run evidence; replayRecordOrRetained uses tombstones. No general tombstone/revision TTL established. A current paused revision/slot retains its exact successor decision even if result payload bytes are lost; resume/edit/delete releases this reference hold.",
       "references": [
         "runtime/src/service-effects/current-piclaw/scheduled-run-schema.ts",
         "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts"
@@ -781,27 +790,30 @@
         "runtime/src/db/scheduled-task-authority.ts",
         "runtime/src/service-effects/current-piclaw/scheduled-task-authority.ts"
       ],
-      "sourceOfTruth": "S07 scheduler authority/history. Host scheduled_tasks synchronizes heads and immutable task snapshots; leases, source bindings, receipts and tombstones are not caches.",
+      "sourceOfTruth": "Immutable S07 admission snapshots/config hashes, paired with versioned host definition bodies. New refs bind body hashes; every old snapshot/ref/hash is preserved and unknown old body history remains explicit.",
       "replayRetention": "cleanupTerminal replaces eligible completed/abandoned runs with tombstones, then deletes scoped per-run evidence; replayRecordOrRetained uses tombstones. No general tombstone/revision TTL established.",
       "references": [
         "runtime/src/service-effects/current-piclaw/scheduled-run-schema.ts",
-        "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts"
+        "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts",
+        "runtime/src/db/scheduled-task-definitions.ts",
+        "runtime/src/db/scheduled-task-authority.ts",
+        "runtime/src/db/scheduled-task-head.ts"
       ]
     },
     "core:service_effect_s07_tasks": {
       "category": "core",
       "initializer": "runtime/src/service-effects/current-piclaw/scheduled-run-schema.ts#installScheduledRunSchema (via installScheduledRunCompositionSchema)",
       "writers": [
-        "runtime/src/db/tasks.ts",
-        "runtime/src/db/scheduled-task-authority.ts",
-        "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts",
-        "runtime/src/service-effects/current-piclaw/scheduled-task-authority.ts"
+        "runtime/src/db/scheduled-task-head.ts"
       ],
-      "sourceOfTruth": "S07 scheduler authority/history. Host scheduled_tasks synchronizes heads and immutable task snapshots; leases, source bindings, receipts and tombstones are not caches.",
-      "replayRetention": "cleanupTerminal replaces eligible completed/abandoned runs with tombstones, then deletes scoped per-run evidence; replayRecordOrRetained uses tombstones. No general tombstone/revision TTL established.",
+      "sourceOfTruth": "Single authoritative current revision/status/scheduling slot. One CAS head writer serves canonical CRUD, direct compatibility settlement and S07 completion. Its owner transaction also writes the UI projection. SDK execution tasks never own recurrence or leases.",
+      "replayRetention": "cleanupTerminal replaces eligible completed/abandoned runs with tombstones, then deletes scoped per-run evidence; replayRecordOrRetained uses tombstones. No general tombstone/revision TTL established. A current paused revision/slot retains its exact successor decision even if result payload bytes are lost; resume/edit/delete releases this reference hold.",
       "references": [
         "runtime/src/service-effects/current-piclaw/scheduled-run-schema.ts",
-        "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts"
+        "runtime/src/service-effects/current-piclaw/scheduled-run-store.ts",
+        "runtime/src/db/scheduled-task-definitions.ts",
+        "runtime/src/db/scheduled-task-authority.ts",
+        "runtime/src/db/scheduled-task-head.ts"
       ]
     },
     "core:service_effect_s07_tombstones": {
@@ -886,19 +898,23 @@
       ]
     },
     "core:token_usage": {
-      "category": "core",
+      "category": "projection-cache",
       "initializer": "runtime/src/db/connection.ts#createSchema",
       "writers": [
-        "runtime/src/dream.ts",
-        "runtime/src/runtime/startup.ts",
+        "runtime/src/db/token-usage.ts",
+        "runtime/src/db/usage-report-projection.ts",
         "runtime/src/db/chat-branches.ts",
-        "runtime/src/db/token-usage.ts"
+        "scripts/backfill-token-usage.ts (unlinked legacy rows only)"
       ],
-      "sourceOfTruth": "Persisted usage/cost evidence; usage_event_id dedupes, budget_usage_events is separate ledger.",
-      "replayRetention": "pruneOldTokenUsage default 90 days is an API, not proof of an active scheduler.",
+      "sourceOfTruth": "Event-linked native reports are rebuildable from immutable budget_usage_events payloads. Original accounting identity/valuation and reservations remain canonical. Unlinked historical rows retain legacy source evidence without invented request identities. Existing chat routing is an explicit mutable display projection exception; loss restores original event chat, never fabricates a later move.",
+      "replayRetention": "Event-linked rows remain mandatory compatibility/FK parents and cannot be report-pruned. Reconciliation preserves numeric IDs, actual provider/catalogue valuations and original run timestamps; event/reservation/work evidence never changes. Unlinked legacy rows retain existing retention behavior and legacy valuation fallback until separately retired; unknown old payloads are explicitly unavailable.",
       "references": [
         "runtime/src/db/connection.ts",
-        "runtime/src/db/token-usage.ts"
+        "runtime/src/db/token-usage.ts",
+        "runtime/src/db/usage-report-projection.ts",
+        "runtime/src/db/budget-request-reservations.ts",
+        "runtime/src/budget/evaluator.ts",
+        "runtime/src/budget/usage-total.ts"
       ]
     },
     "core:tool_outputs": {
@@ -1154,6 +1170,22 @@
       "references": [
         "runtime/src/db/connection.ts",
         "runtime/scripts/lib/schema-ownership.ts"
+      ]
+    },
+    "core:host_scheduled_task_definitions": {
+      "category": "core",
+      "initializer": "runtime/src/db/scheduled-task-definitions.ts#initializeScheduledTaskDefinitions (via runtime/src/db/scheduled-task-authority.ts#migrateScheduledTaskAuthorities)",
+      "writers": [
+        "runtime/src/db/scheduled-task-definitions.ts",
+        "runtime/src/db/scheduled-task-authority.ts"
+      ],
+      "sourceOfTruth": "Versioned immutable user-authored task definition/payload, bound by body hash and S07 admission snapshot. Current legacy capture has explicit captured-at/origin; missing historical bodies remain unavailable. S07 owns head/status/slot and occurrence policy; SDK tasks remain execution records.",
+      "replayRetention": "Keep revision hashes and payload provenance. No age pruning. Explicit task deletion retires body bytes while preserving S07 heads/revisions/tombstones and captured hashes. Missing bytes never recapture from scheduled_tasks. Main SQLite backups include all rows; archive export includes exact revision/body provenance.",
+      "references": [
+        "runtime/src/db/scheduled-task-definitions.ts",
+        "runtime/src/db/scheduled-task-authority.ts",
+        "runtime/src/db/scheduled-task-head.ts",
+        "runtime/durable-engine/src/application-bootstrap.ts"
       ]
     }
   },
@@ -2266,7 +2298,8 @@
     "table:budget_usage_events": {
       "owner": "core:budget_usage_events",
       "fingerprints": [
-        "0b9f5816168e506ed2328136b37e3bf769559f6502b7ecb829ca1e2586484783"
+        "0b9f5816168e506ed2328136b37e3bf769559f6502b7ecb829ca1e2586484783",
+        "57f3a37a36caeff46f37a88f77f6a585b47660e295fa437d74a350c470d3c2ff"
       ],
       "requiredIn": [
         "core",
@@ -4473,6 +4506,33 @@
         "native-addons"
       ],
       "table": "task_run_logs"
+    },
+    "index:idx_scheduled_task_paused_successor": {
+      "owner": "core:host_scheduled_task_definitions",
+      "fingerprints": [
+        "0e7a5922a3858e494d3c0807cb73873974af924eaff65d32fc4ed761168dc9b8"
+      ],
+      "requiredIn": [
+        "core",
+        "native",
+        "native-addons"
+      ],
+      "table": "service_effect_s07_next_decisions"
+    },
+    "table:host_scheduled_task_definitions": {
+      "owner": "core:host_scheduled_task_definitions",
+      "fingerprints": [
+        "37d29b87223b692328f70a7d7c194ddc10eff0d2b7220193a54e37d4b56480f2"
+      ],
+      "requiredIn": [
+        "core",
+        "native",
+        "native-addons"
+      ],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "43cd1503996b3dd4d6f2222629f4b72c31547f904be6ee6291313d3ba69b3f23"
+      ]
     }
   },
   "documents": [

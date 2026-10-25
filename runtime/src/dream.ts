@@ -1,3 +1,4 @@
+import { unlinkedUsageReportPredicate } from "./db/usage-report-projection.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { join, relative, resolve } from "path";
 
@@ -259,7 +260,7 @@ function reapDreamArtifacts(excludeDreamChatJid?: string | null): void {
       db.prepare("DELETE FROM chat_cursors WHERE chat_jid LIKE 'dream:%' AND chat_jid != ?").run(excludeDreamChatJid);
       db.prepare("DELETE FROM chat_branches WHERE chat_jid LIKE 'dream:%' AND chat_jid != ?").run(excludeDreamChatJid);
       db.prepare("DELETE FROM chats WHERE jid LIKE 'dream:%' AND jid != ?").run(excludeDreamChatJid);
-      db.prepare("DELETE FROM token_usage WHERE chat_jid LIKE 'dream:%' AND chat_jid != ?").run(excludeDreamChatJid);
+      db.prepare(`DELETE FROM token_usage WHERE chat_jid LIKE 'dream:%' AND chat_jid != ? AND ${unlinkedUsageReportPredicate("token_usage")}`).run(excludeDreamChatJid);
     } else {
       db.prepare("DELETE FROM message_media WHERE message_rowid IN (SELECT rowid FROM messages WHERE chat_jid LIKE 'dream:%')").run();
       deleteThinkingContentByChatJidPattern('dream:%');
@@ -267,7 +268,7 @@ function reapDreamArtifacts(excludeDreamChatJid?: string | null): void {
       db.prepare("DELETE FROM chat_cursors WHERE chat_jid LIKE 'dream:%'").run();
       db.prepare("DELETE FROM chat_branches WHERE chat_jid LIKE 'dream:%'").run();
       db.prepare("DELETE FROM chats WHERE jid LIKE 'dream:%'").run();
-      db.prepare("DELETE FROM token_usage WHERE chat_jid LIKE 'dream:%'").run();
+      db.prepare(`DELETE FROM token_usage WHERE chat_jid LIKE 'dream:%' AND ${unlinkedUsageReportPredicate("token_usage")}`).run();
     }
   } catch (error) {
     debugSuppressedError(log, "failed to reap Dream chat records", error, { excludeDreamChatJid: excludeDreamChatJid || null });
@@ -301,7 +302,7 @@ async function cleanupDreamChat(agentPool: AgentPool, dreamChatJid: string, chec
     db.prepare("DELETE FROM chat_cursors WHERE chat_jid = ?").run(dreamChatJid);
     db.prepare("DELETE FROM chat_branches WHERE chat_jid = ?").run(dreamChatJid);
     db.prepare("DELETE FROM chats WHERE jid = ?").run(dreamChatJid);
-    db.prepare("DELETE FROM token_usage WHERE chat_jid = ?").run(dreamChatJid);
+    db.prepare(`DELETE FROM token_usage WHERE chat_jid = ? AND ${unlinkedUsageReportPredicate("token_usage")}`).run(dreamChatJid);
   } catch (error) {
     debugSuppressedError(log, "failed to delete Dream chat artifacts", error, { dreamChatJid });
   }

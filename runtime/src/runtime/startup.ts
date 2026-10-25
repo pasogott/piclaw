@@ -1,3 +1,4 @@
+import { unlinkedUsageReportPredicate } from "../db/usage-report-projection.js";
 import { createOperationHost } from "../addons/operation-host.js";
 import { setAddonOperationHost } from "../addons/runtime-contributions.js";
 /**
@@ -132,7 +133,7 @@ export function cleanupOrphanedActiveChatArtifacts(): number {
 
     db.prepare("DELETE FROM chat_branches WHERE chat_jid = ?").run(chatJid);
     db.prepare("DELETE FROM chats WHERE jid = ?").run(chatJid);
-    db.prepare("DELETE FROM token_usage WHERE chat_jid = ?").run(chatJid);
+    db.prepare(`DELETE FROM token_usage WHERE chat_jid = ? AND ${unlinkedUsageReportPredicate("token_usage")}`).run(chatJid);
 
     if (mainDirExists) rmSync(mainDir, { recursive: true, force: true });
     if (sideDirExists) rmSync(sideDir, { recursive: true, force: true });

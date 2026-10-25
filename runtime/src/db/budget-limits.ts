@@ -21,6 +21,8 @@ export interface BudgetWorkRecord {
 }
 
 export interface BudgetUsageEventInput extends BudgetUsageAttribution {
+  reportPayloadJson?: string | null;
+  reportPayloadSha256?: string | null;
   tokenUsageId: number;
   chatJid: string;
   accountedAt: string;
@@ -302,10 +304,10 @@ export function resumeBudgetWork(workId: string, database: Database = getDb(), n
 
 export function insertBudgetUsageEvent(input: BudgetUsageEventInput, database: Database = getDb()): boolean {
   if (!input.usageEventId) return false;
-  const result = database.prepare(`INSERT OR IGNORE INTO budget_usage_events (
+  const result = database.prepare(`INSERT OR IGNORE INTO main.budget_usage_events (
     usage_event_id,token_usage_id,work_id,chat_jid,invocation_id,accounted_at,
-    api_usd_micros,api_usd_known,valuation_provenance,usage_source
-  ) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    api_usd_micros,api_usd_known,valuation_provenance,usage_source,report_payload_json,report_payload_sha256
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     input.usageEventId,
     input.tokenUsageId,
     input.workId,
@@ -316,6 +318,8 @@ export function insertBudgetUsageEvent(input: BudgetUsageEventInput, database: D
     input.apiUsdKnown ? 1 : 0,
     input.valuationProvenance,
     input.usageSource,
+    input.reportPayloadJson ?? null,
+    input.reportPayloadSha256 ?? null,
   );
   return result.changes === 1;
 }

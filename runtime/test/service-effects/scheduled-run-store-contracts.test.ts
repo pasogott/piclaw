@@ -134,6 +134,30 @@ const fakeFactory: ContractSubjectFactory<FakeSubject> = {
   inspectTrace(subject) { return subject.fake.trace.snapshot(); },
 };
 
+for (const [label, factory] of [["SQLite", sqliteFactory], ["fake", fakeFactory]] as const) {
+  test(`paused current-slot cleanup retains its successor receipt until resume: ${label}`, async () => {
+    const subject = await factory.create(context());
+    try {
+      subject.authority.create(authorityTask("task:paused-cleanup"));
+      const claimed = await subject.store.claimDue(dueClaim("paused-cleanup"));
+      if (!claimed.ok) throw Error(claimed.error._tag);
+      subject.authority.pause("task:paused-cleanup");
+      const completed = await subject.store.complete(completion(claimed.value[0]!,"complete:paused-cleanup"));
+      if (!completed.ok) throw Error(completed.error._tag);
+      expect(completed.value.headDisposition).toBe("paused");
+      const held = await subject.store.cleanupTerminal({ settledBefore: "2026-08-16T01:01:00.000Z", limit: 10 });
+      expect(held.ok && held.value.removed).toBe(0);
+      expect(subject.inspect().nextDecisions).toBe(1);
+      subject.authority.resume("task:paused-cleanup");
+      const retired = await subject.store.cleanupTerminal({ settledBefore: "2026-08-16T01:02:00.000Z", limit: 10 });
+      expect(retired.ok && retired.value.removed).toBe(1);
+      const next = await subject.store.claimDue(dueClaim("paused-resumed",completed.value.nextRunAt!));
+      expect(next.ok && next.value.length).toBe(1);
+      expect(next.ok && next.value[0]?.record.scheduledFor).toBe(completed.value.nextRunAt);
+    } finally { subject.dispose?.(); }
+  });
+}
+
 describe("EF-S07 ScheduledRunStore shared contract", () => {
   test("independent fake", async () => { const results = await defineScheduledRunStoreContract(fakeFactory, context); expect(results.length).toBe(21); });
   test("isolated SQLite adapter", { timeout: 20000 }, async () => { const results = await defineScheduledRunStoreContract(sqliteFactory, context); expect(results.length).toBe(21); });

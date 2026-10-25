@@ -11,33 +11,7 @@ import { evaluateBudget } from "./evaluator.js";
 import { PROVIDER_BUDGET_CAPABILITIES } from "./provider-evidence.js";
 import type { BudgetCap, BudgetProviderEvidence } from "./types.js";
 
-interface UsageTotal {
-  known_usage: number;
-  unknown_events: number;
-}
-
-function usageTotal(input: { workIds?: string[]; startsAt?: string; endsAt?: string }, database: Database): UsageTotal {
-  const where: string[] = [];
-  const values: unknown[] = [];
-  if (input.workIds) {
-    if (input.workIds.length === 0) return { known_usage: 0, unknown_events: 0 };
-    where.push(`work_id IN (${input.workIds.map(() => "?").join(",")})`);
-    values.push(...input.workIds);
-  }
-  if (input.startsAt) { where.push("run_at >= ?"); values.push(input.startsAt); }
-  if (input.endsAt) { where.push("run_at < ?"); values.push(input.endsAt); }
-  const row = database.prepare(`SELECT
-    COALESCE(SUM(CASE
-      WHEN api_equivalent_cost_known=1 THEN COALESCE(api_equivalent_cost_microusd,0)
-      WHEN valuation_provenance IS NULL AND catalogue_cost_total>0 THEN CAST(ROUND(catalogue_cost_total*1000000) AS INTEGER)
-      ELSE 0 END),0) AS known_usage,
-    COALESCE(SUM(CASE
-      WHEN total_tokens>0 AND NOT (
-        api_equivalent_cost_known=1 OR (valuation_provenance IS NULL AND catalogue_cost_total>0)
-      ) THEN 1 ELSE 0 END),0) AS unknown_events
-    FROM token_usage ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`).get(...values as any[]) as UsageTotal;
-  return { known_usage: Number(row.known_usage), unknown_events: Number(row.unknown_events) };
-}
+import { readBudgetUsageTotal as usageTotal } from "./usage-total.js";
 
 function descendantIds(workId: string, database: Database): string[] {
   return (database.prepare(`WITH RECURSIVE descendants(id) AS (
@@ -155,7 +129,7 @@ export function getBudgetSettingsState(
     timezone: getRuntimeTimingConfig().timezone,
     enforcement: "best_effort_boundaries",
     pricing_notice: "API-equivalent USD is an estimate, not an invoice or subscription balance.",
-    reservation_notice: "Budget limits v1 does not reserve spend and never selects a cheaper model automatically.",
+    reservation_notice: "Unknown dispatched outcomes retain their reservations. A cheaper model is never selected automatically.",
     caps: projectedCaps,
     work: work ? {
       id: work.id,

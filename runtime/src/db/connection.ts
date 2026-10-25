@@ -116,7 +116,7 @@ export function shouldBlockLiveDatabaseOpenInTests(options: {
  *   - message_media – join table linking messages to media records
  *   - tool_outputs – large tool invocation results (bash output, file reads)
  *   - tool_outputs_fts – FTS5 index for searching tool output content
- *   - scheduled_tasks – cron/interval/once task definitions
+ *   - scheduled_tasks – compatibility/UI projection of versioned S07 definitions
  *   - task_run_logs – execution history for scheduled tasks
  *   - router_state – key-value store for router cursor positions
  *   - token_usage – per-run LLM token and cost accounting
