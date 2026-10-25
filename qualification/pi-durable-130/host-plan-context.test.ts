@@ -397,3 +397,37 @@ test("Goal system re-entry requires exact current-task snapshot authority and an
   const realSystem = { ...view, messages: [overlay, ...view.messages] };
   expect(canonical([...realSystem.messages, overlay], realSystem)).toEqual(realSystem.messages);
 });
+
+test("a new Goal generation needs its own empty authority anchored to the unchanged frozen contribution", async () => {
+  const { canonicalHostPromptRequest, hostGoalSystemAuthorityKind } = await import("../../runtime/durable-engine/src/host-plan-context.ts");
+  const user = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }], timestamp: 0 });
+  const model = [user("Frozen continuation")];
+  const identity = { owner: "host:goal-prompt", chatJid: "web:goal", goalId: "g", generation: 2,
+    status: "active", systemPrompt: "Trusted Goal rules", inputKey: '["operation",[1]]' };
+  const anchor = { id: 7, kind: "host.goal-context", data: { ...identity, taskId: 12 }, model };
+  const authority = { id: 8, kind: hostGoalSystemAuthorityKind, data: { ...identity, taskId: 13, goalContextEntryId: 7 }, model: [] };
+  const messages = [user("Accepted input"), ...model], overlay = { role: "system" as const, content: identity.systemPrompt, timestamp: 0 };
+  const view: any = { messages, entries: [anchor, authority], contributions: [model, []] };
+  const canonical = (v: any = view, request: any = [...messages, overlay]) => canonicalHostPromptRequest(request, v, "web:goal", 13, "Plan");
+  expect(canonical()).toEqual(messages);
+  expect(projectPublicHistory([anchor, authority] as any, null)).toEqual([]);
+  expect(() => projectPublicHistory([{ ...authority, model }] as any, null)).toThrow("Invalid Goal system authority");
+  expect(() => projectPublicHistory([{ ...authority, data: { ...authority.data, owner: "foreign" } }] as any, null)).toThrow("Invalid Goal system authority");
+  expect(() => canonical({ ...view, entries: [anchor], contributions: [model] })).toThrow("Unknown Plan request cutoff");
+  expect(() => canonical(view, [...messages, overlay, overlay])).toThrow("Unknown Plan request cutoff");
+  // Raw entry chronology proves the anchor even when compaction changes view ordering.
+  expect(canonical({ ...view, entries: [authority, anchor], contributions: [[], model] })).toEqual(messages);
+  for (const change of [{ taskId: 14 }, { chatJid: "web:foreign" }, { owner: "foreign" }, { goalId: "other" },
+    { generation: 3 }, { status: "budget_limited" }, { systemPrompt: "Edited rules" }, { inputKey: '["other",[1]]' },
+    { goalContextEntryId: 99 }, { goalContextEntryId: 8 }]) {
+    const forged = { ...authority, data: { ...authority.data, ...change } };
+    expect(() => canonical({ ...view, entries: [anchor, forged] })).toThrow();
+  }
+  expect(() => canonical({ ...view, entries: [{ ...anchor, id: 9 }, { ...authority, data: { ...authority.data, goalContextEntryId: 9 } }] })).toThrow("Missing earlier Goal context authority");
+  expect(() => canonical({ ...view, contributions: [[user("Edited frozen contribution")], []] })).toThrow("Edited Goal context authority");
+  expect(() => canonical({ ...view, entries: [anchor, { ...authority, model }] })).toThrow("Invalid Goal system authority");
+  expect(() => canonical({ ...view, contributions: [model, model] })).toThrow("Edited Goal system authority");
+  expect(() => canonical(view, [user("Edited accepted input"), ...model, overlay])).toThrow("Unknown Plan request cutoff");
+  const realSystem = { ...view, messages: [overlay, ...messages] };
+  expect(canonical(realSystem, [...realSystem.messages, overlay])).toEqual(realSystem.messages);
+});

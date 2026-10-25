@@ -4,6 +4,7 @@ import type { Context } from "@earendil-works/chord/context";
 
 export const hostPlanContextKind = "host.plan-context";
 export const hostGoalContextKind = "host.goal-context";
+export const hostGoalSystemAuthorityKind = "host.goal-system-authority";
 type ContextEntry = Pick<EntryRecord, "kind" | "data" | "model">;
 export type GoalContextIdentity = { goalId: string; generation: number; status: "active" | "budget_limited"; systemPrompt?: string; inputKey?: string };
 
@@ -15,6 +16,14 @@ export function assertHostGoalContext(entry: ContextEntry): void {
   if (data.inputKey !== undefined && (typeof data.inputKey !== "string" || !data.inputKey.trim())) throw Error("Invalid hidden Goal input key");
   if (data.systemPrompt !== undefined && (typeof data.systemPrompt !== "string" || !data.systemPrompt.trim())) throw Error("Invalid hidden Goal system authority");
   if (typeof data.goalId !== "string" || !data.goalId || !Number.isSafeInteger(data.generation) || Number(data.generation) < 1 || (data.status !== "active" && data.status !== "budget_limited")) throw Error("Invalid hidden Goal identity");
+}
+export function assertHostGoalSystemAuthority(entry: ContextEntry): void {
+  const data = entry.data as Record<string, unknown> | undefined;
+  if (entry.kind !== hostGoalSystemAuthorityKind || data?.owner !== "host:goal-prompt" ||
+    typeof data.chatJid !== "string" || !data.chatJid || !Number.isSafeInteger(data.taskId) || Number(data.taskId) <= 0 ||
+    !Number.isSafeInteger(data.goalContextEntryId) || Number(data.goalContextEntryId) <= 0 ||
+    typeof data.systemPrompt !== "string" || !data.systemPrompt.trim() || entry.model?.length !== 0)
+    throw Error("Invalid Goal system authority");
 }
 function assertSnapshot(entry: ContextEntry): void {
   if (entry.kind === hostPlanContextKind) assertHostPlanContext(entry);
@@ -37,7 +46,7 @@ function assertHiddenContext(entry: ContextEntry, kind: string, owner: string, l
  * Arbitrary system messages, edited contributions and foreign tasks still fail
  * the original exact-prefix check. The authority text is metadata, not user model context. */
 export function canonicalHostPromptRequest(request: readonly Message[], view: {
-  messages: readonly Message[]; entries: readonly ContextEntry[]; contributions: readonly (readonly Message[])[];
+  messages: readonly Message[]; entries: readonly (ContextEntry & { id?: number })[]; contributions: readonly (readonly Message[])[];
 }, chatJid: string, taskId: number, label: string): readonly Message[] {
   const encoded = (value: unknown) => JSON.stringify(value);
   // Keep the ordinary no-overlay path identical to the original prefix check.
@@ -46,8 +55,21 @@ export function canonicalHostPromptRequest(request: readonly Message[], view: {
   for (let index = 0; index < view.entries.length; index++) {
     const entry = view.entries[index]!;
     const data = entry.data as Record<string, unknown> | undefined;
-    if (entry.kind !== hostGoalContextKind || data?.chatJid !== chatJid || data.taskId !== taskId || data.systemPrompt === undefined) continue;
-    assertHostGoalContext(entry);
+    if ((entry.kind !== hostGoalContextKind && entry.kind !== hostGoalSystemAuthorityKind) ||
+      data?.chatJid !== chatJid || data.taskId !== taskId || data.systemPrompt === undefined) continue;
+    if (entry.kind === hostGoalContextKind) assertHostGoalContext(entry);
+    else {
+      assertHostGoalSystemAuthority(entry);
+      const anchorIndex = view.entries.findIndex(candidate => candidate.id === data.goalContextEntryId);
+      const anchor = view.entries[anchorIndex];
+      if (!anchor || !Number.isSafeInteger(entry.id) || !Number.isSafeInteger(anchor.id) || Number(anchor.id) >= Number(entry.id))
+        throw Error("Missing earlier Goal context authority");
+      assertHostGoalContext(anchor);
+      const identity = anchor.data as Record<string, unknown>;
+      for (const key of ["owner", "chatJid", "goalId", "generation", "status", "systemPrompt", "inputKey"])
+        if (data[key] !== identity[key]) throw Error("Foreign Goal system authority");
+      if (encoded(view.contributions[anchorIndex]) !== encoded(anchor.model)) throw Error("Edited Goal context authority");
+    }
     if (encoded(view.contributions[index]) !== encoded(entry.model)) throw Error("Edited Goal system authority");
     overlays.add(encoded({ role: "system", content: data.systemPrompt, timestamp: 0 }));
   }
@@ -116,7 +138,17 @@ async function materializePromptContext(conversation: Conversation, taskId: Task
   const changed = !previous || encoded(previous.model!) !== encoded([message]) ||
     encoded(view.contributions[previousIndex]!) !== encoded([message]) ||
     (snapshot.identity !== undefined && (priorIdentity?.goalId !== snapshot.identity.goalId || priorIdentity?.generation !== snapshot.identity.generation || priorIdentity?.status !== snapshot.identity.status || priorIdentity?.systemPrompt !== snapshot.identity.systemPrompt || priorIdentity?.inputKey !== snapshot.identity.inputKey));
-  // Context heads precede their retained suffix in view.entries, so the last
+  // A frozen Goal contribution may belong to an earlier generation. Bind its
+  // unchanged system rules to this exact live generation without appending the
+  // continuation again or accepting another task's unproven overlay.
+  const needsGoalAuthority = !changed && snapshot.kind === hostGoalContextKind && !!snapshot.identity?.systemPrompt &&
+    previous !== undefined && (previous.data as { taskId: number }).taskId !== taskId &&
+    !view.entries.some(entry => {
+      const data = entry.data as Record<string, unknown> | undefined;
+      return entry.kind === hostGoalSystemAuthorityKind && data?.chatJid === chatJid && data.taskId === taskId &&
+        data.goalContextEntryId === previous.id && data.systemPrompt === snapshot.identity!.systemPrompt;
+    });
+  // History views are ordered by logical contributing range. Their last
   // array member need not have the highest raw entry ID after compaction.
   const tail = view.entries.reduce((id, entry) => Math.max(id, entry.id), 0);
   await conversation.commit(async tx => {
@@ -131,6 +163,11 @@ async function materializePromptContext(conversation: Conversation, taskId: Task
     if (changed) {
       const entry = { kind: snapshot.kind, data: { owner: snapshot.owner, chatJid, taskId, ...snapshot.identity }, model: [message] };
       assertSnapshot(entry);
+      await tx.appendEntry(conversation.id, entry);
+    } else if (needsGoalAuthority) {
+      const entry = { kind: hostGoalSystemAuthorityKind, data: { owner: snapshot.owner, chatJid, taskId,
+        ...snapshot.identity, goalContextEntryId: previous!.id }, model: [] };
+      assertHostGoalSystemAuthority(entry);
       await tx.appendEntry(conversation.id, entry);
     }
     assertCurrent();
