@@ -1183,10 +1183,7 @@ export class HostConversationRuntime {
     expected: { goalId: string; generation: number; status: "complete" | "stopped" }): Promise<boolean> {
     const target = Object.freeze({ ...expected });
     const captured = await this.captureRunSource(conversationId, taskId); this.fence();
-    const conversation = await this.harness.conversation(conversationId, this.context); this.fence();
-    if (!conversation) throw Error("Missing Goal conversation");
-    const view = await conversation.context(this.context); this.fence();
-    const entries = view.entries;
+    const entries = await this.readCommittedInputEntries(conversationId, captured.inputs);
     const accepted = new Set(captured.inputs.map(input => JSON.stringify([input.operationId, input.sourceSeq, input.requestId])));
     let boundary = -1;
     for (let index = 0; index < entries.length; index++) {
@@ -1258,9 +1255,7 @@ export class HostConversationRuntime {
    * marker before applying it. Never consume provisional provider stream usage. */
   async readCommittedRunUsage(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     const captured = await this.captureRunSource(conversationId, taskId); this.fence();
-    const conversation = await this.harness.conversation(conversationId, this.context); this.fence();
-    if (!conversation) throw Error("Missing usage conversation");
-    const { entries } = await conversation.context(this.context); this.fence();
+    const entries = await this.readCommittedInputEntries(conversationId, captured.inputs);
     const accepted = new Set(captured.inputs.map(input => JSON.stringify([input.operationId, input.sourceSeq, input.requestId])));
     let boundary = -1;
     for (let index = 0; index < entries.length; index++) {
@@ -1277,6 +1272,31 @@ export class HostConversationRuntime {
     const receipts = await this.readUsageEntries(conversationId, entries.slice(boundary + 1));
     this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
     return receipts;
+  }
+  /** Read the bounded committed log, not the compacted model-context projection.
+   * Acceptance and receipts remain authoritative after their context is hidden. */
+  private async readCommittedInputEntries(conversationId: ConversationId, inputs: readonly HostInputBinding[]) {
+    const ids = await this.harness.commit(async tx => Promise.all(inputs.map(async input => {
+      const state = await tx.submissionByRequest(input.conversationId, input.requestId);
+      if (state?.type !== "input" || state.conversationId !== input.conversationId || state.entry === undefined) throw Error("Missing committed input entry");
+      return state.entry;
+    })), this.context); this.fence();
+    if (!ids.length) throw Error("Missing committed inputs");
+    const firstId = Math.min(...ids) as import("@earendil-works/pi-durable").EntryId;
+    const conversation = await this.harness.conversation(conversationId, this.context); this.fence();
+    if (!conversation) throw Error("Missing usage conversation");
+    const latest = await conversation.entries({ order: "descending" }, 1, undefined, this.context); this.fence();
+    const finalId = latest.items[0]?.id;
+    if (finalId === undefined) throw Error("Missing committed input window");
+    const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
+    let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+    do {
+      const page = await conversation.entries({ order: "ascending", minEntryId: firstId, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
+      entries.push(...page.items); cursor = page.next;
+    } while (cursor !== undefined);
+    if (!entries.some(entry => entry.id === firstId) || !entries.some(entry => entry.id === finalId)) throw Error("Missing committed input window");
+    this.assertCapturedSourceCurrent(inputs);
+    return entries;
   }
   /** Public immutable entries plus their SDK-owned generation outcomes are the
    * common live/recovery usage oracle. Never reconstruct provider lifecycle. */
