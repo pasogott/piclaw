@@ -9,17 +9,18 @@ import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
 import { ensureChatBranch, getChatBranchByChatJid, renameChatBranchIdentity, archiveChatBranch, restoreChatBranchIdentity, renameChatJid, permanentDeleteArchivedBranch } from "../../src/db/chat-branches.js";
 import { ensureBudgetWork } from "../../src/db/budget-limits.js";
 import { reserveBudgetRequest, abandonBudgetRequest } from "../../src/db/budget-request-reservations.js";
-import { requireLegacyRoutingMutation } from "../../src/db/native-routing-policy.js";
+import { requireLegacyRoutingMutation, registerNativeBranchControlGuard } from "../../src/db/native-routing-policy.js";
 import { ChatAccessDenied } from "../../src/db/session-ownership.js";
 beforeEach(() => initDatabase()); afterEach(() => closeDatabase());
 const chat = "web:routing", at = "2026-10-25T00:00:00.000Z";
-function fixture(native = true) {
+function fixture(native = true, liveOwner = true) {
   storeChatMetadata(chat, at);
   const branch = getChatBranchByChatJid(chat)!;
   if (native) {
     // Only the conservative Core metadata fence is under test here. Actual SDK
     // schema/manifest/creation/publication is qualified in the production factory.
     const db = getDb();
+    if (liveOwner) registerNativeBranchControlGuard(db, () => undefined);
     db.exec(`CREATE TABLE documents(id INTEGER PRIMARY KEY,kind TEXT,scope_kind TEXT,owner_id INTEGER,retired_at TEXT);
       CREATE TABLE document_revisions(document_id INTEGER,kind TEXT,content TEXT);
       CREATE TABLE conversations(id INTEGER PRIMARY KEY,record TEXT,owner_conversation_id INTEGER);
@@ -30,6 +31,24 @@ function fixture(native = true) {
   }
   return branch;
 }
+test("native routing policy: archive requires the live native control owner", () => {
+  const branch = fixture(true, false);
+  expect(() => archiveChatBranch(chat)).toThrow("Native routing owner unavailable");
+  expect(getChatBranchByChatJid(chat)).toEqual(branch);
+  const release = registerNativeBranchControlGuard(getDb(), chats => {
+    expect(chats).toEqual([chat]); throw Error("Native branch has active native controls");
+  });
+  expect(() => archiveChatBranch(chat)).toThrow("active native controls");
+  expect(getChatBranchByChatJid(chat)).toEqual(branch);
+  release();
+  expect(() => archiveChatBranch(chat)).toThrow("Native routing owner unavailable");
+  const shared = () => undefined;
+  const first = registerNativeBranchControlGuard(getDb(), shared), second = registerNativeBranchControlGuard(getDb(), shared);
+  first();
+  expect(archiveChatBranch(chat).archived_at).not.toBeNull();
+  restoreChatBranchIdentity({ chat_jid: chat }); second();
+  expect(() => archiveChatBranch(chat)).toThrow("Native routing owner unavailable");
+});
 test("native routing policy: metadata registration cannot undo archive", () => {
   const branch = fixture(); archiveChatBranch(chat);
   storeChatMetadata(chat, "2026-10-25T00:01:00.000Z");

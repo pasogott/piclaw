@@ -2,6 +2,17 @@ import type Database from "bun:sqlite";
 
 const exists = (db: Database, name: string) => !!db.query("SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name=?").get(name);
 
+type NativeControlGuard = (chats: readonly string[]) => undefined;
+const controlGuards = new WeakMap<Database, Set<{ assert: NativeControlGuard }>>();
+/** The live owner exposes its existing command activity, not a second activity
+ * ledger. Keep a failed/uncertain closing owner registered until cleanup succeeds. */
+export function registerNativeBranchControlGuard(db: Database, guard: NativeControlGuard): () => void {
+  const guards = controlGuards.get(db) ?? new Set<{ assert: NativeControlGuard }>();
+  const entry = { assert: guard };
+  controlGuards.set(db, guards); guards.add(entry);
+  return () => { guards.delete(entry); };
+}
+
 /** A conservative host-policy fence, never a conversation resolver. The private
  * SDK manifest alone selects routes; no SDK delta/runtime crosses into Core. */
 export function hasNativeRouting(db: Database): boolean {
@@ -31,7 +42,10 @@ export function assertNativeBranchPolicyIdle(db: Database, branchId: string): vo
     UNION SELECT b.branch_id,b.chat_jid FROM main.chat_branches b JOIN scope s ON b.parent_branch_id=s.branch_id
   ) SELECT branch_id,chat_jid FROM scope`).all(branchId) as { branch_id: string; chat_jid: string }[];
   if (!branches.length) throw Error("Native branch policy target missing");
-  const chats = branches.map(b => b.chat_jid), ids = branches.map(b => b.branch_id);
+  const chats = Object.freeze(branches.map(b => b.chat_jid)), ids = branches.map(b => b.branch_id);
+  const guards = controlGuards.get(db);
+  if (!guards?.size) throw Error("Native routing owner unavailable for branch policy");
+  for (const guard of guards) guard.assert(chats);
   const chatMarks = chats.map(() => "?").join(","), branchMarks = ids.map(() => "?").join(",");
   for (const [table, predicate] of [
     ["service_effect_s01_chats", "active_operation_id IS NOT NULL"],

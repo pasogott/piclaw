@@ -33,6 +33,8 @@ Archive is a synchronous host owner transaction. It refuses accepted operations,
 
 The guard walks live-task ancestors by conversation primary key and reads retained binding references; it does not traverse all retained historical forks. These checks run while holding the host writer lock. They perform no provider I/O or task cancellation.
 
+Archive also asks the live runtime owner for branch-scoped command, maintenance and credential-control activity. The owner exposes its existing control state through a synchronous fence. Without that owner, archive fails closed; uncertain cleanup retains the fence until confirmed close. Native commands revalidate their active binding after preparation and before spawning a shell. An active command keeps its route and abort control available.
+
 Cached queue admission callbacks recheck their exact active binding inside the committing SQL frame. Side-prompt admission rechecks after asynchronous history/payload work and inside its source/operation transaction. An archive that wins either race leaves no new source, operation, budget work, queue row or SDK fork. An immutable payload file may remain without granting authority.
 
 Archive changes ordinary and side-prompt ingress policy. Explicit scheduling definitions, occurrence leases and their settlement remain with the scheduling owner; no scheduling state is retired or rewritten here.

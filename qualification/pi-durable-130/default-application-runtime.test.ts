@@ -131,7 +131,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -1602,6 +1602,54 @@ for (const scenario of ["native-routing-queued-race", "native-routing-side-race"
     expect(observedResults.size).toBe(2);
     expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
     backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
+  if (scenario === "native-routing-bash-active" || scenario === "native-routing-control-race") {
+    expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+    const branches = await import("../../runtime/src/db/chat-branches.js");
+    const created = await pool.createRootChatSession("routing-native-command");
+    await bound.prepareInputSourceAdmission!(created.chat_jid);
+    const port = backend.sessionOptions.getDurableSession!(created.chat_jid)!;
+    const marker = join(workspace, "native-routing-bash-marker");
+    const sourceRows = root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid,source_seq").all();
+    if (scenario === "native-routing-control-race") {
+      const running = port.runBash!(`printf ready > '${marker}'`);
+      expect(() => branches.archiveChatBranch(created.chat_jid)).toThrow("active native controls");
+      expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).toBeNull();
+      // Force the late policy change in this isolated fixture: normal archive
+      // must be fenced separately while command preparation owns the target.
+      root.query("UPDATE chat_branches SET archived_at=? WHERE chat_jid=?").run(new Date().toISOString(), created.chat_jid);
+      await expect(running).rejects.toThrow("Unbound conversation");
+      expect(existsSync(marker)).toBe(false);
+    } else {
+      const unrelated = await pool.createRootChatSession("routing-other-command");
+      await bound.prepareInputSourceAdmission!(unrelated.chat_jid);
+      const running = port.runBash!(`printf ready > '${marker}'; sleep 1`);
+      try {
+        const until = Date.now() + 3000;
+        while (!existsSync(marker) && Date.now() < until) await Bun.sleep(10);
+        expect(existsSync(marker)).toBe(true);
+        expect(branches.archiveChatBranch(unrelated.chat_jid).archived_at).not.toBeNull();
+        expect(() => branches.archiveChatBranch(created.chat_jid)).toThrow("active native controls");
+        expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).toBeNull();
+        expect(backend.sessionOptions.getDurableSession!(created.chat_jid)).toBeDefined();
+        expect(await port.abortBash!()).toBe(true);
+        expect((await running).cancelled).toBe(true);
+      } finally { await running.catch(() => {}); }
+      const controlGate = Promise.withResolvers<void>();
+      const control = port.runOwnedControl!(() => controlGate.promise);
+      try {
+        expect(() => branches.archiveChatBranch(created.chat_jid)).toThrow("active native controls");
+        expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).toBeNull();
+      } finally { controlGate.resolve(); await control; }
+      expect(branches.archiveChatBranch(created.chat_jid).archived_at).not.toBeNull();
+      branches.restoreChatBranchIdentity({ chat_jid: created.chat_jid });
+    }
+    expect(root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid,source_seq").all()).toEqual(sourceRows);
+    expect(calls).toBe(1);
+    backend.stop(); await backend.close(); await pool.shutdown(); await base.queue.shutdown(); await channel.stop();
+    if (scenario === "native-routing-bash-active") expect(() => branches.archiveChatBranch(created.chat_jid)).toThrow("Native routing owner unavailable");
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;
   }

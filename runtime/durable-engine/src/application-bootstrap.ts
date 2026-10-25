@@ -38,6 +38,7 @@ import type { ConversationId } from "@earendil-works/pi-durable";
 import { createDurableQueuedSteering } from "../../src/agent-pool/durable-queued-steering.js";
 import { storeWebMessage } from "../../src/channels/web/messaging/message-store.js";
 import { createApplicationHostInput } from "./host-application-input.js";
+import { registerNativeBranchControlGuard } from "../../src/db/native-routing-policy.js";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Keep the full queue intent proof, plus a payload digest that remains verifiable
@@ -119,6 +120,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const prepareInputText = config.prepareInputText?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
+  let releaseBranchControlGuard: (() => void) | undefined;
   try {
   const manifest = Object.freeze(config.manifest.map(b => Object.freeze({ ...b })));
   const sessions = new Map(config.sessions);
@@ -276,7 +278,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     } });
     const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
-    const hostControls = new Set<Promise<unknown>>();
+    const hostControls = new Map<Promise<unknown>, string>();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
@@ -387,7 +389,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           assertCurrent(); config.assertAdmission?.();
           // Register before callback entry so close can join credential writes.
           const running = Promise.resolve().then(() => { assertCurrent(); config.assertAdmission?.(); return operation(); });
-          hostControls.add(running);
+          hostControls.set(running, chat);
           void running.finally(() => hostControls.delete(running)).catch(() => {});
           return running;
         },
@@ -448,6 +450,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       preparing.set(chat, promise); return promise;
     }
     let bound = false, closing: Promise<void> | undefined;
+    releaseBranchControlGuard = registerNativeBranchControlGuard(root, chats => {
+      assertLive(); runtime.assertBranchControlsIdle(chats);
+      if ([...hostControls.values()].some(chat => chats.includes(chat))) throw Error("Native branch has active native controls");
+      return undefined;
+    });
     async function allocateSidePromptConversation(raw: AcceptedInput): Promise<AcceptedInput> {
       const input = Object.freeze({ ...raw });
       const scope = routeIndex.get(input.chatJid);
@@ -844,8 +851,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       stop() { inputProjection = undefined; shutdown.abort(); },
       close() { inputProjection = undefined; return closing ??= (async () => {
         shutdown.abort();
-        await Promise.allSettled([...hostControls]);
+        await Promise.allSettled([...hostControls.keys()]);
         await activeController.close();
+        releaseBranchControlGuard?.();
       })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
       assertProcessControlIdle(): void;
@@ -864,6 +872,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     try {
       if (controller) await controller.close();
       else await database?.close();
+      releaseBranchControlGuard?.();
       lease.release();
     } catch (cleanupError) {
       throw new RuntimeStartupCleanupError([error, cleanupError], "Application backend preparation cleanup uncertain");
