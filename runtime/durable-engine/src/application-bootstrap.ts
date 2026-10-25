@@ -313,14 +313,19 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       };
     };
     const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
-      assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
-      return ({ chatJid, item, database: connection }) => {
+      const scope = routeIndex.get(chat);
+      const check = () => {
         assert(); config.assertAdmission?.();
+        if (!scope || routeIndex.get(chat) !== scope || lookup(chat, scope.branchId) !== scope) throw Error("Unbound queued input chat");
+      };
+      check();
+      return ({ chatJid, item, database: connection }) => {
+        check();
         if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued admission required");
         work.acceptSourceInTransaction(sealed({ effect: { ...effect(`queue:${item.source_id}`),
           provenanceRef: queuedInputProvenance(item) }, chatJid: chat, sourceId: item.source_id, kind: "message",
           payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), root);
-        assert();
+        check();
       };
     };
     const getQueuedInputMaterialization: NonNullable<WebChannelOpts["getQueuedInputMaterialization"]> = chat => {
@@ -448,7 +453,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const scope = routeIndex.get(input.chatJid);
       const check = () => {
         assertLive(); config.assertAdmission?.();
-        if (!scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
+        if (!scope || routeIndex.get(input.chatJid) !== scope || lookup(input.chatJid, scope.branchId) !== scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
           !/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.sourceId) ||
           input.requestId !== input.sourceId || input.payloadRef !== input.sourceId) throw Error("Side prompt source authority unavailable");
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
@@ -639,8 +644,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (prompt.length > 100_000) throw Error("Invalid side prompt");
       const scope = routeIndex.get(chatJid);
       if (!scope) throw Error("Unbound side prompt chat");
+      const checkScope = () => {
+        assertLive(); config.assertAdmission?.();
+        if (!scope || routeIndex.get(chatJid) !== scope || lookup(chatJid, scope.branchId) !== scope) throw Error("Unbound side prompt chat");
+      };
+      checkScope();
       if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");
-      assertLive();
+      checkScope();
       const context = getBudgetWorkContext();
       if (context && context.chatJid !== chatJid) throw Error("Side prompt budget context mismatch");
       const parentWorkId = options.budgetParentWorkId ?? context?.workId ?? null;
@@ -658,7 +668,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const sourceId = retryId ? sidePromptSourceId(chatJid, retryId) : `side-prompt:${crypto.randomUUID()}`;
       const prior = work.getAcceptedSource(chatJid, sourceId);
       if (prior) {
-        const storedPrompt = await content(sourceId, prior); assertLive();
+        const storedPrompt = await content(sourceId, prior); checkScope();
         if (storedPrompt !== prompt || prior.kind !== "internal") throw Error("Side prompt retry identity conflict");
         const row = root.query(`SELECT o.operation_id FROM service_effect_s01_operations o
           JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
@@ -667,10 +677,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const retryWork = retryId ? getBudgetWork(retryId, root) : null;
         if (!row || !budget || (retryId ? budget.parent_work_id !== retryId || !retryWork || retryWork.chat_jid !== chatJid ||
           retryWork.execution_kind !== "side_prompt" || retryWork.parent_work_id !== parentWorkId : budget.parent_work_id !== parentWorkId)) throw Error("Side prompt retry identity conflict");
-        const committed = value(await terminal.getTerminal(row.operation_id)); assertLive();
+        const committed = value(await terminal.getTerminal(row.operation_id)); checkScope();
         if (!committed) { assertParent(); return reconcileSidePrompt(chatJid, sourceId); }
         if (committed.disposition !== "completed") return { status: "error", result: null, thinking: null, model: null, error: "Side prompt cancelled", stopReason: "aborted" };
-        const payload = await config.answers.resolver.resolve(`side-result:${sourceId}`); assertLive();
+        const payload = await config.answers.resolver.resolve(`side-result:${sourceId}`); checkScope();
         if (!payload || payload.ref !== `side-result:${sourceId}` || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Side prompt result unavailable");
         const bytes = Uint8Array.from(payload.bytes);
         if (bytes.byteLength !== payload.byteLength || createHash("sha256").update(bytes).digest("hex") !== payload.sha256) throw Error("Side prompt result unavailable");
@@ -685,9 +695,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       }
       assertParent();
       // Immutable payload may outlive denied admission; it never grants authority.
-      await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
+      await config.answers.put(sourceId, prompt); checkScope(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
-        assertLive(); config.assertAdmission?.(); assertParent();
+        checkScope(); assertParent();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
         const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
           { consumed_through_source_seq: number; active_operation_id: string | null } | null;
@@ -701,7 +711,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           ensureBudgetWork({ id: retryId, chatJid, executionKind: "side_prompt", parentWorkId }, root);
         }
         ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId: retryId ?? parentWorkId }, root);
-        return accepted;
+        checkScope(); return accepted;
       }).immediate();
       let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {

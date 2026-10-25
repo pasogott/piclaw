@@ -131,7 +131,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -1602,6 +1602,48 @@ for (const scenario of ["native-routing-create-race", "native-routing-policy", "
     expect(observedResults.size).toBe(2);
     expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
     backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
+  if (scenario === "native-routing-queued-race" || scenario === "native-routing-side-race") {
+    expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+    const branches = await import("../../runtime/src/db/chat-branches.js");
+    const created = await pool.createRootChatSession("routing-admission-race");
+    await bound.prepareInputSourceAdmission!(created.chat_jid);
+    const input = { ...message, id: "routing-admission-history", chat_jid: created.chat_jid, content: "establish exact side history" };
+    const rowId = root.transaction(() => { const id = storeMessage(input); bound.getInputSourceAdmission!(created.chat_jid)!({ message: input, rowId: id, database: root }); return id; })();
+    expect(await bound.dispatchAcceptedInput!(created.chat_jid, input.id, rowId)!()).toBe("settled"); expect(calls).toBe(2);
+    const sources = root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid,source_seq").all();
+    const operations = root.query("SELECT * FROM service_effect_s01_operations ORDER BY operation_id").all();
+    const budgetWork = root.query("SELECT * FROM budget_work ORDER BY id").all();
+    const conversations = root.query("SELECT id,record FROM conversations ORDER BY id").all();
+    const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
+    if (scenario === "native-routing-queued-race") {
+      const cached = bound.getQueuedInputSourceAdmission!(created.chat_jid)!;
+      branches.archiveChatBranch(created.chat_jid);
+      const { QueuedFollowupLifecycleService } = await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+      const followups = new QueuedFollowupLifecycleService();
+      expect(() => root.transaction(() => followups.enqueueAcceptedFollowupOnce("routing-stale-queue", created.chat_jid,
+        "must not admit after archive", new Date().toISOString(), { source: "user" }, cached)).immediate()).toThrow("Unbound queued input chat");
+    } else {
+      const prompt = "routing side payload written before archive";
+      const original = hostFs.writeFileSync; let archived = 0;
+      const gate = spyOn(hostFs, "writeFileSync").mockImplementation((...args: Parameters<typeof hostFs.writeFileSync>) => {
+        const result = original(...args);
+        if (args[1] === prompt) { branches.archiveChatBranch(created.chat_jid); archived++; }
+        return result;
+      });
+      try { await expect(backend.sessionOptions.dispatchSidePrompt!(created.chat_jid, prompt, {})).rejects.toThrow(); }
+      finally { gate.mockRestore(); }
+      expect(archived).toBe(1);
+    }
+    expect(branches.getChatBranchByChatJid(created.chat_jid)?.archived_at).not.toBeNull();
+    expect(root.query("SELECT * FROM service_effect_s01_sources ORDER BY chat_jid,source_seq").all()).toEqual(sources);
+    expect(root.query("SELECT * FROM service_effect_s01_operations ORDER BY operation_id").all()).toEqual(operations);
+    expect(root.query("SELECT * FROM budget_work ORDER BY id").all()).toEqual(budgetWork);
+    expect(root.query("SELECT id,record FROM conversations ORDER BY id").all()).toEqual(conversations);
+    expect(getDeferredQueuedFollowups(created.chat_jid)).toEqual([]); expect(calls).toBe(2);
+    backend.stop(); await backend.close(); await pool.shutdown(); await base.queue.shutdown(); await channel.stop();
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;
   }

@@ -33,6 +33,10 @@ Archive is a synchronous host owner transaction. It refuses accepted operations,
 
 The guard walks live-task ancestors by conversation primary key and reads retained binding references; it does not traverse all retained historical forks. These checks run while holding the host writer lock. They perform no provider I/O or task cancellation.
 
+Cached queue admission callbacks recheck their exact active binding inside the committing SQL frame. Side-prompt admission rechecks after asynchronous history/payload work and inside its source/operation transaction. An archive that wins either race leaves no new source, operation, budget work, queue row or SDK fork. An immutable payload file may remain without granting authority.
+
+Archive changes ordinary and side-prompt ingress policy. Explicit scheduling definitions, occurrence leases and their settlement remain with the scheduling owner; no scheduling state is retired or rewritten here.
+
 Archived default-native bindings stay in the manifest so history and accepted-source integrity remain verifiable on reopen. They disappear from active route/session targets and cannot accept inputs or controls. Metadata registration keeps them archived. Legacy Dream reapers and orphan-session cleanup retain native/imported identity metadata and accepted history; they do not treat a missing legacy session directory as proof of disposability. Explicit bound restore reuses the same branch, conversation and session IDs.
 
 Copied/imported bundles retain their existing strict publication contract. A store without the default application manifest does not acquire default-native archive policy from a marker alone. Owner-local handle namespaces, home protections and household policy remain separate host controls.
