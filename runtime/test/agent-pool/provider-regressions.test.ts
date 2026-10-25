@@ -77,8 +77,10 @@ describe("Earendil 0.81.x provider regressions", () => {
     const anthropicFable = getBuiltinModels("anthropic").find((model) => model.id === "claude-fable-5");
     expect(anthropicFable?.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
 
-    const copilotMai = getBuiltinModels("github-copilot").find((model) => model.id === "mai-code-1-flash-picker");
+    const copilotMai = getBuiltinModels("github-copilot").find((model) => model.id === "mai-code-1.1-flash");
     expect(copilotMai?.api).toBe("openai-responses");
+    // SDK 1.4 retires the picker alias; require the current MAI entry explicitly.
+    expect(getBuiltinModels("github-copilot").some(model => model.id === "mai-code-1-flash-picker")).toBe(false);
 
     const openRouterQwenCoder = getBuiltinModels("openrouter").find((model) => model.id === "qwen/qwen3-coder");
     expect(openRouterQwenCoder?.contextWindow).toBe(262_144);
