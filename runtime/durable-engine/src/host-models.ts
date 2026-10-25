@@ -73,19 +73,21 @@ function freeze<T>(value: T): T {
 const optionKeys = new Set([
   "temperature", "samplingParams", "maxTokens", "transport", "cacheRetention",
   "sessionId", "metadata", "timeoutMs", "websocketConnectTimeoutMs",
-  "reasoning", "thinkingBudgets", "toolChoice", "maxRetryDelayMs", "maxRetries",
+  "reasoning", "thinkingBudgets", "toolChoice", "maxRetryDelayMs", "maxRetries", "identity",
 ]);
 function requestOptions(options: SimpleStreamOptions = {}, deferred = false): SimpleStreamOptions {
   if (Object.getPrototypeOf(options) !== Object.prototype) throw new Error("Only JSON data is qualified");
   for (const [key, value] of Object.entries(options)) {
-    if (key !== "signal" && value !== undefined && !optionKeys.has(key) && !(deferred && key === "deferred")) {
+    if (key !== "signal" && key !== "telemetry" && value !== undefined && !optionKeys.has(key) && !(deferred && key === "deferred")) {
       throw new Error(`Unqualified request option: ${key}`);
     }
   }
   if (options.maxRetries !== undefined && options.maxRetries !== 0) {
     throw new Error("Transport retries are not qualified");
   }
-  const { signal: _signal, ...rest } = options;
+  // SDK spans stay in their originating island. The host transport retains its
+  // own tracing; no span methods or callbacks cross this JSON-only bridge.
+  const { signal: _signal, telemetry: _telemetry, ...rest } = options;
   return { ...data(rest), maxRetries: 0 };
 }
 
@@ -101,22 +103,22 @@ function usage(value?: Usage): Usage | undefined {
 }
 function operationOptions(operation: "generateImages" | "classify", options: ImagesOptions | ClassifierOptions = {}) {
   if (Object.getPrototypeOf(options) !== Object.prototype) throw new Error("Only JSON data is qualified");
-  const allowed = new Set(["timeoutMs", "maxRetries", "maxRetryDelayMs",
+  const allowed = new Set(["timeoutMs", "maxRetries", "maxRetryDelayMs", "identity",
     operation === "generateImages" ? "metadata" : "temperature"]);
   for (const [key, value] of Object.entries(options)) {
-    if (key !== "signal" && value !== undefined && !allowed.has(key)) throw new Error("Unqualified request option");
+    if (key !== "signal" && key !== "telemetry" && value !== undefined && !allowed.has(key)) throw new Error("Unqualified request option");
   }
   if (options.maxRetries !== undefined && options.maxRetries !== 0) throw new Error("Transport retries are not qualified");
-  const { signal: _signal, ...rest } = options;
+  const { signal: _signal, telemetry: _telemetry, ...rest } = options;
   const safe = data(rest);
   const extra = operation === "generateImages" && "metadata" in safe ? { metadata: safe.metadata }
     : operation === "classify" && "temperature" in safe ? { temperature: safe.temperature } : {};
-  return { timeoutMs: safe.timeoutMs, maxRetryDelayMs: safe.maxRetryDelayMs, ...extra, maxRetries: 0 };
+  return { timeoutMs: safe.timeoutMs, maxRetryDelayMs: safe.maxRetryDelayMs, identity: safe.identity, ...extra, maxRetries: 0 };
 }
 
 /** Inactive bridge: physical models; no credential transfer or production wiring.
- * 1.2 and 1.3 public Models declarations match. A 1.3 factory owns the complete
- * interface; operation callbacks adapt public host dispatch. Deferred execution
+ * Root and private 1.4.0 graphs remain physically separate. A private factory
+ * owns the complete interface; JSON identity crosses, SDK spans stay local. Deferred execution
  * requires an explicit host reference authority. transformHeaders is a post-auth fence, NOT an
  * atomic send hook: the SDK awaits it and may dispatch in a later microtask.
  */
@@ -179,10 +181,10 @@ export function createHostModels(
   const deferredOptions = (options: DeferredFetchOptions = {}, cancel = false) => {
     if (Object.getPrototypeOf(options) !== Object.prototype) throw new Error("Invalid options");
     for (const [key, value] of Object.entries(options)) {
-      if (value !== undefined && !["signal", "timeoutMs", "maxRetries", "maxRetryDelayMs", ...(cancel ? [] : ["wait"])].includes(key)) throw new Error("Invalid options");
+      if (value !== undefined && !["signal", "telemetry", "identity", "timeoutMs", "maxRetries", "maxRetryDelayMs", ...(cancel ? [] : ["wait"])].includes(key)) throw new Error("Invalid options");
     }
     if (options.maxRetries !== undefined && options.maxRetries !== 0) throw new Error("Retries denied");
-    const { signal: _signal, ...rest } = options;
+    const { signal: _signal, telemetry: _telemetry, ...rest } = options;
     return { ...data(rest), maxRetries: 0 };
   };
   const projectMessage = (message: AssistantMessage, model: Model<Api>): AssistantMessage => {

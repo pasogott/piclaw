@@ -2,7 +2,7 @@
 
 The Bun repository install is experimental. [Docker](../README.md#quick-start-with-docker) is the recommended deployment; [portable releases](getting-started.md#portable-releases) bundle Bun for Docker-free use.
 
-Use the Bun version pinned in [BUN_VERSION](../BUN_VERSION) for a source checkout (1.4.2 for this revision). Bun 1.3 cannot read its version 2 lockfile. Check the chosen release's requirements before installing or downgrading Bun.
+Use the Bun version pinned in [BUN_VERSION](../BUN_VERSION) for a source checkout (1.4.4 for this revision). Bun 1.3 cannot read its version 2 lockfile. Check the chosen release's requirements before installing or downgrading Bun.
 
 PiClaw can be installed directly from a tagged release with Bun. Replace `vX.Y.Z` below with an existing tag from [GitHub Releases](https://github.com/rcarmo/piclaw/releases):
 
@@ -32,6 +32,8 @@ The first start seeds missing workspace files from `skel/`, including `AGENTS.md
 ## Access modes and upgrades
 
 Only single-user mode is supported for Docker and native installation. See [Access modes](access-modes.md); preserve database, configuration, session files and key material in backups.
+
+Pi Durable 1.4.0 automatically upgrades SQLite task storage to format 2 when opened. SDK 1.3.0 cannot open the upgraded store. Before deploying this dependency upgrade, establish a quiescent ownership boundary and a complete matching checkpoint; do not try an older binary against the migrated database. Source dependency updates and Bun upgrades alone do not authorise opening or migrating a live store.
 
 ## Post-install: update AGENTS.md
 

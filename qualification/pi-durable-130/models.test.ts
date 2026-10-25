@@ -9,7 +9,7 @@ import { context as durableContext } from "./src/fixture.js";
 import { createHash } from "node:crypto";
 import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-works/pi-coding-agent";
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
-import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi } from "../../runtime/durable-engine/qualification/ai.ts";
+import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi, SimpleStreamOptions } from "../../runtime/durable-engine/qualification/ai.ts";
 import { createHostModels, type HostModelPolicy } from "../../runtime/durable-engine/src/index.js";
 import { modelFailureDetail } from "../../runtime/durable-engine/src/host-model-failure.js";
 import { addLogSink, removeLogSink, type LogRecord } from "../../runtime/src/utils/logger.js";
@@ -228,7 +228,7 @@ test("complete factory interface denies non-chat, deferred, auth UI, overrides a
   expect((await f.models.streamDeferred(f.model, handle).result()).stopReason).toBe("error");
   await expect(f.models.cancelDeferred(f.model, handle)).rejects.toThrow();
   const image: ImageModel<ImageApi> = { ...f.model, type: "image", output: ["image"] };
-  const classifier: ClassifierModel<ClassifierApi> = { ...f.model, type: "classifier" };
+  const classifier: ClassifierModel<ClassifierApi> = { ...f.model, type: "classifier", compat: undefined };
   expect((await f.models.generateImages(image, { input: [] })).stopReason).toBe("error");
   expect((await f.models.classify(classifier, { state: {}, questions: {} })).stopReason).toBe("error");
   expect(() => f.models.logout(ref.provider)).toThrow();
@@ -241,6 +241,38 @@ test("complete factory interface denies non-chat, deferred, auth UI, overrides a
   const provider = f.models.getProvider(ref.provider)!;
   expect((await provider.streamSimple(f.model, normalizeContext(context)).result()).stopReason).toBe("error");
   expect(f.calls()).toBe(0);
+});
+
+for (const kind of ["chat", "image", "classifier"] as const) test(`SDK 1.4 ${kind}: JSON identity crosses, private telemetry and callbacks do not`, async () => {
+  const f = await fixture(kind !== "chat");
+  const identity = { userAgent: { custom: "synthetic-client" }, attribution: { name: "Synthetic", url: "https://fixture.invalid" }, version: "1" };
+  let spanReads = 0;
+  const span = new Proxy({}, { get() { spanReads++; throw Error("Private span crossed the bridge"); },
+    ownKeys() { spanReads++; throw Error("Private span was serialised"); } }) as NonNullable<SimpleStreamOptions["telemetry"]>;
+  const invoke = () => kind === "chat" ? f.models.completeSimple(f.model, context, { identity, telemetry: span })
+    : kind === "image" ? f.models.generateImages(f.models.getModelOfType("image", ref.provider, ref.id)!, imageContext, { identity, telemetry: span })
+      : f.models.classify(f.models.getModelOfType("classifier", ref.provider, ref.id)!, classifierContext, { identity, telemetry: span });
+  expect((await invoke()).stopReason).toBe(kind === "chat" ? "toolUse" : "stop");
+  expect(f.calls()).toBe(1);
+  expect(f.captured().options.identity).toEqual(identity);
+  expect(f.captured().options.telemetry).not.toBe(span);
+  expect(spanReads).toBe(0);
+  expect(() => f.models.streamSimple(f.model, context, { identity: { version: () => token } } as never)).toThrow("Only JSON data");
+  f.revoke();
+  expect((await invoke()).stopReason).toBe("error");
+  expect(f.calls()).toBe(1); expect(spanReads).toBe(0);
+});
+test("SDK 1.4 deferred: identity is data, telemetry stays local and exact private handle authority survives", async () => {
+  const f = await fixture(false, false, true);
+  const identity = { userAgent: "short" as const, attribution: null };
+  const span = new Proxy({}, { get() { throw Error("Private deferred span crossed"); }, ownKeys() { throw Error("Private deferred span serialised"); } }) as NonNullable<SimpleStreamOptions["telemetry"]>;
+  const first = await f.models.completeSimple(f.model, context, { deferred: true });
+  expect(first.stopReason).toBe("deferred");
+  expect((await f.models.fetchDeferred(f.model, first.deferred!, { identity, telemetry: span })).stopReason).toBe("stop");
+  expect(f.captured().options.identity).toEqual(identity); expect(f.captured().options.telemetry).not.toBe(span);
+  await f.models.cancelDeferred(f.model, first.deferred!, { identity, telemetry: span });
+  expect(f.captured().options.identity).toEqual(identity); expect(f.captured().options.telemetry).not.toBe(span);
+  expect(f.calls()).toBe(3);
 });
 
 const imageContext = { input: [{ type: "text" as const, text: "draw synthetic" }] };
