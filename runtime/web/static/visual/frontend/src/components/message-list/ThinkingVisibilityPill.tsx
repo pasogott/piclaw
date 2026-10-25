@@ -2,8 +2,7 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "preac
 import { renderThinkingMarkdown } from "../../utils/markdown-pipeline";
 import { getChatJid } from "../../api/chat-jid";
 import { copyToClipboard } from "../../utils/clipboard";
-// Scroll anchor — mirror of runtime/web/src/ui/scroll-anchor.ts (kept in sync;
-// the classic/visual build trees don't share a source root).
+// UI-local facade re-exports the shared scroll-anchor implementation.
 import { attachHeaderAnchor, type HeaderAnchor } from "../../utils/scroll-anchor";
 
 interface ThinkingVisibilityPillProps {

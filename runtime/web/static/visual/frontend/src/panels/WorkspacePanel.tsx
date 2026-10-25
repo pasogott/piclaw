@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "preact/hooks";
 import { FileTree, type TreeNode } from "../components/FileTree";
-import { formatBytes } from "../utils/formatBytes";
+import { formatBytes } from "../utils/format";
 import { safeGetItem, safeSetItem } from "../utils/storage";
 import { FolderPreview } from "./workspace/FolderPreview";
 import { useWorkspacePreview } from "./workspace/useWorkspacePreview";
