@@ -148,9 +148,21 @@ test.skipIf(!hasEngine)("adapter integrates real public runtime, SQL host bindin
     initializeHostDurableBindings(db, assert); // Explicit offline fixture setup, never adapter setup.
     const bindings = createHostDurableBindings(db, { domain: "adapter", incarnation: "copy-A", assertOwner: assert, manifest,
       async resolveContent(ref) { if (ref !== source.payloadRef) throw new Error("Unknown payload"); return accepted.content; } });
+    // SDK handles intentionally fail fast. Retry only connection setup in
+    // this file-backed fixture, before SqliteStorage or any SDK callback runs.
+    const openFixtureConnection = () => {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        try { return new BunSqliteDatabase(path); } catch (error) {
+          const code = (error as { code?: string }).code;
+          if ((code !== "SQLITE_BUSY" && code !== "SQLITE_LOCKED") || Date.now() >= deadline) throw error;
+          Bun.sleepSync(10);
+        }
+      }
+    };
     const options = {
       incarnation: "copy-A", owner: { assert, release() { owned = false; releases++; } },
-      openStorage: () => SqliteStorage.open(new BunSqliteDatabase(path)),
+      openStorage: () => SqliteStorage.open(openFixtureConnection()),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
       work, terminal, bindings, existingConversationIds: [conversationId],
       conversationFor(chat: string, branch: string) { if (chat !== source.chatJid || branch !== "main") throw new Error("Unknown binding"); return conversationId; },

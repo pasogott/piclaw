@@ -1,3 +1,4 @@
+import { goalInputDisplayText } from "../ui/goal-input-display.ts";
 import { createDictationComposerBinding } from '../ui/composer-dictation-binding.js';
 import { subscribeDictationProviders } from '../ui/composer-dictation-registry.js';
 import { html, useRef, useState, useEffect, useCallback, useMemo } from '../vendor/preact-htm.js';
@@ -1008,7 +1009,7 @@ export function QueuedFollowupStack({
     return html`
         <div class="compose-queue-stack">
             ${items.map((item, index) => {
-                const rowText = typeof item?.content === 'string' ? item.content : '';
+                const rowText = typeof item?.content === 'string' ? goalInputDisplayText(item.content) : '';
                 const parsed = parseQueuedContent(rowText);
                 if (!parsed.text.trim() && parsed.fileRefs.length === 0 && parsed.folderRefs.length === 0 && parsed.messageRefs.length === 0 && parsed.attachmentRefs.length === 0) return null;
                 const canMoveUp = index > 0;

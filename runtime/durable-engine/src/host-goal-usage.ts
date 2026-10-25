@@ -8,7 +8,7 @@ type BudgetAddon = {
   loadThreadGoal(chat: string): Goal | null;
   goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
   isGoalBudgetInput(text: string): boolean;
-  resolveGoalInput(text: string, chat: string): { action: string };
+  resolveGoalInput(text: string, chat: string): { action: string; text?: string };
 };
 /** A fresh, explicitly admitted budget prompt or this operation's own committed
  * budget transition. A current status or an older operation's cursor is insufficient.
@@ -19,7 +19,10 @@ export function isGoalBudgetWrapup(addon: BudgetAddon, chat: string, texts: read
   if (!goal || goal.status !== "budget_limited" || !identities.length || identities.some(identity => !identity)) return false;
   const identity = identities[0]!;
   if (!identity || identity.goalId !== goal.goal_id || identities.some(other => !other || other.goalId !== identity.goalId || other.generation !== identity.generation)) return false;
-  if (identity.generation === goal.lifecycle_generation && texts.every(text => addon.isGoalBudgetInput(text) && addon.resolveGoalInput(text, chat).action !== "handled")) return true;
+  if (identity.generation === goal.lifecycle_generation && texts.every(text => {
+    const decision = addon.resolveGoalInput(text, chat);
+    return decision.action !== "handled" && addon.isGoalBudgetInput(decision.text ?? text);
+  })) return true;
   const cursor = getExtensionKvStore().get<Cursor>("goal", `committed-usage:${source.conversationId}`, "chat", chat);
   return goal.lifecycle_generation === identity.generation + 1 && cursor?.goalId === goal.goal_id &&
     cursor.acceptedGeneration === identity.generation && cursor.budget?.operationId === source.operationId &&
