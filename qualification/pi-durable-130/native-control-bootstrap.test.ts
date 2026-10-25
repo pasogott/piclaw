@@ -66,9 +66,11 @@ for(const scenario of ['idle','busy','retry','storage-recovery'] as const) appli
   }
   if(scenario==='retry')await control.setExecutionPolicy!('autoRetry',true);
   const bound=bundle.bind({queue:{} as any,agentPool:{} as any});
+  const coordinator=bound.dispatchAcceptedInput!;
+  const waitForPending=coordinator.waitForPending.bind(coordinator);
   await admitWebUserMessage({pendingLinkPreviews:new Set<number>(),broadcastEvent(){}},{chatJid:chat,content:'Critical native fixture',isBot:false,mediaIds:[],agentId:'default',agentName:'Fixture'},{acceptSource:bound.getInputSourceAdmission!(chat)},assert,new AbortController().signal);
   const message=root.query('SELECT rowid,id FROM messages WHERE chat_jid=? AND is_bot_message=0').get(chat) as any;
-  const dispatch=bundle.dispatchAcceptedInput(chat,message.id,message.rowid)!;const running=dispatch();void running.catch(()=>{});
+  const dispatch=coordinator(chat,message.id,message.rowid)!;const running=dispatch();void running.catch(()=>{});
   for(let i=0;;i++){
    const retry=root.query("SELECT record FROM tasks WHERE status<>'terminal'").all().some((row:any)=>JSON.parse(row.record).state.checkpoint?.phase==='retry');
    if(scenario==='retry'?retry:calls>0)break;
@@ -96,6 +98,7 @@ for(const scenario of ['idle','busy','retry','storage-recovery'] as const) appli
    restoreContention=()=>probe.mockRestore();
    expect(await control.abort!()).toBe(true);
    await running.catch(()=>{});expect(prepares).toBe(2);expect(storageFailures).toBe(1);
+   expect(await waitForPending({chatJid:chat,messageId:message.id,rowId:message.rowid})).toBe("settled");
    expect(root.query("SELECT id FROM submissions WHERE conversation_id=? ORDER BY id").all(conversation.id)).toEqual([{id:originalSubmission}]);
    expect(root.query("SELECT id FROM tasks WHERE status<>'terminal'").all()).toEqual([]);
    expect(root.query("SELECT operation_id FROM service_effect_s01_operations WHERE phase<>'terminal'").all()).toEqual([]);
