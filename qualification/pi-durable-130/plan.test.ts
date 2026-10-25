@@ -242,7 +242,7 @@ planTest("actual Plan 0.1.25 factory: existing-chat KV, prepared tool, per-reque
   }
 });
 
-planTest("real Pi 1.2.0 Plan hidden history vs public durable late commit: plain commit alone is insufficient", async () => {
+planTest("real Pi 1.4.0 Plan hidden history vs public durable late commit: plain commit alone is insufficient", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;
   const keys = ["__piclawRuntimeInterop", "__piclaw_planSidebarApi", "__piclaw_registerAddonConfigApi", "__PICLAW_BROADCAST_EVENT__"];
   const saved = keys.map(key => Object.getOwnPropertyDescriptor(globals, key));

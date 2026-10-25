@@ -30,7 +30,7 @@
 - `make ci-full` — host + native gate (`ci:fast && ci:native`); use before pushing
 - `make ci-integration` — integration gate; native qualification is mandatory regardless of Docker/Playwright skips
 - Prepare all five fixture exports from the shared JSON pins before native validation; see [Native validation](docs/native-validation.md). ADDONS/CORE/GOAL share one native checkout, CONTRACT uses the historical checkout, and catalogue dependencies use frozen `qualification/pi-durable-130/node_modules`, never a live profile. The gate performs no acquisition or installation.
-- Keep root Pi 1.2.0 and private-engine Pi 1.3.0 dependency graphs separate. Native exit 0 requires fresh parent-specific JUnit artifacts, terminal positive-pass Bun reports and the printed run receipt. Filtered, empty, skipped-only or interrupted runs and omitted mandatory stages are insufficient.
+- Keep the root and private-engine Pi 1.4.0 dependency graphs physically separate. Native exit 0 requires fresh parent-specific JUnit artifacts, terminal positive-pass Bun reports and the printed run receipt. Filtered, empty, skipped-only or interrupted runs and omitted mandatory stages are insufficient.
 
 ### Portable build caches and scratch
 

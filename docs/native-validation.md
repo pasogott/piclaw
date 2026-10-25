@@ -11,7 +11,9 @@
 
 [`scripts/native-gate-contract.json`](../scripts/native-gate-contract.json) defines fixture repositories and immutable SHAs, four source-root mappings, catalogue dependencies, the two type projects, two accepted-source tests, two gate/launcher contract files and the complete 109-file inventory. Goal catalogue, tools, usage, settlement and terminal-race files are mandatory. No filter, skip, empty discovery or missing fixture can produce native success.
 
-The root retains its Pi 1.2.0 dependencies. `runtime/durable-engine` owns the separate Pi 1.3.0 graph and lockfile. Qualification imports that engine graph through public re-exports; do not symlink root dependencies into the engine, upgrade the root graph or mix SDK handles, contexts or TypeBox objects across them.
+The root and `runtime/durable-engine` each pin Pi 1.4.0, with separate physical dependency graphs and lockfiles. Qualification imports the engine graph through public re-exports; do not symlink root dependencies into the engine or mix SDK handles, contexts, telemetry spans or TypeBox objects across them. Package acquisition records the matching published bytes before offline validation.
+
+Pi Durable 1.4.0 opens SQLite stores at format 2, rebuilding the task table to support durable sleep. Earlier SDKs cannot reopen that format. Source qualification uses disposable stores; deployment requires a separate checkpoint and rollback plan. See [1.4.0 qualification](development/pi-1.4.0-qualification.md).
 
 ## Prepare local fixtures offline
 

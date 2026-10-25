@@ -1,5 +1,5 @@
-/** Root-host SDK 1.2 boundary. Bare public names resolve from the Root
- * dependency graph, not the durable engine's isolated SDK 1.3 island.
+/** Root-host SDK 1.4 boundary. Bare public names resolve from the Root
+ * dependency graph; the durable engine keeps its own physical SDK 1.4 island.
  * Re-export actual bindings only; no session or extension-context emulation. */
 export {
   DefaultResourceLoader, SettingsManager,

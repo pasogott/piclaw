@@ -86,7 +86,7 @@ import { detectChannel } from "../../src/router.js";
 import { buildChannelSystemPromptAppendix } from "../../src/channels/formatting.js";
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
-  scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
+  scope: "conversation", history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
 
 type ApplicationMapping = { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
 const defaultToolNames = ["read", "bash", "edit", "write", "find", "ls", "grep"] as const;
@@ -983,7 +983,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         const identity = { domain: mapping.domain, chatJid: binding.chatJid, branchId: binding.branchId, sessionId: binding.sessionId };
         // Initial creation stores one base, independently anchoring root routing identities.
         const conversation = (await harness.conversation(binding.conversationId as ConversationId, context))!;
-        const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
+        const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => identity });
         await conversation.commit(async tx => { await tx.doc(token, conversation.id); }, context);
       }
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
@@ -1166,7 +1166,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
       const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
       const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
-      const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
+      const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => identity });
       await tx.doc(token, conversation.id);
       doc.bindings.push(binding);
       assert(); check(ref, lifetime.signal);
