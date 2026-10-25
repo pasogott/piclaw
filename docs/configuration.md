@@ -389,9 +389,6 @@ For the packaged Azure managed-identity/static-key path and its additional token
 | `PICLAW_SESSION_MAX_SIZE_MB` | `32` | Session file size threshold (MB) for auto-rotation warnings and pre-prompt rotation |
 | `PICLAW_SESSION_AUTO_ROTATE` | `1` | Automatically rotate oversized session files before the next prompt |
 | `PICLAW_TURN_MAX_TOOL_EXECUTIONS` | `64` | Authoritative per-turn completed tool-execution budget. Settings persists `domains.agent.toolUseMessageBudget`; values are clamped to `8..512`. Legacy `PICLAW_TURN_MAX_TOOL_USE_MESSAGES` and `PICLAW_MID_TURN_TOOL_EXECUTION_HARD_CEILING` are lower-priority compatibility aliases. |
-| `PICLAW_SMART_COMPACTION_METHOD` | `selective` | Smart-compaction local processing method: `selective` or `pipelined` |
-| `domains.compaction.remoteCompactionEnabled` | `false` | Opt in to provider-native compaction before the selected local method (JSON config) |
-| `domains.compaction.remoteCompactionTimeoutMs` | `300000` | Provider-native compaction request deadline before deterministic local fallback (JSON config) |
 | `PICLAW_WHATSAPP_PHONE` | _(empty)_ | Alias for `WHATSAPP_PHONE` |
 | `PICLAW_TOOL_OUTPUT_RETENTION_MS` | `2592000000` (30 days) | Milliseconds to retain stored tool outputs (preferred; overrides `_DAYS`; values are capped at 30 days) |
 | `PICLAW_TOOL_OUTPUT_RETENTION_DAYS` | _(legacy)_ | Days to retain stored tool outputs (deprecated; use `_MS`) |
@@ -435,67 +432,11 @@ Notes:
 - Timeout recovery exhaustion is reported separately from provider retry exhaustion, preserving timeout as the primary cause in protected handoff metadata.
 - A first tool-dependent timeout or context-pressure failure may compact and run one tools-enabled continuation automatically. This one-use path requires explicitly resolved tool state, no tool failure, no terminal side-effect mix, no exhausted tool budget, available tool control, a successful non-skipped compaction, remaining recovery time/attempts, and an available source generation. It resumes the persisted session with a neutral continuation prompt; it never replays the original instruction.
 
-### Smart-compaction processing method
+### Native compaction
 
-Smart compaction has two processing methods:
+Both settings skins expose one host-wide automatic-compaction toggle, persisted as `domains.compaction.autoCompactionEnabled`. Native Harness decisions read it dynamically; `/auto-compact on|off` uses the same policy. A valid `PICLAW_AUTO_COMPACTION_ENABLED` compatibility override has higher precedence; conflicting saves fail without writing settings.
 
-- **Selective** (`selective`, the default) prioritizes high-value continuity and uses provenance-bearing progressive chunks when the source is too large for one request.
-- **Pipelined** (`pipelined`) processes the complete discarded message-event stream through chronological grouping, normalization, classification, deterministic reduction, and bounded semantic reduction. Previous summaries, retained context, trusted operator notes, and deterministic file facts remain separate auxiliary prompt inputs rather than source-ledger entries.
-
-The Pipelined coverage ledger assigns every discarded-source group a deterministic disposition and representation mode. Required human intent, orphan results, and unresolved tool state remain lossless; successful canonical tool batches use token-minimized bounded facts; assistant/context narratives use bounded evidence; and only allowlisted empty content may use `drop_safe`. Compact group headers retain source-index ranges with header codes `R` (required), `C` (canonical), `S` (bounded evidence), and `X` (duplicate-reference representation); `X` is not a separate disposition. Delayed tool results remain at their observed chronological position and carry explicit origin/result relationships. Compatible exact-duplicate non-required groups may render as provenance-bearing references rather than silent drops; this is not a general semantic-equivalence pass. Per-record SHA-256 integrity evidence and per-disposition character and estimated-token reduction metrics are emitted in structured debug telemetry as `auditLedger` and `pipelineCompression`; raw tool arguments and outcome text are excluded from that telemetry.
-
-Classification, reason assignment, canonical fact rendering, duplicate handling, integrity checks, and prompt construction are deterministic. The model only receives the validated ordered projection through a zero-call no-op, one complete request, or ordered progressive chunk and merge slots. See [Pipelined smart compaction](pipelined-compaction.md) for the architecture, ledger contract, model-call flow, invariants, telemetry, failure behavior, and troubleshooting guide.
-
-When local compaction runs, both methods share the same lifecycle, provider/auth resolution, output validation, progressive source-unit executor, exact partial-boundary handling, and post-compaction pruning. A web/runtime settings change affects the **next** compaction without requiring a restart; an active compaction keeps the method it captured when it started. Manual `.piclaw/config.json` or environment changes require a restart unless the running process is updated separately. The optional provider-native pre-pass described below is orthogonal: shared source preparation and tool analysis run first; remote success then completes before local ledger/prompt construction and model execution, while a safe remote failure continues into the captured Selective or Pipelined method.
-
-Set the method with the web **Compaction → Processing method** control, the environment variable, or `.piclaw/config.json`:
-
-```bash
-PICLAW_SMART_COMPACTION_METHOD=pipelined
-```
-
-```json
-{
-  "compaction": {
-    "smartCompactionMethod": "pipelined"
-  }
-}
-```
-
-The legacy aliases `traditional_pipelined`, `traditional-pipelined`, and `traditional pipelined` are accepted and normalized to `pipelined`. Unknown values fall back to the current/default method.
-
-### Provider-native remote compaction
-
-Provider-native compaction is an **opt-in pre-pass** after shared source preparation, tool analysis, and file-operation reconciliation. When enabled, Piclaw attempts it before the configured Selective or Pipelined method's ledger or prompt construction and model execution. If the provider is disabled, unsupported, unverified, unauthenticated, timed out, malformed, or in remote-backoff suppression, Piclaw runs the captured local method instead. A remote failure does not partially mutate the session or skip local compaction.
-
-Support is capability-gated by exact provider, API, and endpoint metadata. Piclaw does not infer support from a model name or from generic `openai-responses` compatibility. The initial supported matrix is:
-
-| Provider | API | Endpoint | Status |
-|----------|-----|----------|--------|
-| OpenAI API | `openai-responses` | `https://api.openai.com/v1/responses/compact` | Supported with API-key bearer authentication |
-| OpenAI Codex subscription | `openai-codex-responses` | `https://chatgpt.com/backend-api/codex/responses/compact` | Supported with Codex OAuth and `chatgpt-account-id` |
-| GitHub Copilot | any | any | Unsupported (verified compaction routes returned HTTP 404) |
-| OpenAI-compatible proxies and other providers | any | any | Unsupported until explicitly verified and registered |
-
-Enable the feature in either web settings frontend under **Compaction → Provider-native compaction**, by environment variable, or in `.piclaw/config.json`:
-
-```bash
-# In .piclaw/config.json:
-# { "domains": { "compaction": { "remoteCompactionEnabled": true, "remoteCompactionTimeoutMs": 300000 } } }
-```
-
-```json
-{
-  "compaction": {
-    "remoteCompactionEnabled": true,
-    "remoteCompactionTimeoutMs": 300000
-  }
-}
-```
-
-On success, Piclaw persists the provider's opaque canonical compaction window in the normal Pi `CompactionEntry.details` field, alongside compatibility metadata and deterministic file-operation facts. On resume, a provider-request hook restores that window verbatim in place of Piclaw's marker summary. Provider, model ID, API, and base URL compatibility metadata is checked against the explicit capability registry before replay. If a later remote attempt fails, the same opaque window is prepended to the local fallback request; inherited file facts remain canonicalized separately. Incompatible, malformed, or unverified state is blocked rather than reduced to local summary text or sent to another model. The opaque payload and credentials are never written to bounded diagnostic logs; logs contain only outcome codes, provider/model identifiers, counts, usage totals, and durations.
-
-Manual `/compact` attaches a Markdown report. For provider-native success, that report never prints encrypted state or arbitrary provider output. If the canonical window carries Piclaw's explicitly marked local continuity checkpoint, the report shows it as **Readable continuity checkpoint**; otherwise it explains under **Provider-native context** that continuity is preserved in encrypted state and intentionally omitted. The command also refreshes post-compaction context usage. Native estimates remain valid when available; authoritative unknown counts clear same-session meters without reviving a report/stored estimate. See [context snapshot semantics](runtime-flows.md#context-usage--compaction-affordance-restore).
+Compaction uses the active conversation model and SDK token thresholds. Selective/Pipelined methods, separate compaction models, remote pre-passes, legacy percentage thresholds, wall-clock deadlines and per-chat backoffs are unavailable in the native UI/API. Historical values and receipts remain intact. Manual `/compact`, accepted maintenance, recovery and accounting retain their native ownership checks. See [Native compaction policy](compaction-models-and-deadlines.md) for the field mapping and HTTP retirement contract.
 
 Deprecated env names (still supported): `ASSISTANT_NAME`, `ASSISTANT_AVATAR`, `AGENT_TIMEOUT`, `AGENT_TIMEOUT_BACKGROUND`.
 

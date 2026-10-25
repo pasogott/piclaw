@@ -1,5 +1,5 @@
 import type Database from 'bun:sqlite';
-import { getCompactionRuntimeConfig, setCompactionRuntimeConfig } from '../../src/core/config.js';
+import { assertAutoCompactionSettingWritable, getCompactionRuntimeConfig, setCompactionRuntimeConfig } from '../../src/core/config.js';
 
 /** Host-wide settings, matching /auto-compact's existing scope. SDK reads these
  * at each decision; changing a policy never restarts or replays an operation. */
@@ -14,7 +14,10 @@ export function createHostCommandPolicy(root: Database, assertCurrent: () => voi
   const set = (name: 'autoCompact' | 'autoRetry', enabled: boolean) => {
     assertCurrent();
     if (typeof enabled !== 'boolean') throw Error('Boolean native policy required');
-    if (name === 'autoCompact') setCompactionRuntimeConfig({autoCompactionEnabled: enabled});
+    if (name === 'autoCompact') {
+      assertAutoCompactionSettingWritable(enabled);
+      setCompactionRuntimeConfig({autoCompactionEnabled: enabled});
+    }
     else if (name === 'autoRetry') root.transaction(() => {
       assertCurrent(); root.query('INSERT OR REPLACE INTO router_state (key,value) VALUES (?,?)').run(key, enabled ? 'on' : 'off'); assertCurrent();
     }).immediate();

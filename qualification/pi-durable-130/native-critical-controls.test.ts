@@ -47,6 +47,7 @@ test('native bash rejects stale ownership before spawn', async()=>fixture(async(
 }));
 
 test('native policy getters drive current SDK settings and retry persists without replay',()=>{
+ const priorAutoOverride=process.env.PICLAW_AUTO_COMPACTION_ENABLED;delete process.env.PICLAW_AUTO_COMPACTION_ENABLED;
  const db=new Database(':memory:');db.exec('CREATE TABLE router_state(key TEXT PRIMARY KEY,value TEXT)');let owner=true;
  const policy=createHostCommandPolicy(db,()=>{if(!owner)throw Error('owner lost');});
  try {
@@ -58,7 +59,7 @@ test('native policy getters drive current SDK settings and retry persists withou
   policy.set('autoCompact',true);expect(resolveSettings(policy.settings).compaction.enabled).toBe(true);
   owner=false;expect(()=>policy.set('autoRetry',true)).toThrow('owner lost');expect(()=>policy.read()).toThrow('owner lost');
   db.query('UPDATE router_state SET value=? WHERE key=?').run('invalid','native.auto-retry.v1');expect(()=>reopened.read()).toThrow('unreadable');
- }finally{db.close();}
+ }finally{db.close();if(priorAutoOverride===undefined)delete process.env.PICLAW_AUTO_COMPACTION_ENABLED;else process.env.PICLAW_AUTO_COMPACTION_ENABLED=priorAutoOverride;}
 });
 
 test('native bash without shared guard fails closed',async()=>fixture(async(f,b)=>{await expect(f.runtime.runSessionBash(b,'printf NO')).rejects.toThrow('not idle');},false));
