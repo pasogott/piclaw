@@ -64,7 +64,7 @@ Application opens the archive read-only with `query_only`, checks private owners
 
 Preflight checks integrity, foreign keys, exact declared shapes/children, FTS completeness and dependencies. Any populated historical table refuses removal, except the single original `(id=1, revision=0)` counter. Credentials, audit rows, queued intent, uncertain executions, publications, nonzero counters and changed FTS shadow contents remain archived and unmodified. Their reconciliation requires a separately reviewed migration; an operator cannot bypass the refusal by approving its digest.
 
-Unknown incoming foreign keys, retained views/triggers, or extra objects on the cohort also refuse removal. Reference scanning deliberately overblocks quoted identifiers, literals and comments. A false positive needs source review; there is no force flag or name-prefix exemption.
+Unknown incoming foreign keys, retained views/triggers, or extra objects on the cohort also refuse removal. Reference scanning reuses the schema SQL lexer, so quotes inside comments or literals cannot hide executable references. It deliberately overblocks literal words and column names. A false positive needs source review; there is no force flag or name-prefix exemption.
 
 One outer SQLite transaction rechecks the plan, removes objects through `applyOwnedMigrations`, verifies the exact table/schema reduction and unchanged retained logical state, and checks the owned receipt and database health. An injected failure after all removal DDL restores schema, counter data and receipts. Foreign-key enforcement stays enabled.
 

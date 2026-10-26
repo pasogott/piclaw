@@ -2,13 +2,13 @@
  * Parent must supply safeIntegers handles, a readonly:true archive with query_only=ON,
  * and private, exclusively owned paths. Bun cannot attest SQLITE_OPEN_READONLY;
  * query_only is an additional guard, not that attestation. No production promotion.
- * Reference scanning deliberately overblocks: literals/comments/column names can match.
+ * Reference scanning deliberately overblocks literals/column names; comments are lexed away.
  */
 import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { constants, type Database } from "bun:sqlite";
 import { applyOwnedMigrations } from "../../src/db/migrations.js";
-import { readSchemaInventory, type SchemaObject } from "./schema-ownership.js";
+import { canonicalSchemaSql, readSchemaInventory, type SchemaObject } from "./schema-ownership.js";
 import manifest from "./historical-account-schema.json";
 
 const fold = (s: string) => s.replace(/[A-Z]/g, c => c.toLowerCase());
@@ -135,10 +135,12 @@ function fkShape(rows: FK[]): unknown {
     f.on_update.toUpperCase(), f.on_delete.toUpperCase(), f.match.toUpperCase()])
     .sort((a, b) => order(JSON.stringify(a), JSON.stringify(b)));
 }
-// Tokenize quoted identifiers (including escaped quotes), then case-fold exact tokens.
-// Also scan literal/comment words: intentional conservative false positives, never SQL execution.
+// Reuse the SQL lexer: quotes inside comments/literals cannot swallow executable
+// identifiers. The non-table mode keeps a flat token stream. Literal words still
+// overblock conservatively, including SQLite's legacy single-quoted identifiers.
 function references(sql: string): Set<string> {
-  const tokens = sql.match(/"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[a-zA-Z_][a-zA-Z_0-9$]*/g) ?? [];
+  const tokens = (canonicalSchemaSql(sql, "view") as string[]).flatMap(token =>
+    token.startsWith("'") ? token.match(/[a-zA-Z_][a-zA-Z_0-9$]*/g) ?? [] : [token]);
   return new Set(tokens.map(t => fold(t.startsWith('"') ? t.slice(1, -1).replaceAll('""', '"') :
     t.startsWith("`") ? t.slice(1, -1).replaceAll("``", "`") : t.startsWith("[") ? t.slice(1, -1) : t)));
 }

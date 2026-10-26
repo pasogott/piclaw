@@ -125,6 +125,9 @@ for (const [label, sql] of [
   ["missing external guard", "DROP TRIGGER family_scheduled_account_revoked"],
   ["incoming FK", "CREATE TABLE external_reference(id TEXT REFERENCES user_preferences(user_id))"],
   ["quoted view", 'CREATE VIEW external_reference AS SELECT * FROM "USER_PREFERENCES"'],
+  ["comment-quoted view", 'CREATE VIEW external_reference AS SELECT * FROM /* " */ operator_recovery_events /* " */'],
+  ["comment-quoted trigger", 'CREATE TRIGGER external_reference AFTER INSERT ON users BEGIN SELECT * FROM /* ` */ operator_recovery_events /* ` */; END'],
+  ["literal-quoted view", `CREATE VIEW external_reference AS SELECT '"' AS note,* FROM operator_recovery_events WHERE ''!='"'`],
   ["retained trigger", 'CREATE TRIGGER external_reference AFTER INSERT ON users BEGIN SELECT * FROM `user_preferences`; END'],
 ] as const) test(`malformed or cross-owned ${label} refuses before DDL`, () => {
   const path = source(true, db => db.exec(sql)), plan = copies(path);
