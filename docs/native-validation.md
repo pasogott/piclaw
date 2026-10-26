@@ -76,6 +76,8 @@ CI runs `make ci-full` after setup. Integration runs `make ci-integration` after
 
 ## Receipts and limits
 
+Explicit offline maintenance may initialise the owned SDK application manifest, configuration and branch identities without admitting execution. Initial publication retains owner, lifetime and exact-branch fences; normal startup also retains model/admission checks. Runtime conversation creation checks execution admission before and after publication. Maintenance still denies channel binding/attachment, scheduled and side dispatch, host commands and compaction, and must not start model calls or transports. Metadata publication does not authorise recovery, replay or deployment.
+
 Exit 0 requires successful type projects and a fresh parent-specific JUnit artifact plus a terminal positive-pass Bun report for required integration and every native file. The launcher owns its reporter flags; remove custom `--reporter` and `--reporter-outfile` options. Nested-child reports cannot certify an unfinished parent. Normal test skips are allowed alongside passing tests; skipped-only files and skipped mandatory stages fail.
 
 Files have a 300-second wall-clock budget. The shared contract gives `default-application-runtime.test.ts` 600 seconds for its 110 serial cold-start cases; each scenario retains its 30-second deadline and its own completion launcher. Other file budgets are unchanged. Timeouts still fail qualification.

@@ -947,8 +947,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let harness: Awaited<ReturnType<typeof Harness.open>> | undefined;
   let mapping!: { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
   let primary: unknown;
+  // Bootstrap publishes metadata even in explicit offline maintenance. Runtime
+  // creation checks execution admission separately, before and after publication.
   async function publishApplicationBinding(tx: import("@earendil-works/pi-durable").Tx, domain: string, chatJid: string, branchId: string) {
-    assert(); check(ref, lifetime.signal);
+    assert(); lifetime.signal.throwIfAborted();
     const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
     if (doc.domain !== domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
     const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
@@ -960,7 +962,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", checkpointWhen: () => false, initial: () => identity });
     await tx.doc(token, conversation.id);
     doc.bindings.push(binding);
-    assert(); check(ref, lifetime.signal);
+    assert(); lifetime.signal.throwIfAborted();
     return Object.freeze(binding);
   }
   let failed = false;
@@ -973,7 +975,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (initial) storeChatMetadata("web:default", new Date().toISOString());
     const initialBranches = initial ? root.query("SELECT c.jid,b.branch_id FROM chats c JOIN chat_branches b ON b.chat_jid=c.jid WHERE b.archived_at IS NULL ORDER BY c.jid").all() as { jid: string; branch_id: string }[] : [];
     const assertInitial = () => {
-      assert();
+      assert(); lifetime.signal.throwIfAborted();
+      if (initial && !offlineMaintenance) check(ref, lifetime.signal);
       for (const branch of initialBranches) if (!root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(branch.jid, branch.branch_id)) throw Error("Initial application branch changed");
     };
     const app = await storage.withAdmissionGuard(assertInitial, () => harness!.root(context, { init: async (tx, id) => {
@@ -1159,7 +1162,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       return { provider: choice.provider, modelId: choice.id };
     },
     historicalBindings: true,
-    async createConversation(tx, chatJid, branchId) { return publishApplicationBinding(tx, mapping.domain, chatJid, branchId); },
+    async createConversation(tx, chatJid, branchId) {
+      check(ref, lifetime.signal);
+      const binding = await publishApplicationBinding(tx, mapping.domain, chatJid, branchId);
+      check(ref, lifetime.signal);
+      return binding;
+    },
     runtime: { onStorageFailure: notifyStorageFailure, incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
   if (remotePeer) {
