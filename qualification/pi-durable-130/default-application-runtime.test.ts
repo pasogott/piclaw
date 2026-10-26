@@ -888,7 +888,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         try{
           if(scenario==='native-addon-admission-public-model-revoked'){
             const before=root.serialize();
-            await expect(createDefaultApplicationRuntime(owner,async()=>services)).rejects.toThrow('Persisted host model not approved');
+            const startup=createDefaultApplicationRuntime(owner,async()=>services).then(candidate=>{reopened=candidate;return candidate;});
+            await expect(startup).rejects.toThrow('Persisted host model not approved');
             expect(root.serialize()).toEqual(before);expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
             expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);owner.assertCurrentOwner();return;
           }
