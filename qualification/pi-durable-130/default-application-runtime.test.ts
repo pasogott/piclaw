@@ -19,7 +19,7 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
@@ -73,6 +73,30 @@ function factoryTest(scenario: string, name: string, body: () => Promise<void>) 
     } finally { isolation.cleanup(); }
   }, 30_000);
 }
+
+const reviewLifecyclePhases = ["fresh", "present", "disabled", "reinstalled", "uninstalled"] as const;
+const reviewLifecycleCase = reviewLifecyclePhases.map(phase => `native-code-review-lifecycle-${phase}`)
+  .find(phase => phase === process.env.PICLAW_DEFAULT_FACTORY_CASE);
+factoryTest("native-code-review-lifecycle", "default factory Code Review persistence survives real process boundaries", async () => {
+  const workspace = process.env.PICLAW_WORKSPACE!;
+  const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review");
+  const parked = join(workspace, "disabled-code-review-fixture");
+  for (const phase of reviewLifecyclePhases) {
+    if (phase === "present") installCodeReviewFixture(workspace);
+    if (phase === "disabled") renameSync(pkg, parked);
+    if (phase === "reinstalled") renameSync(parked, pkg);
+    if (phase === "uninstalled") rmSync(pkg, { recursive: true });
+    // Share this parent's disposable filesystem, never loader/module caches.
+    // The native source gate requires a real process boundary for source removal.
+    const child = Bun.spawn([process.execPath, resolve(import.meta.dir, "../../runtime/scripts/local-test-priority.ts"), "--cwd", import.meta.dir, "--", process.execPath,
+      "test", import.meta.path, "-t", "^default factory prepares and reopens"], {
+      cwd: import.meta.dir, env: { ...process.env, PICLAW_DEFAULT_FACTORY_CASE: `native-code-review-lifecycle-${phase}` }, stdout: "pipe", stderr: "pipe",
+    });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (code !== 0) throw Error(`Code Review lifecycle ${phase}:\n${out}\n${err}`);
+    expect(code).toBe(0);
+  }
+});
 
 for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actual preparation → bootstrap → main retains owner only for uncertain close=${uncertain}`, async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
@@ -131,7 +155,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-runner-denial", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-runner-denial", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -722,6 +746,62 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if (scenario.startsWith("native-code-review-lifecycle-")) {
+    const phase = scenario.slice("native-code-review-lifecycle-".length);
+    const objects = () => root.query("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name GLOB 'addon_code_review_*' ORDER BY name").all();
+    const rows = () => (root.query("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'addon_code_review_*' ORDER BY name").all() as { name: string }[])
+      .map(({ name }) => ({ name, rows: root.query(`SELECT * FROM ${name} ORDER BY rowid`).all() }));
+    const snapshot = () => ({ objects: objects(), rows: rows(), hostVersion: root.query("PRAGMA user_version").get() });
+    const savedPath = join(workspace, "review-lifecycle-snapshot.json");
+    const close = async () => { backend.stop(); await backend.close(); };
+    try {
+      if (phase === "fresh") {
+        expect(rows()).toEqual([]);
+        await close();
+        const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+        const models = createHostModels(runtime, [model, modelB].map(({ provider, id }) => ({ provider, id })), {
+          signal: new AbortController().signal, async authorize() { owner.assertCurrentOwner(); }, assertCurrent() { owner.assertCurrentOwner(); },
+        });
+        const h = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true })),
+          { models, registry: createRegistry() }, context);
+        try {
+          await h.commit(async tx => {
+            for (const { id } of root.query("SELECT id FROM conversations").all() as { id: number }[])
+              await configure(tx, id as ConversationId, { tools: createHostBuiltinTools({ cwd: workspace, names: ["read"], authority: { assertAllowed() { owner.assertCurrentOwner(); } } }) });
+          }, context);
+        } finally { await h.close(context); }
+      } else if (phase === "present" || phase === "reinstalled") {
+        expect(rows()).toHaveLength(16);
+        expect(objects().filter((row: any) => row.type === "index")).toHaveLength(6);
+        const api = await import(join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review/runtime.ts"));
+        const service = api.reviewService();
+        expect(service.database.db).toBe(root);
+        const who = { ownerId: "default", actorId: "default", kind: "operator", workspaceId: "lifecycle" };
+        const target = { chatId: "web:default", incarnation: "lifecycle", label: "Default" };
+        const input = { title: "Retained review", focusPath: "gone.ts", target };
+        const source = { workspaceId: "lifecycle", worktreeId: "tree", mode: "source", base: null, head: null, capturedAt: "2026-01-01T00:00:00Z",
+          files: [{ oldPath: null, newPath: "gone.ts", oldText: null, newText: "saved without a working file\n", change: "source" }] };
+        const request = { requestId: "lifecycle-create" };
+        const review = service.createFromCapture(who, input, source, request);
+        if (phase === "present") {
+          service.createThread(who, review.reviewId, { fileId: review.files[0], side: "source", body: "retained discussion" }, { requestId: "lifecycle-thread" });
+          writeFileSync(savedPath, JSON.stringify(snapshot()));
+        } else expect(service.readFile(who, review.reviewId, review.files[0]).newText).toBe("saved without a working file\n");
+        const saved = JSON.parse(readFileSync(savedPath, "utf8"));
+        await close();
+        expect(() => service.listReviews(who)).toThrow("closed");
+        expect(snapshot()).toEqual(saved);
+      } else expect(snapshot()).toEqual(JSON.parse(readFileSync(savedPath, "utf8")));
+      expect(root.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(calls).toBe(0);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    } finally {
+      await close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      owner.release(); closeDatabase();
+    }
+    return;
+  }
   if (scenario === "native-runner-denial") {
     const rows = () => ["budget_work", "budget_request_reservations", "service_effect_s01_chats", "service_effect_s01_operations",
       "service_effect_s01_sources", "conversations", "entries", "tasks", "submissions", "documents", "document_revisions", "messages", "chat_cursors"]
