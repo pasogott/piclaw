@@ -1,0 +1,85 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
+import { writeFileSync } from "node:fs";
+import { planUsageReportRetention, applyUsageReportRetention } from "../../src/db/usage-report-retention.js";
+import { createTempWorkspace, setEnv } from "../helpers.js";
+import { initDatabase, closeDatabase, getDb } from "../../src/db/connection.js";
+import { storeTokenUsage, pruneOldTokenUsage, type TokenUsageRecord } from "../../src/db/token-usage.js";
+import { ensureBudgetWork } from "../../src/db/budget-limits.js";
+import { reserveBudgetRequest } from "../../src/db/budget-request-reservations.js";
+
+let workspace: ReturnType<typeof createTempWorkspace>, restore:()=>void;
+beforeEach(()=>{workspace=createTempWorkspace("usage-retention-");restore=setEnv({PICLAW_WORKSPACE:workspace.workspace,PICLAW_STORE:workspace.store,PICLAW_DATA:workspace.data});closeDatabase();initDatabase();});
+afterEach(()=>{closeDatabase();restore();workspace.cleanup();});
+const old="2000-01-01T00:00:00.000Z";
+const usage=(overrides:Partial<TokenUsageRecord>={}):TokenUsageRecord=>({chat_jid:"web:retention",run_at:old,input_tokens:1,output_tokens:1,cache_read_tokens:0,cache_write_tokens:0,total_tokens:2,cost_input:0,cost_output:0,cost_cache_read:0,cost_cache_write:0,cost_total:0,...overrides});
+function seed(count:number){getDb().transaction(()=>{for(let i=0;i<count;i++)storeTokenUsage(usage());}).immediate();}
+const before="2026-01-01T00:00:00.000Z";
+const snapshot=()=>getDb().query("SELECT * FROM token_usage ORDER BY id").all();
+test("usage retention: dry-run, exact-page ACK replay and persisted cursor survive a disposable reopen",()=>{
+  seed(7);storeTokenUsage(usage({usage_event_id:"retained-event"}));
+  const database=getDb(), rows=snapshot(), events=database.query("SELECT * FROM budget_usage_events").all();
+  const plan=planUsageReportRetention(database,{before,limit:2});expect(snapshot()).toEqual(rows);expect(plan.rows).toHaveLength(2);expect(plan.next).toBe(plan.rows[1]!.id);
+  const path=join(workspace.store,"disposable.sqlite");writeFileSync(path,database.serialize(),{mode:0o600});
+  let copy=new Database(path,{strict:true});
+  try{
+    const persisted=JSON.parse(JSON.stringify(plan));
+    const first=applyUsageReportRetention(copy,persisted);expect(first.removed).toEqual(plan.rows.map(row=>row.id));expect(first.serializedBytesRemoved).toBe(plan.rows.reduce((sum,row)=>sum+row.serializedBytes,0));
+    copy.close();copy=new Database(path,{strict:true,safeIntegers:true}); // Lost ACK: same exact IDs, never the next two rows.
+    const again=applyUsageReportRetention(copy,persisted);expect(again.removed).toEqual([]);expect(again.alreadyAbsent).toEqual(first.removed);expect(again.next).toBe(plan.next);
+    const next=planUsageReportRetention(copy,{before,after:plan.next!,limit:2});expect(next.rows[0]!.id).toBeGreaterThan(plan.rows[1]!.id);expect(applyUsageReportRetention(copy,next).removed).toHaveLength(2);
+    expect(JSON.parse(JSON.stringify(copy.query("SELECT * FROM budget_usage_events").all(),(_key,value)=>typeof value==="bigint"?Number(value):value))).toEqual(events);expect(copy.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(snapshot()).toEqual(rows); // The source restore is untouched.
+  }finally{copy.close();}
+});
+test("usage retention: new uncertainty invalidates an approved page before any deletion",()=>{
+  ensureBudgetWork({id:"late-hold",chatJid:"web:retention",executionKind:"background"});
+  storeTokenUsage(usage());storeTokenUsage(usage({work_id:"late-hold"}));
+  const plan=planUsageReportRetention(getDb(),{before,limit:2});expect(plan.rows).toHaveLength(2);
+  reserveBudgetRequest({id:"late-request",workId:"late-hold",chatJid:"web:retention",providerId:"fixture",modelId:"fixture",accountRef:"synthetic",amountMicros:1});
+  const rows=snapshot();expect(()=>applyUsageReportRetention(getDb(),plan)).toThrow("became referenced");expect(snapshot()).toEqual(rows);
+});
+test("usage retention: changed report, mid-page fault and final revocation preserve the whole page",()=>{
+  seed(3);const database=getDb(), plan=planUsageReportRetention(database,{before,limit:3});
+  database.query("UPDATE token_usage SET cost_total=1 WHERE id=?").run(plan.rows[2]!.id);const changed=snapshot();
+  expect(()=>applyUsageReportRetention(database,plan)).toThrow("plan changed");expect(snapshot()).toEqual(changed);
+  const current=planUsageReportRetention(database,{before,limit:3});
+  database.exec(`CREATE TEMP TRIGGER retention_fault BEFORE DELETE ON token_usage WHEN OLD.id=${current.rows[1]!.id} BEGIN SELECT RAISE(ABORT,'page fault'); END`);
+  try{expect(()=>applyUsageReportRetention(database,current)).toThrow("page fault");expect(snapshot()).toEqual(changed);}finally{database.exec("DROP TRIGGER retention_fault");}
+  let checks=0;expect(()=>applyUsageReportRetention(database,current,()=>{if(++checks===2)throw Error("revoked");})).toThrow("revoked");expect(snapshot()).toEqual(changed);
+});
+test("usage retention: malformed bounds/proofs and suppressed deletes cannot advance accounting",()=>{
+  seed(3);const database=getDb(), plan=planUsageReportRetention(database,{before,limit:2}), rows=snapshot();
+  for(const limit of [0,1001,NaN])expect(()=>planUsageReportRetention(database,{before,limit})).toThrow();
+  expect(()=>planUsageReportRetention(database,{before:"yesterday"})).toThrow();
+  expect(()=>applyUsageReportRetention(database,{...plan,next:999})).toThrow("cursor");
+  expect(()=>applyUsageReportRetention(database,{...plan,rows:[...plan.rows].reverse()})).toThrow("proof");expect(snapshot()).toEqual(rows);
+  database.exec(`CREATE TEMP TRIGGER retention_ignore BEFORE DELETE ON token_usage WHEN OLD.id=${plan.rows[0]!.id} BEGIN SELECT RAISE(IGNORE); END`);
+  try{const result=applyUsageReportRetention(database,plan);expect(result.blocked).toEqual([plan.rows[0]!.id]);expect(result.removed).toEqual([plan.rows[1]!.id]);expect(result.next).toBe(plan.after);expect(result.serializedBytesRemoved).toBe(plan.rows[1]!.serializedBytes);}
+  finally{database.exec("DROP TRIGGER retention_ignore");}
+  expect(applyUsageReportRetention(database,plan).removed).toEqual([plan.rows[0]!.id]);
+});
+test("usage retention: examined pages advance past protected reports with an atomic restart cursor",()=>{
+  const database=getDb();database.transaction(()=>{for(let i=0;i<1000;i++)storeTokenUsage(usage({usage_event_id:`keep-${i}`}));storeTokenUsage(usage());}).immediate();
+  const beforeEvents=database.query("SELECT * FROM budget_usage_events ORDER BY usage_event_id").all();
+  const page=planUsageReportRetention(database,{before,limit:1000});expect(page.examined).toBe(1000);expect(page.rows).toEqual([]);expect(page.next).toBe(1000);
+  expect(pruneOldTokenUsage()).toBe(0);
+  const cursor=database.query("SELECT value FROM router_state WHERE key='retention:legacy-usage-reports:v1'").get() as {value:string};expect(JSON.parse(cursor.value).after).toBe(1000);
+  expect(pruneOldTokenUsage()).toBe(1);expect(database.query("SELECT value FROM router_state WHERE key='retention:legacy-usage-reports:v1'").get()).toBeNull();
+  expect(database.query("SELECT * FROM budget_usage_events ORDER BY usage_event_id").all()).toEqual(beforeEvents);
+});
+test("usage retention: startup compatibility cleanup is bounded to one thousand reports",()=>{
+  seed(1001);
+  expect(pruneOldTokenUsage()).toBe(1000);
+  expect(getDb().query("SELECT count(*) AS n FROM token_usage").get()).toEqual({n:1});
+});
+test("usage retention: unresolved work protects legacy reports even without an invocation link",()=>{
+  ensureBudgetWork({id:"held-work",chatJid:"web:retention",executionKind:"background"});
+  reserveBudgetRequest({id:"held-request",workId:"held-work",chatJid:"web:retention",providerId:"fixture",modelId:"fixture",accountRef:"synthetic",amountMicros:1});
+  storeTokenUsage(usage({work_id:"held-work"}));storeTokenUsage(usage());
+  const before=getDb().query("SELECT * FROM budget_request_reservations").all();
+  expect(pruneOldTokenUsage()).toBe(1);
+  expect(getDb().query("SELECT work_id FROM token_usage").all()).toEqual([{work_id:"held-work"}]);
+  expect(getDb().query("SELECT * FROM budget_request_reservations").all()).toEqual(before);
+});
