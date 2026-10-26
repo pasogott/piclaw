@@ -85,6 +85,7 @@ export async function reserveHostRequest(options: {
   // Keep work active; never retire authority needed to reconcile that hold.
   await accounting.reserve(binding, signal);
   return {
+    id: binding.id,
     async dispatch() {
       current();
       if (dispatchStarted) throw Error("Native request already dispatched");

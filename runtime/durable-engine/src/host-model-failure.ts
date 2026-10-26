@@ -1,10 +1,11 @@
 const phases = ["validation", "source", "admission", "provider", "conversion", "accounting"] as const;
-const categories = ["aborted", "timeout", "authentication", "rate_limit", "context_limit", "transport", "unavailable", "unknown"] as const;
+const categories = ["aborted", "timeout", "authentication", "rate_limit", "quota", "context_limit", "transport", "unavailable", "unknown"] as const;
 export type ModelFailurePhase = typeof phases[number];
 export interface ModelFailure {
   phase: ModelFailurePhase;
   category: typeof categories[number];
   httpStatus?: number;
+  evidenceId?: string;
 }
 
 /** Inspect private errors, but export only fixed categories and an HTTP status.
@@ -27,6 +28,7 @@ export function classifyModelFailure(phase: ModelFailurePhase, error: unknown): 
   const category = /\bAbortError\b|\baborted\b/i.test(text) ? "aborted"
     : httpStatus === 408 || httpStatus === 504 || /timed?\s*out|timeout|ETIMEDOUT/i.test(text) ? "timeout"
     : httpStatus === 401 || httpStatus === 403 || /unauthori[sz]ed|authentication|invalid.api.key|not logged in/i.test(text) ? "authentication"
+    : /GoUsageLimitError|FreeUsageLimitError|monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing|subscription_sharing_(?:workplace_individual_)?usage_limit_exceeded/i.test(text) ? "quota"
     : httpStatus === 429 || /rate.limit|too many requests/i.test(text) ? "rate_limit"
     : httpStatus === 413 || /context.length|context.window|maximum context|too many tokens/i.test(text) ? "context_limit"
     : /ECONNRESET|ECONNREFUSED|ENOTFOUND|fetch failed|socket|connection.*(?:closed|reset)/i.test(text) ? "transport"
@@ -35,15 +37,22 @@ export function classifyModelFailure(phase: ModelFailurePhase, error: unknown): 
 }
 
 export function modelFailureDetail(failure: ModelFailure): string {
-  return `Host model request failed [phase=${failure.phase}; category=${failure.category}${failure.httpStatus === undefined ? "" : `; http=${failure.httpStatus}`}]`;
+  const evidence = failure.evidenceId;
+  if (evidence !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(evidence)) throw Error("Invalid model failure evidence ID");
+  // SDK retry predicates must still recognise a classified transport/service
+  // failure after private provider text is replaced by the bounded public form.
+  const retry = failure.category === "quota" ? "; retry=insufficient_quota" : evidence && failure.category === "transport" ? "; retry=connection error"
+    : evidence && failure.category === "unavailable" ? "; retry=service unavailable" : "";
+  return `Host model request failed [phase=${failure.phase}; category=${failure.category}${failure.httpStatus === undefined ? "" : `; http=${failure.httpStatus}`}${evidence ? `; evidence=${evidence}` : ""}${retry}]`;
 }
 
 /** Only our exact, bounded format is eligible for a public explanation. */
 export function parseModelFailure(detail: unknown): ModelFailure | undefined {
   if (typeof detail !== "string") return;
-  const match = detail.match(/^Host model request failed \[phase=(\w+); category=(\w+)(?:; http=([45]\d\d))?\]$/);
+  const match = detail.match(/^Host model request failed \[phase=(\w+); category=(\w+)(?:; http=([45]\d\d))?(?:; evidence=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?(?:; retry=(connection error|service unavailable|insufficient_quota))?\]$/);
   if (!match || !phases.includes(match[1] as ModelFailurePhase) || !categories.includes(match[2] as ModelFailure["category"])) return;
-  return { phase: match[1] as ModelFailurePhase, category: match[2] as ModelFailure["category"], ...(match[3] ? { httpStatus: Number(match[3]) } : {}) };
+  if (match[5] && (match[5] === "insufficient_quota" ? match[2] !== "quota" : !match[4] || (match[5] === "connection error" ? match[2] !== "transport" : match[2] !== "unavailable"))) return;
+  return { phase: match[1] as ModelFailurePhase, category: match[2] as ModelFailure["category"], ...(match[3] ? { httpStatus: Number(match[3]) } : {}), ...(match[4] ? { evidenceId: match[4] } : {}) };
 }
 
 export function modelFailureNotice(detail: unknown, submissionId: number): string {
@@ -51,11 +60,14 @@ export function modelFailureNotice(detail: unknown, submissionId: number): strin
   const reasons: Record<ModelFailure["category"], string> = {
     aborted: "The model request was interrupted.", timeout: "The model request timed out.",
     authentication: "Model authentication or access was rejected.", rate_limit: "The model provider rate-limited the request.",
+    quota: "The provider rejected a quota, billing or subscription limit; automatic retry cannot resolve this limit.",
     context_limit: "The request exceeded the model's context or input limit.", transport: "The model connection failed.",
     unavailable: "The model provider was unavailable.", unknown: "The model request failed or was denied.",
   };
   const reason = failure?.phase === "accounting" ? "The model request could not be reconciled safely; its outcome may be uncertain."
     : failure?.phase === "conversion" ? "The model response could not be processed safely."
     : failure ? reasons[failure.category] : "The model request failed or was denied; the underlying reason was not recorded.";
-  return `**Turn failed**\n\n${reason}\n\nTool actions may already have completed. Check their results before continuing; resending the whole request could repeat them. This turn will not be retried automatically.\n\nReference: native submission ${submissionId}.`;
+  const retained = failure?.evidenceId ? `\n\nFailure details retained: ${failure.evidenceId}.` : "";
+  const classified = failure?.phase === "accounting" ? ` Provider failure category: ${failure.category}.` : "";
+  return `**Turn failed**\n\n${reason}${classified}\n\nTool actions may already have completed. Check their results before continuing; resending the whole request could repeat them. This turn will not be retried automatically.\n\nReference: native submission ${submissionId}.${retained}`;
 }
