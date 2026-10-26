@@ -1,6 +1,6 @@
 import { unlinkedUsageReportPredicate } from "./db/usage-report-projection.js";
 import { hasNativeRouting } from "./db/native-routing-policy.js";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { join, relative, resolve } from "path";
 
 import type { Zippable } from "fflate";
@@ -315,120 +315,129 @@ async function cleanupDreamChat(agentPool: AgentPool, dreamChatJid: string, chec
   reapDreamArtifacts(null);
 }
 
+type DreamLockSnapshot = { dev: bigint; ino: bigint; text: string };
+type DreamLockLease = DreamLockSnapshot & { fd: number; released: boolean };
 type DreamLockInspection = {
   held: boolean;
   ownerPid: number | null;
   stale: boolean;
+  snapshot?: DreamLockSnapshot;
+  staleFd?: number;
 };
 
+function sameDreamLock(left: DreamLockSnapshot, right: DreamLockSnapshot): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.text === right.text;
+}
+function readDreamLock(fd: number): DreamLockSnapshot {
+  const before = fstatSync(fd, { bigint: true });
+  if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > 32n) throw Error("Unverified Dream lock file");
+  const buffer = Buffer.alloc(33), length = readSync(fd, buffer, 0, buffer.length, 0);
+  const after = fstatSync(fd, { bigint: true }), named = lstatSync(DREAM_LOCK_PATH, { bigint: true });
+  if (!named.isFile() || named.nlink !== 1n || before.dev !== named.dev || before.ino !== named.ino ||
+    before.size !== BigInt(length) || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+    throw Error("Dream lock changed while reading");
+  return { dev: before.dev, ino: before.ino, text: buffer.subarray(0, length).toString("utf8") };
+}
+function openNamedDreamLock(): number {
+  const named = lstatSync(DREAM_LOCK_PATH, { bigint: true });
+  if (!named.isFile() || named.nlink !== 1n) throw Error("Unverified Dream lock file");
+  return openSync(DREAM_LOCK_PATH, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+}
+function readNamedDreamLock(): DreamLockSnapshot {
+  const fd = openNamedDreamLock();
+  try { return readDreamLock(fd); } finally { closeSync(fd); }
+}
 function inspectDreamLock(): DreamLockInspection {
-  if (!existsSync(DREAM_LOCK_PATH)) {
-    return { held: false, ownerPid: null, stale: false };
-  }
-
+  let fd: number | undefined, retain = false;
   try {
-    const raw = readFileSync(DREAM_LOCK_PATH, "utf8").trim();
-    const pid = Number.parseInt(raw, 10);
-    if (!Number.isFinite(pid) || pid <= 0) {
-      return { held: false, ownerPid: null, stale: true };
-    }
-    if (pid === process.pid) {
-      return { held: true, ownerPid: pid, stale: false };
-    }
-    try {
-      process.kill(pid, 0);
-      return { held: true, ownerPid: pid, stale: false };
-    } catch (error) {
-      debugSuppressedError(log, "Dream lock owner PID is stale or inaccessible", error, { pid });
-      if (error && typeof error === "object" && "code" in error && error.code === "EPERM") {
-        return { held: true, ownerPid: pid, stale: false };
+    fd = openNamedDreamLock();
+    const snapshot = readDreamLock(fd), raw = snapshot.text.trim(), pid = Number(raw);
+    if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(pid)) return { held: true, ownerPid: null, stale: false };
+    if (pid === process.pid) return { held: true, ownerPid: pid, stale: false };
+    try { process.kill(pid, 0); return { held: true, ownerPid: pid, stale: false }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        retain = true; // Keep the observed inode pinned until the acquisition decision.
+        return { held: false, ownerPid: pid, stale: true, snapshot, staleFd: fd };
       }
-      return { held: false, ownerPid: pid, stale: true };
+      return { held: true, ownerPid: pid, stale: false }; // EPERM or unknown: no stale-owner proof.
     }
   } catch (error) {
-    debugSuppressedError(log, "failed to inspect Dream lock", error, { path: DREAM_LOCK_PATH });
-    return { held: false, ownerPid: null, stale: true };
-  }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { held: false, ownerPid: null, stale: false };
+    return { held: true, ownerPid: null, stale: false }; // Unreadable/aliased/changing: retain.
+  } finally { if (fd !== undefined && !retain) closeSync(fd); }
 }
-
-function removeDreamLockIfOwnedByCurrentProcess(): void {
-  const inspection = inspectDreamLock();
-  if (!inspection.held || inspection.ownerPid !== process.pid) return;
+function assertDreamLockCurrent(lease: DreamLockLease): void {
   try {
-    rmSync(DREAM_LOCK_PATH, { force: true });
-  } catch (error) {
-    debugSuppressedError(log, "failed to remove Dream lock file", error, { path: DREAM_LOCK_PATH });
-  }
+    if (lease.released || !sameDreamLock(lease, readDreamLock(lease.fd)) || !sameDreamLock(lease, readNamedDreamLock())) throw Error("changed");
+  } catch { throw Error("Dream lock ownership changed"); }
 }
-
+function removeOwnedDreamLock(lease: DreamLockLease): void {
+  try { assertDreamLockCurrent(lease); rmSync(DREAM_LOCK_PATH); }
+  catch (error) { debugSuppressedError(log, "Retained a Dream lock no longer bound to this invocation", error, { path: DREAM_LOCK_PATH }); }
+}
+let activeDreamLock: DreamLockLease | undefined;
 let dreamLockExitCleanupRegistered = false;
-
-function onDreamProcessExit(): void {
-  removeDreamLockIfOwnedByCurrentProcess();
-}
-
-function ensureDreamLockExitCleanup(): void {
+function onDreamProcessExit(): void { if (activeDreamLock) removeOwnedDreamLock(activeDreamLock); }
+function ensureDreamLockExitCleanup(lease: DreamLockLease): void {
+  activeDreamLock = lease;
   if (dreamLockExitCleanupRegistered) return;
   dreamLockExitCleanupRegistered = true;
   process.on("exit", onDreamProcessExit);
 }
-
-function clearDreamLockExitCleanup(): void {
+function clearDreamLockExitCleanup(lease: DreamLockLease): void {
+  if (activeDreamLock !== lease) return;
+  activeDreamLock = undefined;
   if (!dreamLockExitCleanupRegistered) return;
   dreamLockExitCleanupRegistered = false;
   process.off("exit", onDreamProcessExit);
 }
-
 function describeDreamLockConflict(ownerPid: number | null): string {
-  return ownerPid && Number.isFinite(ownerPid)
-    ? `Dream already running (pid ${ownerPid}).`
-    : "Dream already running.";
+  return ownerPid && Number.isFinite(ownerPid) ? `Dream already running (pid ${ownerPid}).` : "Dream already running.";
 }
-
-function acquireDreamLock(): { fd: number | null; busyReason: string | null } {
+function acquireDreamLock(): { lease: DreamLockLease | null; busyReason: string | null } {
   mkdirSync(DREAM_MEMORY_DIR, { recursive: true });
   const tryOpen = () => {
-    const fd = openSync(DREAM_LOCK_PATH, "wx");
-    writeFileSync(DREAM_LOCK_PATH, String(process.pid), "utf8");
-    return fd;
+    const fd = openSync(DREAM_LOCK_PATH, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      writeFileSync(fd, String(process.pid), "utf8");
+      const lease = { ...readDreamLock(fd), fd, released: false };
+      ensureDreamLockExitCleanup(lease);
+      return lease;
+    } catch (error) { closeSync(fd); throw error; } // Preserve an incomplete file; never adopt/overwrite it.
   };
-
-  try {
-    const fd = tryOpen();
-    ensureDreamLockExitCleanup();
-    return { fd, busyReason: null };
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String((error as any).code) : "";
-    if (code !== "EEXIST") throw error;
-
+  try { return { lease: tryOpen(), busyReason: null }; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const inspection = inspectDreamLock();
-    if (!inspection.held && inspection.stale) {
-      log.warn("Reaping stale Dream lock", {
-        operation: "acquire_dream_lock.reap_stale",
-        path: DREAM_LOCK_PATH,
-        ownerPid: inspection.ownerPid,
-      });
-      rmSync(DREAM_LOCK_PATH, { force: true });
-      const fd = tryOpen();
-      ensureDreamLockExitCleanup();
-      return { fd, busyReason: null };
-    }
-
-    return {
-      fd: null,
-      busyReason: describeDreamLockConflict(inspection.ownerPid),
-    };
+    try {
+      if (!inspection.held && inspection.stale && inspection.snapshot && inspection.staleFd !== undefined) {
+        try {
+          if (!sameDreamLock(inspection.snapshot, readDreamLock(inspection.staleFd)) || !sameDreamLock(inspection.snapshot, readNamedDreamLock()))
+            return { lease: null, busyReason: "Dream lock changed during stale-owner inspection." };
+        } catch { return { lease: null, busyReason: "Dream lock changed during stale-owner inspection." }; }
+        log.warn("Reaping stale Dream lock", { operation: "acquire_dream_lock.reap_stale", path: DREAM_LOCK_PATH, ownerPid: inspection.ownerPid });
+        rmSync(DREAM_LOCK_PATH);
+        try { return { lease: tryOpen(), busyReason: null }; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      }
+      return { lease: null, busyReason: describeDreamLockConflict(inspection.ownerPid) };
+    } finally { if (inspection.staleFd !== undefined) closeSync(inspection.staleFd); }
   }
 }
-
-function releaseDreamLock(fd: number): void {
-  try {
-    closeSync(fd);
-  } catch (error) {
-    debugSuppressedError(log, "failed to close Dream lock fd", error, { fd, path: DREAM_LOCK_PATH });
+function releaseDreamLock(lease: DreamLockLease): void {
+  if (lease.released) return;
+  try { removeOwnedDreamLock(lease); }
+  finally {
+    // Keep the descriptor open until after the named binding is checked: an
+    // unlinked former inode cannot be recycled into another owner's lock.
+    try {
+      const current = fstatSync(lease.fd, { bigint: true });
+      if (current.dev === lease.dev && current.ino === lease.ino) closeSync(lease.fd);
+    } catch (error) { debugSuppressedError(log, "failed to close Dream lock fd", error, { fd: lease.fd, path: DREAM_LOCK_PATH }); }
+    lease.released = true;
+    clearDreamLockExitCleanup(lease);
   }
-  removeDreamLockIfOwnedByCurrentProcess();
-  clearDreamLockExitCleanup();
 }
 
 function getDreamAgentTimeoutMs(): number {
@@ -502,7 +511,9 @@ async function createDreamBackup(chatJid: string, mode: "manual" | "auto", days:
 }
 
 export async function runDreamAgentTurn(options: { chatJid: string; days?: number; mode?: "manual" | "auto"; model?: string | null; agentPool: AgentPool }): Promise<DreamAgentTurnResult> {
-  const checkAccess = createDreamAccessGuard();
+  const access = createDreamAccessGuard();
+  let lockLease: DreamLockLease | null = null;
+  const checkAccess = () => { access(); if (lockLease) assertDreamLockCurrent(lockLease); };
   const chatJid = options.chatJid;
   const mode = options.mode === "auto" ? "auto" : "manual";
   const days = Number.isFinite(options.days) && Number(options.days) > 0
@@ -543,7 +554,6 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     }
   }
 
-  let lockFd: number | null = null;
   let shouldCleanupDreamChat = false;
   const dreamChatJid = buildDreamChatJid(chatJid, mode);
   const requestedDreamModel = typeof options.model === "string" && options.model.trim()
@@ -560,7 +570,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
         result: `${mode === "auto" ? "AutoDream" : "Dream"} skipped: ${lock.busyReason}`,
       };
     }
-    lockFd = lock.fd;
+    lockLease = lock.lease;
     shouldCleanupDreamChat = true;
     reapDreamArtifacts(null);
     const backupPath = await createDreamBackup(chatJid, mode, days, checkAccess);
@@ -693,13 +703,15 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
       throw error;
     } finally {
       // Resource release remains necessary on denial; do not reap chat or memory data.
-      if (lockFd !== null) releaseDreamLock(lockFd);
+      if (lockLease !== null) releaseDreamLock(lockLease);
     }
   }
 }
 
 export async function runDreamMaintenance(options?: { chatJid?: string; days?: number; mode?: "manual" | "auto" }): Promise<DreamRunResult> {
-  const checkAccess = createDreamAccessGuard();
+  const access = createDreamAccessGuard();
+  let lockLease: DreamLockLease | null = null;
+  const checkAccess = () => { access(); if (lockLease) assertDreamLockCurrent(lockLease); };
   const chatJid = typeof options?.chatJid === "string" && options.chatJid.trim()
     ? options.chatJid.trim()
     : "web:default";
@@ -738,7 +750,6 @@ export async function runDreamMaintenance(options?: { chatJid?: string; days?: n
     }
   }
 
-  let lockFd: number | null = null;
   try {
     const lock = acquireDreamLock();
     if (lock.busyReason) {
@@ -764,7 +775,7 @@ export async function runDreamMaintenance(options?: { chatJid?: string; days?: n
         backup_path: null,
       };
     }
-    lockFd = lock.fd;
+    lockLease = lock.lease;
     const backupPath = await createDreamBackup(chatJid, mode, days, checkAccess);
     checkAccess();
     const dailyNotesRefreshed = refreshDailyNotes(chatJid, days);
@@ -793,7 +804,7 @@ export async function runDreamMaintenance(options?: { chatJid?: string; days?: n
       backup_path: backupPath,
     };
   } finally {
-    try { checkAccess(); } finally { if (lockFd !== null) releaseDreamLock(lockFd); }
+    try { checkAccess(); } finally { if (lockLease !== null) releaseDreamLock(lockLease); }
   }
 }
 
