@@ -682,20 +682,21 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                 data-panel-key=${panelKey || ''}
                 style=${turnColor ? `--turn-color: ${turnColor};` : ''}
             >
-                <${isCollapsible ? 'button' : 'div'}
-                    class=${`agent-thinking-title ${titleClass || ''}${isCollapsible ? ' agent-thinking-title-clickable' : ''}`}
-                    type=${isCollapsible ? 'button' : undefined}
-                    aria-label=${isCollapsible ? `${isExpanded ? 'Collapse' : 'Expand'} ${panelTitle}` : undefined}
-                    aria-expanded=${isCollapsible ? String(isExpanded) : undefined}
-                    onClick=${isCollapsible ? () => toggleExpand(panelKey) : undefined}
-                >
+                <div class=${`agent-thinking-title ${titleClass || ''}`}>
                     ${turnColor && html`<span class=${dotClass} aria-hidden="true"></span>`}
-                    ${panelTitle}
-                    ${isCollapsible && html`<span class=${hasOverflow ? 'agent-thinking-truncation' : 'agent-thinking-disclosure'}>
-                        ${renderDisclosureTriangle(isExpanded ? 'up' : 'down')}
-                        ${hasOverflow ? (isExpanded ? 'less' : 'more…') : ''}
-                    </span>`}
-                </${isCollapsible ? 'button' : 'div'}>
+                    <span class="agent-thinking-title-text">${panelTitle}</span>
+                    ${isCollapsible && (hasOverflow || isExpanded) && html`
+                        <button
+                            type="button"
+                            class="agent-thinking-truncation"
+                            aria-label=${`${isExpanded ? 'Collapse' : 'Expand'} ${panelTitle}`}
+                            aria-expanded=${String(isExpanded)}
+                            onClick=${() => toggleExpand(panelKey)}
+                        >
+                            ${isExpanded ? 'less' : 'more…'}
+                        </button>
+                    `}
+                </div>
                 <div
                     class=${bodyClass}
                     style=${bodyStyle}
