@@ -16,7 +16,7 @@ export interface OperationAgentPool {
     options: RunAgentOptions,
   ): Promise<AgentOutput>;
 }
-export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,target:string,action:"admit"|"read"|"cancel",readConfig=readOperationsConfig):OperationAdmission {
+export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,target:string,action:"admit"|"read"|"cancel"|"request",readConfig=readOperationsConfig):OperationAdmission {
   if (readAccessConfig().mode !== "single-user")
     return { decision: "rejected" };
   const config = readConfig();
@@ -28,7 +28,7 @@ export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,t
       g.target === target,
   );
   if (!config.enabled || !configured) return { decision: "rejected" };
-  if (action === "admit" && configured.approvalRequired)
+  if ((action === "admit" || action === 'request') && configured.approvalRequired)
     return { decision: "approval_required" };
   const { revision, allowedTools, timeoutMs, maxToolCalls, parentWorkId } =
     configured;
@@ -40,19 +40,22 @@ export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,t
     maxToolCalls,
     parentWorkId,
   };
-  if (action !== "admit") return { decision: "allow", grant };
+  // Request revalidation retains the spending grant, while the reservation
+  // owner separately evaluates prospective cost and excludes only its own hold.
+  if (action !== "admit" && action !== 'request') return { decision: "allow", grant };
   const parent = configured.parentWorkId;
   if (parent) {
     const work = getBudgetWork(parent);
     if (!work || !["active", "paused"].includes(work.status))
       return { decision: "rejected" };
+    if (action === 'request' && work.status !== 'active') return {decision:'budget_blocked'};
     if (action === "admit") {
       const decision = evaluateBudget({ workId: parent });
       if (decision.action === "pause" || decision.action === "stop")
         return { decision: "budget_blocked" };
     }
   } else if (
-    action === "admit" &&
+    (action === "admit" || action === 'request') &&
     listBudgetCaps({ enabledOnly: true }).some((c) => c.scope === "task")
   ) {
     // Task caps cannot be inherited without an operator-selected parent work.

@@ -156,7 +156,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-addon-execution", "native-addon-execution-accounting", "native-addon-execution-accounting-unknown", "native-addon-execution-revoked", "native-addon-execution-auth-revoked", "native-addon-execution-cancelled", "native-addon-execution-deadline", "native-addon-execution-quota", "native-addon-execution-ceiling", "native-addon-execution-large-result", "native-addon-service-execution", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-addon-execution", "native-addon-execution-accounting", "native-addon-execution-accounting-unknown", "native-addon-execution-accounting-capped", "native-addon-execution-accounting-capped-daily", "native-addon-execution-accounting-capped-exact", "native-addon-execution-accounting-capped-denied", "native-addon-execution-accounting-capped-initial-denied", "native-addon-execution-accounting-capped-auth-denied", "native-addon-execution-accounting-capped-unknown", "native-addon-execution-accounting-capped-missing-account", "native-addon-execution-accounting-capped-account-changed", "native-addon-execution-accounting-capped-tool-race", "native-addon-execution-accounting-capped-pricing-changed", "native-addon-execution-accounting-capped-small-output", "native-addon-execution-accounting-capped-cleanup-failed", "native-addon-execution-no-account-auth-cap", "native-addon-execution-revoked", "native-addon-execution-auth-revoked", "native-addon-execution-cancelled", "native-addon-execution-deadline", "native-addon-execution-quota", "native-addon-execution-ceiling", "native-addon-execution-large-result", "native-addon-service-execution", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -216,8 +216,9 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   const accountingRotate = scenario === "native-parent-accounting-rotate";
   const accountingCloseFailure = processAccountingCloseFailure || scenario === "native-parent-accounting-close-work-fail";
   const accountingStorageFailure = scenario === "native-parent-accounting-storage-fail";
-  const accountingUnknown = scenario === "native-parent-accounting-unknown" || scenario==='native-addon-execution-accounting-unknown';
+  const accountingUnknown = scenario === "native-parent-accounting-unknown" || scenario.startsWith('native-addon-execution-accounting')&&scenario.endsWith('-unknown');
   const model = { provider: parentAccounting ? "openai-codex" : "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: reasoningThinking, contextWindow: 10000, maxTokens: 1000, cost: { input: parentAccounting ? 1 : 0, output: parentAccounting ? 1 : 0, cacheRead: 0, cacheWrite: 0 } };
+  if(scenario==='native-addon-execution-accounting-capped-small-output')model.cost.output=10000;
   if (parentAccounting) {
     mkdirSync(getPiclawAgentDir(), { recursive: true });
     writeFileSync(join(getPiclawAgentDir(), "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: "synthetic-access", refresh: "synthetic-refresh", accountId: "synthetic-account", expires: Date.now() + 60000 } }), { mode: 0o600 });
@@ -484,7 +485,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
       content: nativeInfrastructure && step ? [step, ...toolSequence!.splice(0)].map((item, index) => ({ type: "toolCall" as const, id: `infrastructure-${index}`, name: item.name, arguments: typeof item.arguments === "function" ? item.arguments() : item.arguments })) : firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(delegateImagesCase && id === "B" ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
         : [{ type: "text" as const, text: scenario==='native-addon-execution-large-result'?'é'.repeat(70_000):"factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
-      usage: { ...(usageProjection ? { providerCost: 0, reasoningTokens: 2, cacheReadReported: true } : {}), input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: pricedResponse ? 0.000005 : 0, output: pricedResponse ? 0.000005 : 0, cacheRead: 0, cacheWrite: 0, total: pricedResponse ? 0.00001 : 0 } } };
+      usage: scenario==='native-addon-execution-accounting-capped-small-output'?{input:5000,output:1000,cacheRead:0,cacheWrite:0,totalTokens:6000,cost:{input:0.005,output:10,cacheRead:0,cacheWrite:0,total:10.005}}:{ ...(usageProjection ? { providerCost: 0, reasoningTokens: 2, cacheReadReported: true } : {}), input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: pricedResponse ? 0.000005 : 0, output: pricedResponse ? 0.000005 : 0, cacheRead: 0, cacheWrite: 0, total: pricedResponse ? 0.00001 : 0 } } };
     onProviderResponse?.();
     void (async () => {
       if (child) await bothChildren;
@@ -546,6 +547,15 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   let realRunCaptures = 0, realToolCaptures = 0;
   let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
+  if(scenario==='native-addon-execution-accounting-capped-small-output'){
+    const open=Harness.open;captureSpies.push(spyOn(Harness,'open').mockImplementation((storage,options,ctx)=>{
+      assert(options.models);const models=typeof options.models==='function'?options.models():options.models;
+      return open.call(Harness,storage,{...options,models:new Proxy(models,{get(target,key){
+        if(key==='streamSimple')return(...args:Parameters<typeof models.streamSimple>)=>models.streamSimple(args[0],args[1],{...args[2],maxTokens:1});
+        return Reflect.get(target,key);
+      }})},ctx);
+    }));
+  }
   if (nativePlan) {
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
@@ -886,13 +896,35 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         expect(await reopenedPool.prepareAddonOperation(id)).toEqual(recovered);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
         return;
       }
+      const cap=scenario.startsWith('native-addon-execution-accounting-capped')?saveBudgetCap(scenario.endsWith('-daily')?{scope:'instance_daily',timezone:'UTC',metric:'api_usd_micros',amount:1000000}:{scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:scenario.endsWith('-initial-denied')?0:scenario.endsWith('-cleanup-failed')?1:scenario.endsWith('-small-output')?110000:scenario.endsWith('-denied')&&!scenario.endsWith('-auth-denied')?1:scenario.endsWith('-exact')?101000:1000000},root):undefined;
+      if(scenario==='native-addon-execution-accounting-capped-initial-denied'){
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work','budget_request_reservations'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot(),host=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(pool);
+        expect(await host.execute({operationId:id,chatJid:'operation:'+id,workId:'operation:'+id,text,principal:{addonId:'native-fixture',principalId:'operator'},grant,signal:new AbortController().signal})).toEqual({status:'budget_blocked',reason:'budget_boundary'});
+        expect(snapshot()).toEqual(owned);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
       const admitted=await pool.prepareAddonOperation(id);
       if(scenario.startsWith('native-addon-execution')){
         const payload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),'utf8'));
         expect(payload.policy.acceptedAt).toBe(operations.readAddonOperation(id)!.updatedAt);
         expect(Date.parse(payload.policy.expiresAt)-Date.parse(payload.policy.acceptedAt)).toBe(grant.timeoutMs);
-        const host=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(pool),controller=new AbortController();
+        const host=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(pool),controller=new AbortController();let authRequests=0;
         const execution={operationId:id,chatJid:'operation:'+id,workId:'operation:'+id,text,principal:{addonId:'native-fixture',principalId:'operator'},grant,signal:controller.signal};
+        if(scenario==='native-addon-execution-accounting-capped-missing-account')writeFileSync(join(getPiclawAgentDir(),'auth.json'),'{}');
+        if(scenario==='native-addon-execution-accounting-capped-cleanup-failed')root.exec("CREATE TEMP TRIGGER fail_budget_rejection_cleanup BEFORE UPDATE ON budget_work WHEN NEW.last_boundary='request_budget_blocked' BEGIN SELECT RAISE(ABORT,'synthetic budget cleanup fault'); END");
+        let toolRace=false,pricingChanged=false;
+        if(scenario==='native-addon-execution-accounting-capped-pricing-changed'){
+          const physical=runtime.getPhysicalModel.bind(runtime);captureSpies.push(spyOn(runtime,'getPhysicalModel').mockImplementation(((provider:string,id:string)=>{
+            const model=physical(provider,id);return pricingChanged&&model?{...model,cost:{...model.cost,input:10,output:10}}:model;
+          }) as typeof runtime.getPhysicalModel));
+        }
+        if(scenario==='native-addon-execution-accounting-capped-tool-race'){
+          const mkdir=hostFs.mkdirSync;captureSpies.push(spyOn(hostFs,'mkdirSync').mockImplementation(((path:unknown,...args:unknown[])=>{
+            if(String(path)===workspace&&!toolRace){toolRace=true;assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);}
+            return (mkdir as Function)(path,...args);
+          }) as typeof hostFs.mkdirSync));
+        }
+        if(scenario==='native-addon-execution-no-account-auth-cap')onCredentialResolve=async()=>{authRequests++;saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);};
         if(scenario==='native-addon-execution-revoked')onProviderResponse=()=>{configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));};
         if(scenario==='native-addon-execution-cancelled')onProviderResponse=()=>{operations.transitionAddonOperation(id,['working'],'cancel_requested');controller.abort();};
         if(scenario==='native-addon-execution-deadline')onCredentialResolve=async()=>{
@@ -900,31 +932,66 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         };
         if(scenario==='native-addon-execution-auth-revoked')onCredentialResolve=async()=>{configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));};
         if(scenario.startsWith('native-addon-execution-accounting'))onCredentialResolve=async()=>{
+          authRequests++;
           expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});
           const row=root.query('SELECT w.execution_kind,w.parent_work_id FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id ORDER BY r.rowid DESC LIMIT 1').get();
           expect(row).toEqual({execution_kind:'background',parent_work_id:'durable-operation:'+admitted.operationId});
+          if(scenario==='native-addon-execution-accounting-capped-auth-denied'){assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);}
+          if(scenario==='native-addon-execution-accounting-capped-pricing-changed')pricingChanged=true;
+          if(scenario==='native-addon-execution-accounting-capped-account-changed')writeFileSync(join(getPiclawAgentDir(),'auth.json'),JSON.stringify({'openai-codex':{type:'oauth',access:'synthetic',refresh:'synthetic',accountId:'changed-account',expires:Date.now()+60000}}));
         };
         const finalText=scenario==='native-addon-execution-large-result'?'é'.repeat(70_000):'factory synthetic reply';
-        const output=await host.execute(execution),failed=['native-addon-execution-accounting-unknown','native-addon-execution-revoked','native-addon-execution-auth-revoked','native-addon-execution-cancelled','native-addon-execution-deadline'].includes(scenario);
-        expect(output).toEqual(failed?{status:scenario==='native-addon-execution-cancelled'?'cancelled':'failed',reason:scenario==='native-addon-execution-cancelled'?'executor_cancelled':scenario==='native-addon-execution-deadline'?'execution_timeout':'execution_failed'}:{status:'completed',output:finalText});
-        const noWrite=failed||scenario==='native-addon-execution-ceiling';
+        const budgetBlocked=['native-addon-execution-accounting-capped-denied','native-addon-execution-accounting-capped-exact','native-addon-execution-accounting-capped-auth-denied','native-addon-execution-accounting-capped-missing-account','native-addon-execution-accounting-capped-tool-race','native-addon-execution-accounting-capped-pricing-changed','native-addon-execution-accounting-capped-small-output','native-addon-execution-no-account-auth-cap'].includes(scenario);
+        const oneCappedRequest=scenario.endsWith('-capped-exact')||scenario.endsWith('-capped-tool-race');
+        const accountChanged=scenario==='native-addon-execution-accounting-capped-account-changed';
+        const cleanupFailed=scenario==='native-addon-execution-accounting-capped-cleanup-failed';
+        const unknown=scenario.startsWith('native-addon-execution-accounting')&&scenario.endsWith('-unknown');
+        const output=await host.execute(execution),failed=budgetBlocked||unknown||accountChanged||cleanupFailed||['native-addon-execution-revoked','native-addon-execution-auth-revoked','native-addon-execution-cancelled','native-addon-execution-deadline'].includes(scenario);
+        if(scenario==='native-addon-execution-accounting-capped-small-output')expect(root.query('SELECT COALESCE(SUM(api_equivalent_cost_microusd),0) AS amount FROM token_usage').get()).toEqual({amount:0});
+        expect(output).toEqual(budgetBlocked?{status:'budget_blocked',reason:'budget_boundary'}:failed?{status:scenario==='native-addon-execution-cancelled'?'cancelled':'failed',reason:scenario==='native-addon-execution-cancelled'?'executor_cancelled':scenario==='native-addon-execution-deadline'?'execution_timeout':'execution_failed'}:{status:'completed',output:finalText});
+        const noWrite=failed&&scenario!=='native-addon-execution-accounting-capped-exact'||scenario==='native-addon-execution-ceiling';
         expect(existsSync(join(workspace,'native-addon-result.txt'))).toBe(!noWrite);
         if(!noWrite)expect(readFileSync(join(workspace,'native-addon-result.txt'),'utf8')).toBe('ADMITTED_NATIVE_ADDON');
-        expect(calls).toBe(scenario==='native-addon-execution-deadline'||scenario==='native-addon-execution-auth-revoked'?0:failed?1:3);expect(publicRows()).toEqual(before);
+        expect(calls).toBe(scenario==='native-addon-execution-deadline'||scenario==='native-addon-execution-auth-revoked'||accountChanged||cleanupFailed||budgetBlocked&&!oneCappedRequest?0:failed?1:3);expect(publicRows()).toEqual(before);
         const disposition=scenario==='native-addon-execution-cancelled'||scenario==='native-addon-execution-deadline'?'cancelled':failed?'failed':'completed';
         expect(root.query('SELECT phase,terminal_disposition FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'terminal',terminal_disposition:disposition});
         expect(root.query('SELECT disposition,message_row_id,outbox_count,media_count FROM service_effect_s02_commits WHERE operation_id=?').get(admitted.operationId)).toEqual({disposition,message_row_id:null,outbox_count:0,media_count:0});
         expect(root.query('SELECT count(*) AS n FROM submissions WHERE conversation_id=?').get(admitted.conversationId)).toEqual({n:1});
         const policyDoc=(await import('../../runtime/durable-engine/src/host-background-context.js')).storedBackgroundDocument(root,
           (root.query('SELECT id FROM documents WHERE kind=\'"app.background-policy"\' AND owner_id=?').get(admitted.conversationId) as {id:number}).id);
-        const quota=failed?0:scenario==='native-addon-execution-ceiling'||scenario==='native-addon-execution-quota'?1:2;
+        const quota=oneCappedRequest?1:failed?0:scenario==='native-addon-execution-ceiling'||scenario==='native-addon-execution-quota'?1:2;
         expect(policyDoc.calls).toHaveLength(quota);expect(new Set(policyDoc.calls.map((call:{taskId:number})=>call.taskId)).size).toBe(quota);
-        if(scenario==='native-addon-execution-accounting-unknown'){
+        if(cleanupFailed){
+          expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:0});
+          expect(root.query("SELECT count(*) AS n FROM budget_work WHERE id LIKE 'durable-request:%' AND status='active'").get()).toEqual({n:1});
+          const dir=join(getDataDir(),'diagnostics/model-failures'),files=hostFs.readdirSync(dir);expect(files).toHaveLength(1);
+          const evidence=JSON.parse(readFileSync(join(dir,files[0]!), 'utf8'));
+          expect(evidence.errors.error.message).toBe('Background budget rejection cleanup is uncertain');expect(evidence.errors.error.cause.code).toBe('budget_denied');
+          expect(evidence.errors.error.errors[1].message).toContain('synthetic budget cleanup fault');expect(authRequests).toBe(0);
+        }
+        if(unknown){
           expect(root.query('SELECT state FROM budget_request_reservations').all()).toEqual([{state:'unresolved'}]);
           expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});
           expect(root.query('SELECT status FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({status:'active'});
+          if(cap){
+            const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js');
+            const service=new AddonOperationService(host),client=service.bind(execution.principal);
+            const held=()=>['budget_work','service_effect_s01_sources','conversations'].map(table=>root.query(`SELECT count(*) AS n FROM ${table}`).get());
+            const before=held();try{
+              expect(await client.admit({target:'fixture',idempotencyKey:'must-not-evade-unknown',text:'A new operation cannot evade this parent hold'})).toEqual({created:false,admission:'budget_blocked',operation:null});
+              await service.waitForIdle();expect(held()).toEqual(before);expect(calls).toBe(1);
+            }finally{service.shutdown();await service.waitForIdle();}
+          }
         }
-        if(scenario==='native-addon-execution-accounting'){
+        if(cap&&budgetBlocked||accountChanged||scenario==='native-addon-execution-no-account-auth-cap'){
+          const states=oneCappedRequest?[{state:'settled'}]:scenario.endsWith('-auth-denied')||scenario.endsWith('-pricing-changed')||accountChanged?[{state:'released'}]:[];
+          expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual(states);
+          expect(authRequests).toBe(oneCappedRequest||scenario.endsWith('-auth-denied')||scenario.endsWith('-pricing-changed')||accountChanged||scenario==='native-addon-execution-no-account-auth-cap'?1:0);
+          if(scenario.endsWith('-tool-race'))expect(toolRace).toBe(true);
+          expect(root.query("SELECT count(*) AS n FROM budget_work WHERE id LIKE 'durable-request:%' AND status='active'").get()).toEqual({n:0});
+          expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:oneCappedRequest?1:0});
+        }
+        if(scenario==='native-addon-execution-accounting'||scenario==='native-addon-execution-accounting-capped'||scenario==='native-addon-execution-accounting-capped-daily'){
           expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual([{state:'settled'},{state:'settled'},{state:'settled'}]);
           expect(root.query('SELECT w.execution_kind,t.api_equivalent_cost_microusd FROM token_usage t JOIN budget_work w ON w.id=t.work_id ORDER BY t.id').all()).toEqual(Array.from({length:3},()=>({execution_kind:'background',api_equivalent_cost_microusd:10})));
           expect(root.query('SELECT execution_kind,parent_work_id FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({execution_kind:'background',parent_work_id:'operation:'+id});
@@ -935,9 +1002,16 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
           backend.stop();await backend.close();
           if(scenario==='native-addon-execution')await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration,true);
           reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
-          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const resumedBindings=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
           const recoveredHost=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(reopenedPool);
           expect(await recoveredHost.execute({...execution,signal:new AbortController().signal})).toEqual(output);expect(calls).toBe(attempts);expect(snapshot()).toEqual(settled);expect(publicRows()).toEqual(before);
+          if(scenario==='native-addon-execution-accounting-capped'){
+            let ordinaryCredentials=0;onCredentialResolve=async()=>{ordinaryCredentials++;};
+            const message={id:'ordinary-with-background-cap',chat_jid:'web:default',sender:'user',sender_name:'User',content:'Ordinary requests must not inherit the private budget admission',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+            const rowId=root.transaction(()=>{const rowId=storeMessage(message);resumedBindings.getInputSourceAdmission!('web:default')!({message,rowId,database:root});return rowId;}).immediate();
+            expect(await resumedBindings.dispatchAcceptedInput!('web:default',message.id,rowId)!()).toBe('settled');expect(calls).toBe(attempts);expect(ordinaryCredentials).toBe(0);
+            expect(root.query('SELECT o.terminal_disposition FROM service_effect_s01_operations o JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq WHERE s.source_id=?').get(message.id)).toEqual({terminal_disposition:'failed'});
+          }
         }
         expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);return;
       }
@@ -1027,6 +1101,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       expect(root.query('SELECT phase FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'claimed'});
       expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
     }finally{
+      if(scenario==='native-addon-execution-accounting-capped-cleanup-failed')root.exec('DROP TRIGGER IF EXISTS fail_budget_rejection_cleanup');
       backgroundDeadlineTimer?.mockRestore();deadlineClock?.mockRestore();
       if(saved===undefined)rmSync(configuration,{force:true});else writeFileSync(configuration,saved);
       reopened?.stop();await reopened?.close();await reopenedBase?.queue.shutdown();await reopenedPool?.shutdown();

@@ -1,6 +1,7 @@
+import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import { isRetryableAssistantError, type AssistantMessage } from "@earendil-works/pi-ai";
 const phases = ["validation", "source", "admission", "provider", "conversion", "accounting"] as const;
-const categories = ["aborted", "timeout", "authentication", "rate_limit", "quota", "context_limit", "transport", "unavailable", "unknown"] as const;
+const categories = ["aborted", "timeout", "authentication", "rate_limit", "quota", "budget", "context_limit", "transport", "unavailable", "unknown"] as const;
 export type ModelFailurePhase = typeof phases[number];
 export interface ModelFailure {
   phase: ModelFailurePhase;
@@ -9,9 +10,14 @@ export interface ModelFailure {
   evidenceId?: string;
 }
 
+function hostBudgetDenied(error:unknown):boolean{
+  try{return error instanceof BudgetRequestError&&error.code==='budget_denied';}catch{return false;} // Unknown diagnostics may be hostile proxies.
+}
+
 /** Inspect private errors, but export only fixed categories and an HTTP status.
  * Never retain exception text, headers, URLs, partial output or abort reasons. */
 export function classifyModelFailure(phase: ModelFailurePhase, error: unknown): ModelFailure {
+  if((phase==='source'||phase==='admission')&&hostBudgetDenied(error))return{phase,category:'budget'};
   const parts: string[] = [], seen = new Set<object>();
   let status: unknown, aborted = false, node = error;
   for (let depth = 0; depth < 4; depth++) {
@@ -57,7 +63,7 @@ export function modelFailureDetail(failure: ModelFailure): string {
   // ordinary HTTP status and UUID for public notices; old receipts still parse.
   const wireEvidence = evidence?.replace(/-/g, "").match(/.{2}/g)?.join(":");
   const http = failure.httpStatus === undefined ? "" : "; http=" + String(failure.httpStatus).split("").join(":");
-  const retry = failure.category === "quota" ? "; retry=insufficient_quota" : failure.category === "transport" ? "; retry=connection error"
+  const retry = failure.category === "quota" || failure.category === 'budget' ? "; retry=insufficient_quota" : failure.category === "transport" ? "; retry=connection error"
     : failure.category === "unavailable" ? "; retry=service unavailable" : "";
   const context = failure.category === "context_limit" ? "; context=maximum context length exceeded" : "";
   return `Host model request failed [phase=${failure.phase}; category=${failure.category}${http}${wireEvidence ? `; evidence=hex:${wireEvidence}` : ""}${retry}${context}]`;
@@ -68,7 +74,7 @@ export function parseModelFailure(detail: unknown): ModelFailure | undefined {
   if (typeof detail !== "string") return;
   const match = detail.match(/^Host model request failed \[phase=(\w+); category=(\w+)(?:; http=([45](?:\d\d|:\d:\d)))?(?:; evidence=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|hex:(?:[0-9a-f]{2}:){15}[0-9a-f]{2}))?(?:; retry=(connection error|service unavailable|insufficient_quota))?(?:; context=(maximum context length exceeded))?\]$/);
   if (!match || !phases.includes(match[1] as ModelFailurePhase) || !categories.includes(match[2] as ModelFailure["category"])) return;
-  if (match[5] && (match[5] === "insufficient_quota" ? match[2] !== "quota" : match[5] === "connection error" ? match[2] !== "transport" : match[2] !== "unavailable")) return;
+  if (match[5] && (match[5] === "insufficient_quota" ? match[2] !== "quota" && match[2] !== 'budget' : match[5] === "connection error" ? match[2] !== "transport" : match[2] !== "unavailable")) return;
   if (match[6] && match[2] !== "context_limit") return;
   const hex = match[4]?.startsWith("hex:") ? match[4].slice(4).replace(/:/g, "") : undefined;
   const evidenceId = hex ? [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join("-") : match[4];
@@ -81,10 +87,11 @@ export function modelFailureNotice(detail: unknown, submissionId: number): strin
     aborted: "The model request was interrupted.", timeout: "The model request timed out.",
     authentication: "Model authentication or access was rejected.", rate_limit: "The model provider rate-limited the request.",
     quota: "The provider rejected a quota, billing or subscription limit; automatic retry cannot resolve this limit.",
+    budget: 'The model request was blocked by budget policy or could not be accounted safely.',
     context_limit: "The request exceeded the model's context or input limit.", transport: "The model connection failed.",
     unavailable: "The model provider was unavailable.", unknown: "The model request failed or was denied.",
   };
-  const reason = failure?.phase === "accounting" ? "The model request could not be reconciled safely; its outcome may be uncertain."
+  const reason = failure?.category === 'budget' ? reasons.budget : failure?.phase === "accounting" ? "The model request could not be reconciled safely; its outcome may be uncertain."
     : failure?.phase === "conversion" ? "The model response could not be processed safely."
     : failure ? reasons[failure.category] : "The model request failed or was denied; the underlying reason was not recorded.";
   const retained = failure?.evidenceId ? `\n\nFailure details retained: ${failure.evidenceId}.` : "";

@@ -7,6 +7,7 @@ import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
 import { markAddonOperationInputCommitted } from '../../src/db/addon-operations.js';
+import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import { ensureBudgetWork, getBudgetWork } from "../../src/db/budget-limits.js";
 import { operationBudgetWorkId, sidePromptSourceId } from "./host-request-accounting.js";
 import { createHash } from "node:crypto";
@@ -545,12 +546,23 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const running=(async():Promise<AgentOutput>=>{
         let input=acceptedBackgroundInput(sourceId);
         const resultFor=(state:Awaited<ReturnType<typeof runtime.reconcile>>,timedOut=false):AgentOutput=>{
-          const deadlineExpired=timedOut||state.operation.cancellation?.cause==='background_timeout'||(state.status?.status==='unanswered'&&parseModelFailure(state.status.detail)?.category==='timeout');
-          if(state.operation.terminal?.disposition!=='completed'||!state.answer)return{status:'error',result:null,error:deadlineExpired?'Native background deadline expired':state.operation.cancellation?'Native background cancelled':'Native background failed',failureCategory:deadlineExpired?'timeout':state.operation.cancellation?'aborted':'provider'};
+          const category=state.status?.status==='unanswered'?parseModelFailure(state.status.detail)?.category:undefined;
+          const deadlineExpired=timedOut||state.operation.cancellation?.cause==='background_timeout'||category==='timeout';
+          if(state.operation.terminal?.disposition!=='completed'||!state.answer)return{status:'error',result:null,error:deadlineExpired?'Native background deadline expired':state.operation.cancellation?'Native background cancelled':'Native background failed',failureCategory:deadlineExpired?'timeout':state.operation.cancellation?'aborted':category==='budget'?'provider_budget':'provider'};
           return{status:'success',result:state.answer.text,usage:state.answer.message.usage};
         };
         if(input){const state=await runtime.reconcile(input);assertLive();if(state.operation.terminal)return resultFor(state);}
-        input=await prepareAddonOperation(operationId,signal);
+        try{input=await prepareAddonOperation(operationId,signal);}
+        catch(error){
+          // Only a definitely unaccepted input can return a pre-input budget
+          // boundary. Accepted/uncertain work retains its original failure/owner.
+          if(error instanceof BudgetRequestError&&error.code==='budget_denied'){
+            assertLive();
+            if(!acceptedBackgroundInput(sourceId)&&!root.query('SELECT 1 FROM service_effect_s01_sources WHERE source_id=?').get(sourceId))
+              return{status:'error',result:null,error:'Native background budget admission blocked',failureCategory:'provider_budget'};
+          }
+          throw error;
+        }
         const payload=backgroundPayloads.get(sourceId)!;let failedExecution=false,ready=false,timedOut=false,cancelling:Promise<boolean>|undefined,primaryFailure:unknown;
         const lease={check(){assertLive();if(failedExecution)throw Error('Background execution is uncertain');signal.throwIfAborted();}};
         if(backgroundExecutions.has(sourceId))throw Error('Background execution lease already owned');backgroundExecutions.set(sourceId,lease);

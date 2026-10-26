@@ -1,3 +1,4 @@
+import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import type { HostCodexModelServices } from "./host-codex-model-services.js";
 import { createLogger } from "../../src/utils/logger.js";
 import { taskModelRequestScope } from "./task-model-boundary-shim.js";
@@ -97,6 +98,12 @@ function requestOptions(options: SimpleStreamOptions = {}, deferred = false): Si
 function catalogCost(cost: AnyModel["cost"]): AnyModel["cost"] {
   const rates = (c: AnyModel["cost"]) => ({ input: c.input, output: c.output, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
   return { ...rates(cost), tiers: cost.tiers?.map((tier) => ({ ...rates(tier), inputTokensAbove: tier.inputTokensAbove })) };
+}
+function requestCeilingFrame(model:Model<Api>):string{
+  const cost=model.cost;
+  if(!cost||cost.tiers!==undefined&&!Array.isArray(cost.tiers))return 'unqualified';
+  const rates=(entry:typeof cost)=>[entry.input,entry.output,entry.cacheRead,entry.cacheWrite];
+  return JSON.stringify([model.contextWindow,model.maxTokens,rates(cost),(cost.tiers??[]).map(tier=>[tier.inputTokensAbove,...rates(tier)])]);
 }
 function usage(value?: Usage): Usage | undefined {
   return value && { input: value.input, output: value.output, cacheRead: value.cacheRead,
@@ -222,6 +229,7 @@ export function createHostModels(
     let terminalUsage: Usage | undefined;
     let phase: ModelFailurePhase = "validation";
     let providerFailure: ModelFailure | undefined;
+    let dispatchBudgetFailure: ModelFailure | undefined;
     let providerError: unknown;
     let scope: ReturnType<typeof taskModelRequestScope>;
     let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
@@ -282,18 +290,26 @@ export function createHostModels(
           if (!current || (current.type ?? "chat") !== "chat" || current.provider !== ref.provider ||
             current.id !== ref.id || current.api !== listed.api ||
             (hasImages && !current.input.includes("image"))) throw new Error("Model owner changed");
+          if(requestCeilingFrame(current)!==requestCeilingFrame(listed as Model<Api>))throw new BudgetRequestError('budget_denied');
           return current;
         };
         const physical = assertPhysicalCompatible();
         phase = "conversion";
         codex = await policy.codex?.bind(physical, signal, options?.signal);
         const hostOptions = { ...safeOptions, ...codex?.options, signal, transformHeaders: async (headers: Record<string, string | null>) => {
-          signal.throwIfAborted();
-          assertSource();
-          policy.assertCurrent(ref, "chat", signal);
-          assertPhysicalCompatible();
-          await request?.dispatch();
-          return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
+          try{
+            signal.throwIfAborted();
+            assertSource();
+            policy.assertCurrent(ref, "chat", signal);
+            assertPhysicalCompatible();
+            await request?.dispatch();
+            return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
+          }catch(error){
+            // Host admission may be serialised into an ordinary provider error
+            // by the root transport. Retain only its exact budget classification.
+            const failure=classifyModelFailure('admission',error);if(failure.category==='budget')dispatchBudgetFailure=failure;
+            throw error;
+          }
         } };
         phase = "provider";
         const stream = simple
@@ -307,7 +323,7 @@ export function createHostModels(
         }
         const result = await stream.result();
         captureTerminalUsage(result);
-        if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; providerFailure = classifyModelFailure("provider", result); }
+        if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; providerFailure = dispatchBudgetFailure??classifyModelFailure("provider", result); }
         phase = "accounting";
         await request?.settle(result);
         phase = "conversion";

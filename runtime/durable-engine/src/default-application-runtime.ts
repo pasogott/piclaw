@@ -18,7 +18,7 @@ import { createHostCodexArtifactStore, createHostCodexAnswerMaterializer } from 
 import type { CodexOperation, NativeCodexFactories } from "./host-codex-model-profile.js";
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync,openSync,closeSync,fsyncSync,fstatSync,lstatSync,realpathSync } from "node:fs";
 import { readNativeBackgroundContexts,readNativeBackgroundPayloads,publishNativeBackgroundContext,backgroundPolicyProvenance,assertStoredBackgroundExecution,type NativeBackgroundContext } from './host-background-context.js';
-import { addonBackgroundOrigin,prepareAddonBackgroundPayload,assertAddonBackgroundCurrent } from './host-addon-background.js';
+import { addonBackgroundOrigin,prepareAddonBackgroundPayload,assertAddonBackgroundCurrent,assertAddonBackgroundToolBudget } from './host-addon-background.js';
 import { nativeBackgroundIdentity,nativeBackgroundSourceId,assertNativeBackgroundModel,type NativeBackgroundPayload } from '../../src/agent-pool/background-operation-contract.js';
 import { join, extname } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -43,6 +43,7 @@ import { applicationOwnership, createApplicationBootstrapBundle } from "./applic
 import { createHostModels } from "./host-models.js";
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
 import { getBudgetWork } from '../../src/db/budget-limits.js';
+import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork,operationBudgetWorkId } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
@@ -413,7 +414,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const authority = createHostOperationAuthority(root, captured, () => {
       assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
     }, true);
-    return () => { authority.assertCurrent(); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
+    const background=bundle.backgroundPolicyFor(captured.inputs[0]!);
+    return () => { authority.assertCurrent();if(background)assertAddonBackgroundToolBudget(root,background); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
   };
   let assertDelegateModel: (model: { provider: string; modelId: string }) => void = () => { throw Error("Delegate unavailable"); };
   const infrastructureTools = infrastructure.map(qualified => {
@@ -426,6 +428,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
   const maintenanceRequests = new WeakMap<AbortSignal, { chatJid: string; workId: string; assertCurrent(): void }>();
   const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
+  const backgroundRequests=new WeakMap<AbortSignal,{accounted:boolean;assertCurrent():void}>();
   const codexNative = {} as HostCodexToolGroupAddon & NativeCodexFactories & Record<string, any>;
   for (const exports of Object.values(codex?.nativeExports ?? {})) for (const [name, value] of Object.entries(exports)) {
     if (name in codexNative && codexNative[name] !== value) throw Error("Ambiguous qualified Codex export: " + name);
@@ -721,9 +724,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const defaultThinking = (model: any) => getSupportedThinkingLevels(model).includes("medium") ? "medium" as const : getSupportedThinkingLevels(model)[0]!;
   // Allocate/recover the shared namespace before any accepted task or API read.
   codeReview?.addon.reviewService();
-  const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
+  const check = (model: { provider: string; id: string }, signal: AbortSignal,backgroundBudget=false) => {
     assertAdmission(); assert(); signal.throwIfAborted();
-    if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native model budget admission unavailable");
+    if (!backgroundBudget&&root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native model budget admission unavailable");
     if (!available.some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model not approved");
     if (!host.modelRegistry.getAvailable().some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model no longer available");
     const physical = host.modelRuntime.getPhysicalModel(model.provider, model.id);
@@ -785,6 +788,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
   };
   const sideObservers = new Map<string, NonNullable<import("../../src/agent-pool/contracts.js").SidePromptOptions["onEvent"]>>();
+  const checkRequest=(model:{provider:string;id:string},signal:AbortSignal)=>{
+    const prepared=backgroundRequests.get(signal);prepared?.assertCurrent();
+    if(prepared&&!prepared.accounted&&root.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw new BudgetRequestError('budget_denied');
+    check(model,signal,prepared?.accounted===true);
+  };
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal, codex: codexServices,
     async captureSourceGuard(signal) {
       const scope = taskModelRequestScope(signal);
@@ -848,13 +856,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const scheduled = root.query("SELECT task_id FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId) as { task_id: string } | null;
       const background=bundle.backgroundPolicyFor(captured.inputs[0]!);
       if(background)assertNativeBackgroundModel(background,model);
-      return reserveHostRequest({ database: root, operationId: captured.operation.operationId,
+      const reservation=await reserveHostRequest({ database: root, operationId: captured.operation.operationId,
         chatJid: captured.operation.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
         maxTokens: options?.maxTokens, executionKind: captured.delegateModel ? "delegate" : scheduled ? "scheduled" : background ? 'background' : "interactive",
         backgroundPolicy:background,scheduledTaskId: scheduled?.task_id, signal,
         assertCurrent() { assert(); scope.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); } });
+      if(background)backgroundRequests.set(signal,{accounted:reservation!==undefined,assertCurrent:()=>runtime().assertCapturedSourceCurrent(captured.inputs)});
+      return reservation;
     },
-    async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
+    async authorize(model, _kind, signal) { checkRequest(model, signal); }, assertCurrent(model, _kind, signal) { checkRequest(model, signal); } });
   regretsDecision = (captured, authority) => createHostRegretsAccountedDecision({
     database: root, operationId: captured.operation.operationId, chatJid: captured.operation.chatJid,
     authPath: join(getPiclawAgentDir(), "auth.json"), executionKind: "side_prompt", signal: lifetime.signal,
@@ -980,7 +990,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const backgroundExtension=defineExtension({name:'app.host-background-policy',hooks:[{task:'pi.tool',handlers:{beforeTool:async(call:Parameters<ToolHooks['beforeTool']>[0],api:Parameters<ToolHooks['beforeTool']>[1])=>{
     const captured=await runtime().capturePendingToolSource(api.conversationId,api.taskId,call.id);
     const policy=bundle.backgroundPolicyFor(captured.inputs[0]!);if(!policy)return; // Proven ordinary/Delegate input; private/unknown references still throw.
+    assertAddonBackgroundToolBudget(root,policy);
     await runtime().qualifyBackgroundRequest(captured.inputs,policy,{taskId:api.taskId,callId:call.id,toolName:call.name});
+    assertAddonBackgroundToolBudget(root,policy);
   }}}]});
   registry.install(backgroundExtension);
   // Goal and Plan retain immutable context before request-only system hooks.
@@ -1170,12 +1182,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         background:{contexts:backgroundContexts,payloads:backgroundPayloads,
           sourceIdForAddon:id=>nativeBackgroundSourceId(addonBackgroundOrigin(root,id)),
           prepareAddon(id,existing){
-            const choice=existing?{provider:existing.policy.model.provider,id:existing.policy.model.modelId}:ref;check(choice,lifetime.signal);
+            const choice=existing?{provider:existing.policy.model.provider,id:existing.policy.model.modelId}:ref;check(choice,lifetime.signal,true);
             const physical=host.modelRuntime.getPhysicalModel(choice.provider,choice.id)!;
             const payload=prepareAddonBackgroundPayload(root,id,{provider:physical.provider,modelId:physical.id,api:physical.api},existing,name=>defaultToolNames.includes(name as typeof defaultToolNames[number])&&tools.some(tool=>tool.name===name));
-            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);return payload;
+            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);return payload;
           },
-          assertCurrent(payload){check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
+          assertCurrent(payload){check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);assertAddonBackgroundCurrent(root,payload);
             const model=host.modelRuntime.getPhysicalModel(payload.policy.model.provider,payload.policy.model.modelId)!;assertNativeBackgroundModel(payload.policy,model);},
           assertExecution(payload){
             const identity=nativeBackgroundIdentity(payload.policy),binding=readNativeBackgroundContexts(root,mapping.domain).find(entry=>entry.contextKey===identity.contextKey);
@@ -1194,7 +1206,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
             const directory=openSync(payloadDir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}
           },
           publish: (tx,payload)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!,backgroundExtension],()=>{
-            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
+            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);assertAddonBackgroundCurrent(root,payload);
           }),
         },
         assertAdmission: input => processControls!.assertAdmission(input),

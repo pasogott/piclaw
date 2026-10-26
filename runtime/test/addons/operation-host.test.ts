@@ -6,7 +6,7 @@ import {
   readOperationsConfig,
   type OperationsConfig,
 } from "../../src/core/config-operations.js";
-import { createOperationHost } from "../../src/addons/operation-host.js";
+import { createOperationHost,authorizeAddonOperation } from "../../src/addons/operation-host.js";
 import { AddonOperationService } from "../../src/addons/operation-service.js";
 import {
   installAddonRuntimeApi,
@@ -170,6 +170,15 @@ test('native input identity uses queued events rather than mutable status/input 
     await client.continue(first.operation!.id,'second');await service.waitForIdle();
     expect(epochs).toEqual([1,1,4,4]);expect(readAddonOperation(first.operation!.id)?.sequence).toBe(6);expect(readAddonOperationInputSequence(first.operation!.id)).toBe(4);
   }finally{service.shutdown();await service.waitForIdle();}
+});
+
+test('native request grant: revalidates operator approval and enabled state instead of borrowing read permission',()=>{
+  config.grants[0].approvalRequired=true;
+  expect(authorizeAddonOperation(principal,'echo','request',()=>config)).toEqual({decision:'approval_required'});
+  config.grants[0].approvalRequired=false;
+  expect(authorizeAddonOperation(principal,'echo','request',()=>config)).toMatchObject({decision:'allow',grant:{revision:'r1',allowedTools:['read']}});
+  config.grants[0].enabled=false;
+  expect(authorizeAddonOperation(principal,'echo','request',()=>config)).toEqual({decision:'rejected'});
 });
 
 test('native operation host forwards only the persisted owner ID and signal without legacy fallback',async()=>{

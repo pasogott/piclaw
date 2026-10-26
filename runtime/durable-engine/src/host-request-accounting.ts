@@ -5,6 +5,7 @@ import { modelRequestAccounting } from "../../src/budget/model-request-accountin
 import { boundHostRequestCost } from "../../src/budget/request-cost-bound.js";
 import { ensureBudgetWork, getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
+import { BudgetRequestError,getBudgetRequest } from '../../src/db/budget-request-reservations.js';
 import { nativeBackgroundIdentity,nativeBackgroundPolicyHash,readNativeBackgroundPolicy,type NativeBackgroundPolicy } from '../../src/agent-pool/background-operation-contract.js';
 
 export const operationBudgetWorkId = (operationId: string) => `durable-operation:${operationId}`;
@@ -47,8 +48,8 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
   }).immediate();
 }
 
-/** Stored-identity, uncapped host model requests.
- * Unsupported requests remain on the existing uncapped path; caps still deny.
+/** Stored-identity host model requests. Exact background input policy supports
+ * capped reservations; other native paths retain their existing cap denial.
  * One fresh request ID per actual invocation, including a recovery resend. A
  * dispatched unknown outcome retains its old hold; it is never called free.
  */
@@ -78,12 +79,15 @@ export async function reserveHostRequest(options: {
   assertCurrent();assertBackground(); signal.throwIfAborted();
   const accountRef = readStoredProviderUsageAccountRef(model.provider, options.authPath);
   if(!accountRef){
-    if(background&&database.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw Error('Native background request accounting unavailable');
+    if(background&&database.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw new BudgetRequestError('budget_denied');
     return undefined;
   }
-  const amount = boundHostRequestCost(model, options.maxTokens ?? model.maxTokens);
+  const requested = boundHostRequestCost(model, options.maxTokens ?? model.maxTokens);
+  // A smaller request hint is not proof that every provider enforces it. Fund
+  // the full approved model output ceiling for this capped background port.
+  const amount = background&&requested.amountMicros!==null?boundHostRequestCost(model,model.maxTokens):requested;
   if(amount.amountMicros===null){
-    if(background&&database.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw Error('Native background request accounting unavailable');
+    if(background&&database.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw new BudgetRequestError('budget_denied');
     return undefined;
   }
   const id = randomUUID();
@@ -106,7 +110,14 @@ export async function reserveHostRequest(options: {
   let settlementHash: string | undefined;
   // A rejected reservation may have committed before an ACK/storage failure.
   // Keep work active; never retire authority needed to reconcile that hold.
-  await accounting.reserve(binding, signal);
+  try{await accounting.reserve(binding, signal);}
+  catch(error){
+    if(background&&error instanceof BudgetRequestError&&error.code==='budget_denied'){
+      try{if(!getBudgetRequest(binding.id,database))setBudgetWorkStatus(workId,'stopped',{boundary:'request_budget_blocked'},database);}
+      catch(cleanup){throw new AggregateError([error,cleanup],'Background budget rejection cleanup is uncertain',{cause:error});}
+    }
+    throw error;
+  }
   return {
     id: binding.id,
     async dispatch() {
