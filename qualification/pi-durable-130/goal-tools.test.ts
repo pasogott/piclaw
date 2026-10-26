@@ -536,7 +536,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       for (const snapshot of snapshots) {
         expect(JSON.stringify(snapshot)).toContain("Continue working toward the active thread goal");
         expect(JSON.stringify(snapshot.model)).not.toContain("Active Goal");
-        expect((snapshot.data as any).systemPrompt).toContain("Active Goal");
+        expect((snapshot.data as any).systemPrompt).toBeUndefined();
       }
       const { projectPublicHistory } = await import("../../runtime/durable-engine/src/session-tree.js");
       expect(JSON.stringify(projectPublicHistory(entries.items, null))).not.toContain("Active Goal");
