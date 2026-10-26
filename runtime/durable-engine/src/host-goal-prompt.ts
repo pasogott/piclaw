@@ -4,6 +4,7 @@ import { createHostOperationAuthority } from "./host-operation-authority.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
+import { withGoalSystemInstructions } from "./host-plan-context.js";
 
 type GoalState = { status: string; goal_id: string; lifecycle_generation: number; deadline_checkpoint?: unknown; budget_limit_reported: boolean };
 export function createHostGoalPrompt(addon: {
@@ -115,16 +116,13 @@ export function createHostGoalPrompt(addon: {
     const messages = await runtime.prepareGoalContext(api.conversationId, api.taskId, captured.inputs,
       request.messages, continuations.length ? continuations : [{ type: "text", text: "Goal state is supplied by the system instructions for this request." }], {
         goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status as "active" | "budget_limited",
-        // Persist proof of the exact ephemeral system overlay. Plan/Goal
-        // context re-entry can recognise it without trusting arbitrary text.
-        systemPrompt: prompt,
         ...(continuations.length ? { inputKey: JSON.stringify([captured.operation.operationId,
           captured.inputs.map(input => input.sourceSeq)]) } : {}),
       }, assertContributionCurrent, context);
     assertContributionCurrent();
     // Match the add-on system-prompt contract. Goal rules must not be demoted
     // to user instructions; the objective is explicitly labelled user data.
-    return { messages: [...messages, { role: "system" as const, content: prompt, timestamp: 0 }] };
+    return { messages: withGoalSystemInstructions(messages, prompt, captured.operation.chatJid, api.taskId) };
     } catch (error) {
       options.failClosed(error);
       throw Error("Goal request authority unavailable");
