@@ -51,7 +51,7 @@ export function classifyModelFailure(phase: ModelFailurePhase, error: unknown): 
 
 export function modelFailureDetail(failure: ModelFailure): string {
   const evidence = failure.evidenceId;
-  if (evidence !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(evidence)) throw Error("Invalid model failure evidence ID");
+  if (evidence !== undefined && (typeof evidence !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(evidence))) throw Error("Invalid model failure evidence ID");
   // The SDK scans the entire diagnostic for bare codes such as 503. Byte/code
   // separators keep metadata from authorising retries. The parser restores the
   // ordinary HTTP status and UUID for public notices; old receipts still parse.

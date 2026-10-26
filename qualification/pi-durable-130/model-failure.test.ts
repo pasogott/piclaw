@@ -164,3 +164,15 @@ test("unqualified HTTP failures are not promoted to SDK transient failures",()=>
   expect(isRetryableAssistantError({stopReason:"error",errorMessage:modelFailureDetail(failure)} as any)).toBe(false);
   expect(classifyModelFailure("provider",{status:"503",message:"upstream"}).category).toBe("unavailable");
 });
+
+test("receipt IDs reject stateful coercion without invoking object code", () => {
+  let reads = 0;
+  const hostile = { toString: () => "00000503-0000-0000-0000-000000000000", replace: () => {
+    if (++reads > 1) throw Error("second-use failure");
+    return "00000503000000000000000000000000";
+  } };
+  for (const evidenceId of [hostile, new String("00000503-0000-0000-0000-000000000000"), null, 503]) {
+    expect(() => modelFailureDetail({ phase: "provider", category: "unknown", evidenceId } as any)).toThrow("Invalid model failure evidence ID");
+  }
+  expect(reads).toBe(0);
+});
