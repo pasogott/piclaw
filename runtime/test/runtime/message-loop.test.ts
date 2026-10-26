@@ -49,6 +49,7 @@ test("processMessages leaves lastAgentTimestamp unchanged when runAgent throws",
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => {
           throw new Error("agent crashed");
         },
@@ -85,6 +86,7 @@ test("processMessages persists lastAgentTimestamp after a recovered successful a
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => ({
           status: "success",
           result: "done",
@@ -129,6 +131,7 @@ test("processMessages treats leading path-like slash text after trigger as a nor
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         applySlashCommand: async () => {
           throw new Error("path-like slash text must not execute as slash command");
         },
@@ -170,6 +173,7 @@ test("processMessages persists lastAgentTimestamp after a successful agent run",
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => ({
           status: "success",
           result: "done",

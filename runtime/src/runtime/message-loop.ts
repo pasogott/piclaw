@@ -55,6 +55,10 @@ export async function processMessages(chatJid: string, deps: MessageProcessingDe
   const since = deps.state.lastAgentTimestamp[chatJid] || "";
   const messages = getMessagesSince(chatJid, since, deps.assistantName);
   if (messages.length === 0) return true;
+  // Polling has no accepted native source/grant port. Refuse before commands,
+  // dedup markers, timestamp commits or legacy execution; leave pending input
+  // intact for an explicitly supported admitted transport integration.
+  if (deps.agentPool.isDurableRuntime()) throw new Error("Native non-web message processing requires host input admission");
 
   const commandQueue: Array<{ message: (typeof messages)[number]; command: AgentControlCommand }> = [];
   const promptMessages: typeof messages = [];
