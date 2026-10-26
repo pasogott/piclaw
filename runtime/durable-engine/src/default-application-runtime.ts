@@ -738,10 +738,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const manifest = root.query(`SELECT id FROM documents WHERE kind='"app.application-conversations"' AND owner_id=1 AND retired_at IS NULL`).get() as { id: number };
     const mapping = storedDocument(root, manifest.id) as ApplicationMapping;
     const active = new Set([1, ...mapping.bindings.map(binding => binding.conversationId)]);
+    // The read-only startup preflight already proved the private manifest,
+    // immutable payloads and S01 provenance. Keep revoked private choices for
+    // passive recovery; their live grant/model fence still denies execution.
+    const privateIds = new Set(readNativeBackgroundContexts(root, mapping.domain).map(binding => binding.conversationId));
+    if ([...privateIds].some(id => active.has(id))) throw Error('Private background context overlaps a public route');
     const docs = root.query(`SELECT id, owner_id, scope_kind FROM documents WHERE kind='"pi.agent"' AND retired_at IS NULL`).all() as { id: number; owner_id: number; scope_kind: string }[];
     for (const doc of docs) {
       const stored = storedDocument(root, doc.id) as { model?: { provider: string; modelId: string }; tools?: unknown; extensions?: unknown; instructions?: string };
-      if (stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
+      const privateBackground = doc.scope_kind === 'conversation' && privateIds.has(doc.owner_id as ConversationId);
+      if (!privateBackground && stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
         throw Error("Persisted host model not approved");
       if (doc.scope_kind !== "conversation" || !active.has(doc.owner_id)) continue;
       if (!mcp.deferredMaintenance && Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))

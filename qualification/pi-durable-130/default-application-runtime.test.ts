@@ -156,7 +156,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -815,7 +815,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     }
     return;
   }
-  if(scenario==='native-addon-admission'||scenario==='native-addon-admission-rollback'||scenario==='native-addon-admission-overlap'||scenario==='native-addon-admission-rejected'||scenario==='native-addon-admission-alias'){
+  if(scenario==='native-addon-admission'||scenario==='native-addon-admission-rollback'||scenario==='native-addon-admission-overlap'||scenario==='native-addon-admission-rejected'||scenario==='native-addon-admission-alias'||scenario==='native-addon-admission-model-revoked'||scenario==='native-addon-admission-public-model-revoked'){
     const operations=await import('../../runtime/src/db/addon-operations.js');
     const configuration=getConfigPath(),saved=existsSync(configuration)?readFileSync(configuration,'utf8'):undefined;
     const configured=saved?JSON.parse(saved):{};configured.domains??={};
@@ -858,6 +858,53 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         return;
       }
       const admitted=await pool.prepareAddonOperation(id);
+      if(scenario==='native-addon-admission-model-revoked'||scenario==='native-addon-admission-public-model-revoked'){
+        backend.stop();await backend.close();
+        const file=(root.query('PRAGMA database_list').all() as {name:string;file:string}[]).find(row=>row.name==='main')!.file;
+        const storage=new BunSqliteDatabase(file,{root,assertOwner:()=>owner.assertCurrentOwner(),fenceTransactions:true});
+        const maintenance=await Harness.open(await SqliteStorage.open(storage),{
+          models:createHostModels(runtime,[model,modelB].map(entry=>({provider:entry.provider,id:entry.id})),{
+            signal:new AbortController().signal,async authorize(){throw Error('Offline fixture cannot dispatch');},assertCurrent(){throw Error('Offline fixture cannot dispatch');},
+          }),registry:createRegistry(),
+        },context);
+        try{
+          const publicIds=(root.query('SELECT id FROM conversations WHERE id<>?').all(admitted.conversationId) as {id:number}[]).map(row=>row.id as ConversationId);
+          // Use public SDK configuration for the ordinary/root contexts only.
+          // Revocation must not rewrite or renew the private input's choice.
+          await maintenance.commit(async tx=>{for(const id of publicIds){
+            if(scenario==='native-addon-admission-public-model-revoked'&&id!==1)continue;
+            await configure(tx,id,{model:{provider:modelB.provider,modelId:modelB.id}});
+          }},context);
+        }finally{await maintenance.close(context);await storage.close();}
+        settings.setDefaultModelAndProvider(modelB.provider,modelB.id);await settings.flush();expect(settings.drainErrors()).toEqual([]);
+        const privateRows=()=>[
+          root.query('SELECT * FROM conversations WHERE id=?').all(admitted.conversationId),
+          root.query('SELECT * FROM documents WHERE owner_id=? AND scope_kind=\'conversation\' ORDER BY id').all(admitted.conversationId),
+          root.query('SELECT r.* FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.owner_id=? AND d.scope_kind=\'conversation\' ORDER BY r.document_id,r.seq').all(admitted.conversationId),
+          root.query('SELECT * FROM service_effect_s01_operations WHERE operation_id=?').all(admitted.operationId),
+          root.query('SELECT * FROM piclaw_durable_bindings_v1 WHERE operation_id=?').all(admitted.operationId),
+        ];
+        const privateBefore=privateRows(),catalog=spyOn(modelRegistry,'getAvailable').mockReturnValue([modelB] as any);
+        try{
+          if(scenario==='native-addon-admission-public-model-revoked'){
+            const before=root.serialize();
+            await expect(createDefaultApplicationRuntime(owner,async()=>services)).rejects.toThrow('Persisted host model not approved');
+            expect(root.serialize()).toEqual(before);expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+            expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);owner.assertCurrentOwner();return;
+          }
+          reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const reopenedBound=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+          await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('Host model not approved');
+          expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+          const message={id:'ordinary-after-private-model-revocation',chat_jid:'web:default',sender:'user',sender_name:'User',content:'Use the still-approved ordinary model',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+          const rowId=root.transaction(()=>{const rowId=storeMessage(message);reopenedBound.getInputSourceAdmission!('web:default')!({message,rowId,database:root});return rowId;}).immediate();
+          expect(await reopenedBound.dispatchAcceptedInput!('web:default',message.id,rowId)!()).toBe('settled');
+          expect(calls).toBe(1);expect(requested).toEqual([modelB.id]);expect(privateRows()).toEqual(privateBefore);
+          expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+        }finally{catalog.mockRestore();}
+        return;
+      }
       if(scenario==='native-addon-admission-alias'){
         const file=join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),held=file+'.owned';
         const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
