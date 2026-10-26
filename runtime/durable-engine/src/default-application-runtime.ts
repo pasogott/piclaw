@@ -32,6 +32,7 @@ import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
 import { clearInflightMarker, getDb, getMessageByRowId, storeChatMetadata } from "../../src/db.js";
 import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 import { DATA_DIR, SESSIONS_DIR, WORKSPACE_DIR } from "../../src/core/config.js";
+import { retainModelFailureEvidence } from "./host-model-failure-evidence.js";
 import { getPiclawAgentDir } from "../../src/core/agent-dir.js";
 import { installTerminalSettlementCompositionSchema } from "../../src/service-effects/current-piclaw/terminal-settlement-schema.js";
 import { BunSqliteDatabase } from "./bun-sqlite.js";
@@ -773,6 +774,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       maintenanceRequests.set(scope.signal, maintenance);
       maintenance.assertCurrent();
       return maintenance.assertCurrent;
+    },
+    retainFailure(evidence) {
+      assert();
+      const id = retainModelFailureEvidence(join(DATA_DIR, "diagnostics", "model-failures"), evidence);
+      assert();
+      return id;
     },
     onEvent(event, signal) {
       const captured = signal && requestSources.get(signal);
