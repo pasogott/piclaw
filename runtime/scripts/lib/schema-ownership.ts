@@ -102,8 +102,8 @@ function readSchemaObjects(database: Database): SchemaObject[] {
       if (!index || !["pk", "u"].includes(index.origin)) throw Error(`Unrecognised SQL-less schema object: ${row.name}`);
       object.derived = true;
       const columns = (database.query(`PRAGMA main.index_xinfo(${quote(row.name)})`).all() as { seqno: number; cid: number; name: string | null; desc: number; coll: string | null; key: number }[])
-        .filter(column => column.key === 1).map(column => ({ name: column.name === null ? null : identity(column.name), desc: column.desc, coll: column.coll?.toLowerCase() }));
-      object.fingerprint = digest({ origin: index.origin, unique: index.unique, partial: index.partial, columns });
+        .filter(column => Number(column.key) === 1).map(column => ({ name: column.name === null ? null : identity(column.name), desc: Number(column.desc), coll: column.coll?.toLowerCase() }));
+      object.fingerprint = digest({ origin: index.origin, unique: Number(index.unique), partial: Number(index.partial), columns });
     } else throw Error(`Unrecognised SQL-less schema object: ${row.name}`);
     return object;
   });

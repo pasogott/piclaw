@@ -8,7 +8,8 @@
     "approved-variant:table:chat_branches:ca1502052e5b89e1bea6419cf9448b2b81bf0c76dbfc585548d58bb2d11f5bc7": "Current migrateChatBranchAgentNameUniqueness rebuild quotes the table header; isolated historical chats/branches + legacy token_usage fixture; all other clauses/constraints unchanged. See runtime/src/db/connection.ts and qualification/pi-durable-130/schema-ownership-fixture.ts.",
     "host.scheduled-history/occurrence-payload-v1": "{\"base\":\"047d08b1b8f78d5e3bd25b559da6c1917e1dd939\",\"owner\":\"host.scheduled-history\",\"id\":\"occurrence-payload-v1\",\"migration_order\":1,\"checksum\":\"7d717432ca22388076f53de373fb1ee710b92ad8368107bc7186a850cdae03f4\"}",
     "host.scheduled-definitions/versioned-payload-v1": "{\"base\":\"852e677276dc85e6504190e52286548ad1dcb54b\",\"owner\":\"host.scheduled-definitions\",\"id\":\"versioned-payload-v1\",\"migration_order\":1,\"checksum\":\"0e14073a0e90dcd92be152464e52faf4604777f2e6f6b1d75e88d3f894cfeb31\"}",
-    "host.usage-reports/event-payload-v1": "{\"base\":\"96172d04b369980f7066de99d118df790b303a06\",\"owner\":\"host.usage-reports\",\"id\":\"event-payload-v1\",\"migration_order\":1,\"checksum\":\"0da9f38aeba12085f66855a829c0277b225137d08de7acdf04d17391109484ed\"}"
+    "host.usage-reports/event-payload-v1": "{\"base\":\"96172d04b369980f7066de99d118df790b303a06\",\"owner\":\"host.usage-reports\",\"id\":\"event-payload-v1\",\"migration_order\":1,\"checksum\":\"0da9f38aeba12085f66855a829c0277b225137d08de7acdf04d17391109484ed\"}",
+    "host.historical-accounts/offline-empty-v1": "{\"base\":\"bae0a32550a17711957b75ae8d45bbc6b008e4c9\",\"historicalSource\":\"cdc214fcc06349dc9d315c2d17c866764e4557d5\",\"owner\":\"host.historical-accounts\",\"id\":\"offline-empty-v1\",\"migration_order\":1,\"checksum\":\"746a4c82365ce5a36baf333a86d4331c9272e9c812920652ab0c7743ba2bc09e\"}"
   },
   "owners": {
     "core:access_state": {
@@ -1196,6 +1197,20 @@
         "runtime/src/db/scheduled-task-authority.ts",
         "runtime/src/db/scheduled-task-head.ts",
         "runtime/durable-engine/src/application-bootstrap.ts"
+      ]
+    },
+    "archive:input-authority": {
+      "category": "migration-archive",
+      "initializer": "Historical initializeMessageAuthoritySchema only; current startup does not recreate these objects",
+      "writers": [
+        "runtime/src/db/migration-input-holds.ts"
+      ],
+      "sourceOfTruth": "Original input snapshots, execution admission, dismissal and recovery receipts",
+      "replayRetention": "Retain all rows and guards. This retirement neither deletes nor replays imported input/authority history.",
+      "references": [
+        "cdc214fcc06349dc9d315c2d17c866764e4557d5:runtime/src/db/message-authority-schema.ts",
+        "runtime/src/db/migration-input-holds.ts",
+        "docs/development/historical-account-schema-retirement.md"
       ]
     }
   },
@@ -4544,6 +4559,89 @@
       "derivedIndexes": [
         "43cd1503996b3dd4d6f2222629f4b72c31547f904be6ee6291313d3ba69b3f23"
       ]
+    },
+    "index:idx_message_recovery_latest": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "4d0817a29d9139ac08a889f1d7176437dc8e48107e0abfa51f7e6100fe2c237b"
+      ],
+      "requiredIn": [],
+      "table": "message_recovery_authorities"
+    },
+    "table:message_execution_authorities": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "f08f99ab35068590af33411c0fec60e3a6c240b8d4e5a1156a2b420158a49f91"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "b90ec234dbe7afe7df0063fce46c1f5d4520b7177c53eafe5bab3aa38857561c"
+      ]
+    },
+    "table:message_recovery_authorities": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "e4eb179afdae80b5ab2350610df504c4b2c94cdf569b275056d47627dc32d90b"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "b90ec234dbe7afe7df0063fce46c1f5d4520b7177c53eafe5bab3aa38857561c"
+      ]
+    },
+    "table:migration_input_dismissals": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "7c75264d62d54afd702a8ec5bf99f64840fa038ca62a6e80bda4fce526366ba7"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "f5dff51d8508f68b1990cc31764297ce50e8dd41c89ee9e6df20b9effc1d817e",
+        "b90ec234dbe7afe7df0063fce46c1f5d4520b7177c53eafe5bab3aa38857561c"
+      ]
+    },
+    "table:migration_input_holds": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "1fd20df8ed32ad1a4cbbd28bd3a289b3ec5f54ef2ec28f7d9a187dbb95d416d6"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": []
+    },
+    "trigger:message_execution_authority_immutable": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "4b0e62262ea023c6145d2321b66368db386fcc4be58cb98067d0032d0d4fe0ab"
+      ],
+      "requiredIn": [],
+      "table": "message_execution_authorities"
+    },
+    "trigger:message_recovery_authority_immutable": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "a726fd6a01c2e202bd7a75c5ebb62e91e068c96749231d831c3525334a999ee2"
+      ],
+      "requiredIn": [],
+      "table": "message_recovery_authorities"
+    },
+    "trigger:migration_input_dismissal_immutable": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "816b383993641d7462a6c6e0c3bd42e288eba06196c1255b34c5fe1838880775"
+      ],
+      "requiredIn": [],
+      "table": "migration_input_dismissals"
+    },
+    "trigger:migration_input_hold_immutable": {
+      "owner": "archive:input-authority",
+      "fingerprints": [
+        "6983e8a8c041be0877bc11c74c0fce1fc1c38e1c4fee65c2ea9614d4227e98e4"
+      ],
+      "requiredIn": [],
+      "table": "migration_input_holds"
     }
   },
   "documents": [

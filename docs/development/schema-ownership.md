@@ -18,7 +18,7 @@ Profiles are `core`, `native` and `native-addons`. The command opens SQLite read
 
 Every declared owner records its category, initialiser, writer modules/APIs, source of truth, replay/retention policy and source references. Writer references identify owning modules and public entry points; they are not a complete caller graph. Core owns shared physical KV storage; each add-on/caller retains its payload semantics and lifecycle. The registry grants no new writer authority.
 
-The qualified profiles use core schema source `3c66c54de0bc4826dc51655bb5f009ce6f9905d9`, private `@earendil-works/pi-durable@1.3.0`, and approved native add-on source `e8aac2399148cbef638764ba2b5a1cd916cc5ecc`. These are source baselines, not installed-runtime claims.
+The qualified profiles use core schema source `3c66c54de0bc4826dc51655bb5f009ce6f9905d9`, private `@earendil-works/pi-durable@1.4.0`, and approved native add-on source `e8aac2399148cbef638764ba2b5a1cd916cc5ecc`. These are source baselines, not installed-runtime claims.
 
 | Composition | Difference from fresh core | Authority |
 | --- | --- | --- |
@@ -31,6 +31,8 @@ The qualified profiles use core schema source `3c66c54de0bc4826dc51655bb5f009ce6
 The historical fixture seeds the older chat-branch uniqueness and token-usage schema through the existing upgrade paths. It verifies retained chat labels, branch identity, legacy usage, exact imported JSONL rows and owner/checksum receipts. Fresh native startup does not recreate the session archive.
 
 Optional add-on/archive objects may remain when their producer is absent. Their exact declared shapes still apply. The atomic SDK/native/add-on/archive components declare `requiredWhenOwnerPresent`: any retained owned object requires all declared component tables, including FTS roots and shadows. An index or trigger declared on a retained table remains required whenever that table is present. Dropping an archive FTS root while leaving its entries/receipts therefore fails. This does not qualify a new add-on enable/disable mechanism; add-on lifecycle work remains separately scoped.
+
+The [offline historical account-schema retirement](historical-account-schema-retirement.md) declares its own exact removal cohort and verified archive/candidate approval. The shared registry additionally preserves the four optional input-authority/provenance tables and their guards under `archive:input-authority`; it grants no cleanup or replay authority. The offline migration's SQL checksum is recorded in `sources`. Historical access-preparation markers remain startup vetoes, and SDK `documents.family` remains SDK-owned.
 
 Remote Peer's separate store is outside this main-schema inventory. Its generic table names are not exemptions in the application database. The other approved add-ons may write existing shared storage or use separate resources; absence of additional main tables does not imply inactivity or obsolescence.
 
