@@ -2,6 +2,8 @@ import "./src/test-guard.js";
 import { expect, test } from "bun:test";
 import { classifyModelFailure, modelFailureDetail, modelFailureNotice, parseModelFailure } from "../../runtime/durable-engine/src/host-model-failure.js";
 
+import { isRetryableAssistantError } from "../../runtime/durable-engine/node_modules/@earendil-works/pi-ai/dist/utils/retry.js";
+
 const secret = "SYNTHETIC-PRIVATE-CREDENTIAL";
 for (const [message, category, status] of [
   ["HTTP 504 timeout", "timeout", 504], ["HTTP 401 unauthorized", "authentication", 401],
@@ -74,4 +76,91 @@ test("retained bounded failures preserve SDK transient retry and quota stop deci
     expect(isRetryableAssistantError(message)).toBe(retry);
   }
   expect(classifyModelFailure("provider",Error("HTTP 429 insufficient_quota"))).toEqual({phase:"provider",category:"quota",httpStatus:429});
+});
+
+test("quota wins over transient HTTP status and timeout text", () => {
+  for (const status of [408, 429, 500, 503, 504]) {
+    for (const reason of ["insufficient_quota", "billing limit reached", "subscription_sharing_usage_limit_exceeded"]) {
+      const failure = classifyModelFailure("provider", {status, message: `timeout: ${reason}`});
+      expect(failure.category).toBe("quota");
+      expect(isRetryableAssistantError({stopReason:"error", errorMessage:modelFailureDetail(failure)} as any)).toBe(false);
+    }
+  }
+});
+
+test("archive availability cannot change transient retry decisions", () => {
+  for (const error of ["ECONNRESET", "HTTP 503 service unavailable"]) {
+    const failure = classifyModelFailure("provider", error);
+    const detail = modelFailureDetail(failure);
+    expect(parseModelFailure(detail)).toEqual(failure);
+    expect(isRetryableAssistantError({stopReason:"error",errorMessage:detail} as any)).toBe(true);
+  }
+});
+
+test("private failure receipts redact labelled plaintext and embedded request payloads", async () => {
+  const {mkdtempSync,readFileSync,rmSync} = await import("node:fs");
+  const {join} = await import("node:path");
+  const {tmpdir} = await import("node:os");
+  const {retainModelFailureEvidence} = await import("../../runtime/durable-engine/src/host-model-failure-evidence.js");
+  const dir=mkdtempSync(join(tmpdir(),"failure-private-labels-"));
+  try {
+    for (const message of ["upstream failed; password=hunter2", "upstream failed; signature=opaque-private", 'HTTP 400 {"messages":[{"role":"user","content":"PRIVATE PROMPT"}],"partial":"PRIVATE ANSWER"}']) {
+      const id=retainModelFailureEvidence(dir,{provider:"provider",model:"model",failure:{phase:"provider",category:"unknown"},error:new Error(message)});
+      const text=readFileSync(join(dir,id+".json"),"utf8");
+      for(const secret of ["hunter2","opaque-private","PRIVATE PROMPT","PRIVATE ANSWER"]) expect(text).not.toContain(secret);
+    }
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test("retry decisions ignore incidental HTTP-like digits in diagnostic metadata", () => {
+  for(const category of ["unknown","authentication","aborted","context_limit"] as const) {
+    for(const digits of ["429","500","502","503","504","520","524"]) {
+      const failure={phase:"provider" as const,category,httpStatus:503,evidenceId:`00000${digits}-0000-0000-0000-000000000000`};
+      const detail=modelFailureDetail(failure);
+      expect(parseModelFailure(detail)).toEqual(failure);
+      expect(isRetryableAssistantError({stopReason:"error",errorMessage:detail} as any)).toBe(false);
+    }
+  }
+});
+
+test("bounded classification preserves SDK transient wording and quota codes", () => {
+  for(const error of ["overloaded","connection lost","stream ended without a terminal event","subscription_sharing_usage_unavailable"]) {
+    const failure=classifyModelFailure("provider",error);
+    expect(isRetryableAssistantError({stopReason:"error",errorMessage:modelFailureDetail(failure)} as any)).toBe(true);
+  }
+  expect(classifyModelFailure("provider",{code:"insufficient_quota",status:429,message:"try later"}).category).toBe("quota");
+  expect(classifyModelFailure("provider","HTTP 503 "+"x".repeat(9000)).category).toBe("unknown");
+});
+
+test("context rejection remains visible to SDK overflow recovery", async () => {
+  const {isContextOverflow}=await import("../../runtime/durable-engine/node_modules/@earendil-works/pi-ai/dist/utils/overflow.js");
+  const failure=classifyModelFailure("provider","context_length_exceeded");
+  const message={stopReason:"error",errorMessage:modelFailureDetail(failure)} as any;
+  expect(isContextOverflow(message)).toBe(true);
+  expect(isRetryableAssistantError(message)).toBe(false);
+});
+
+test("readable error fields and bounded cyclic causes survive hostile getters", async () => {
+  const cause:any={code:"ECONNRESET",message:"connection reset"};cause.cause=cause;
+  const error=new Error("upstream wrapper",{cause});
+  Object.defineProperty(error,"status",{get(){throw Error("unreadable status");}});
+  expect(classifyModelFailure("provider",error).category).toBe("transport");
+  const {mkdtempSync,readFileSync,rmSync}=await import("node:fs");
+  const {join}=await import("node:path");const {tmpdir}=await import("node:os");
+  const {retainModelFailureEvidence}=await import("../../runtime/durable-engine/src/host-model-failure-evidence.js");
+  const dir=mkdtempSync(join(tmpdir(),"failure-cause-"));
+  try {
+    const id=retainModelFailureEvidence(dir,{provider:"provider",model:"model",failure:{phase:"provider",category:"transport"},error});
+    const data=JSON.parse(readFileSync(join(dir,id+".json"),"utf8"));
+    expect(data.errors.error.message).toBe("upstream wrapper");
+    expect(data.errors.error.cause.code).toBe("ECONNRESET");
+    expect(data.errors.error.cause.cause.message).toBe("Error cause omitted");
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test("unqualified HTTP failures are not promoted to SDK transient failures",()=>{
+  const failure=classifyModelFailure("provider",{status:501,message:"not implemented"});
+  expect(failure.category).toBe("unknown");
+  expect(isRetryableAssistantError({stopReason:"error",errorMessage:modelFailureDetail(failure)} as any)).toBe(false);
+  expect(classifyModelFailure("provider",{status:"503",message:"upstream"}).category).toBe("unavailable");
 });

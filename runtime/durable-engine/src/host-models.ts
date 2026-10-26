@@ -241,6 +241,7 @@ export function createHostModels(
         model = validatedChatModel(model);
         context = freeze(data(context));
         if (deferred) {
+          phase = "admission";
           if (!hostModelRuntime120.streamDeferred) throw new Error("Host operation unavailable");
           const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
           phase = "provider";
@@ -319,8 +320,9 @@ export function createHostModels(
         const failure = providerFailure ? { ...providerFailure, phase } : classifyModelFailure(phase, cause);
         let evidenceId: string | undefined;
         try {
-          evidenceId = await policy.retainFailure?.({ provider: model.provider, model: model.id, requestId: request?.id,
+          const retained = await policy.retainFailure?.({ provider: model.provider, model: model.id, requestId: request?.id,
             scope: scope ? { conversationId: scope.conversationId, taskId: scope.taskId, kind: scope.taskKind } : undefined, failure, providerFailure, error: cause, providerError: providerError ?? (phase === "provider" ? cause : undefined) });
+          if (retained !== undefined) { modelFailureDetail({ ...failure, evidenceId: retained }); evidenceId = retained; }
         } catch {
           log.warn("Native model failure evidence could not be retained", { operation: "durable_model.evidence_failed", phase, taskId: scope?.taskId, conversationId: scope?.conversationId });
         }
@@ -347,6 +349,21 @@ export function createHostModels(
       }
     })();
     return output;
+  };
+  const operationFailure = async (model: AnyModel, phase: ModelFailure["phase"], cause: unknown, signal?: AbortSignal, providerError?: unknown) => {
+    const failure = classifyModelFailure(phase, providerError ?? cause);
+    let evidenceId: string | undefined;
+    try {
+      const scope = taskModelRequestScope(signal);
+      const retained = await policy.retainFailure?.({ provider: model.provider, model: model.id,
+        scope: scope ? { conversationId: scope.conversationId, taskId: scope.taskId, kind: scope.taskKind } : undefined,
+        failure, error: cause, providerError: providerError ?? (phase === "provider" ? cause : undefined) });
+      if (retained !== undefined) { modelFailureDetail({ ...failure, evidenceId: retained }); evidenceId = retained; }
+    } catch {
+      log.warn("Native model failure evidence could not be retained", { operation: "durable_model.evidence_failed", phase });
+    }
+    log.warn("Native model request failed", { operation: "durable_model.request_failed", provider: model.provider, model: model.id, ...failure, ...(evidenceId ? { evidenceId } : {}) });
+    return modelFailureDetail({ ...failure, ...(evidenceId ? { evidenceId } : {}) });
   };
   const operationModel = (operation: "generateImages" | "classify", model: AnyModel) => {
     const type = operation === "generateImages" ? "image" : "classifier";
@@ -379,10 +396,12 @@ export function createHostModels(
     return physical;
   };
   const images = async (model: ImageModel<ImageApi>, context: ImagesContext, options?: ImagesOptions): Promise<AssistantImages> => {
+    let phase: ModelFailure["phase"] = "admission", providerError: unknown;
     try {
       const hostOptions = await admit("generateImages", model, options);
       const physical = physicalOfType("image", model);
       if (!hostModelRuntime120.generateImages) throw new Error("Host operation is unavailable");
+      phase = "provider";
       const result = await hostModelRuntime120.generateImages(physical, data(context), hostOptions);
       if (result.stopReason !== "stop") throw new Error("Host request failed");
       return data({ api: model.api, provider: model.provider, model: model.id, stopReason: "stop" as const,
@@ -390,16 +409,18 @@ export function createHostModels(
         output: result.output.map((part) => part.type === "image"
           ? { type: "image" as const, data: part.data, mimeType: part.mimeType }
           : { type: "text" as const, text: part.text }) });
-    } catch {
+    } catch (cause) {
       return { api: model.api, provider: model.provider, model: model.id, output: [],
-        stopReason: "error", errorMessage: "Host model request failed", timestamp: Date.now() };
+        stopReason: "error", errorMessage: await operationFailure(model, phase, cause, options?.signal, providerError), timestamp: Date.now() };
     }
   };
   const classify = async (model: ClassifierModel<ClassifierApi>, context: ClassifierContext, options?: ClassifierOptions): Promise<ClassifierResult> => {
+    let phase: ModelFailure["phase"] = "admission", providerError: unknown;
     try {
       const hostOptions = await admit("classify", model, options);
       const physical = physicalOfType("classifier", model);
       if (!hostModelRuntime120.classify) throw new Error("Host operation is unavailable");
+      phase = "provider";
       const result = await hostModelRuntime120.classify(physical, data(context), hostOptions);
       if (result.stopReason !== "stop") throw new Error("Host request failed");
       return data({ api: model.api, provider: model.provider, model: model.id, stopReason: "stop" as const,
@@ -409,9 +430,9 @@ export function createHostModels(
             probabilities: Object.fromEntries(Object.entries(answer.probabilities)), confidence: answer.confidence }
             : answer.type === "score" ? { type: answer.type, score: answer.score, confidence: answer.confidence }
               : { type: answer.type, probability: answer.probability }])) });
-    } catch {
+    } catch (cause) {
       return { api: model.api, provider: model.provider, model: model.id, answers: {},
-        stopReason: "error", errorMessage: "Host model request failed", timestamp: Date.now() };
+        stopReason: "error", errorMessage: await operationFailure(model, phase, cause, options?.signal, providerError), timestamp: Date.now() };
     }
   };
   const fetchDeferred = (model: Model<Api>, handle: DeferredHandle, options?: DeferredFetchOptions) =>
