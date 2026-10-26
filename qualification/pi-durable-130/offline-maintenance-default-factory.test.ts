@@ -15,7 +15,7 @@ import { DATA_DIR } from "../../runtime/src/core/config.js";
 import type { Model, AssistantMessage, CredentialStore } from "../../node_modules/@earendil-works/pi-ai";
 import { applicationAddonSourceProfiles } from "../../runtime/durable-engine/src/host-extension-catalog.js";
 const rootUrl = new URL("../../package.json", import.meta.url).href;
-const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-coding-agent", rootUrl));
+const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-coding-agent", rootUrl)) as typeof import("../../node_modules/@earendil-works/pi-coding-agent");
 const { createAssistantMessageEventStream, getCurrentTools } = await import(import.meta.resolve("@earendil-works/pi-ai", rootUrl));
 
 applicationTest("all 23 installed: explicit offline maintenance preserves enabled services without starting transports", async () => {
@@ -59,9 +59,11 @@ applicationTest("all 23 installed: explicit offline maintenance preserves enable
   };
   const runtime = await ModelRuntime.create({ credentials, modelsPath: null, modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} }, allowModelNetwork: false, refreshOnCreate: false });
   let calls = 0;
-  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => { throw Error("No HTTP allowed in combined factory fixture"); });
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(
+    async () => { throw Error("No HTTP allowed in combined factory fixture"); },
+    { preconnect() { throw Error("No HTTP preconnect allowed in maintenance fixture"); } }));
   const socketSpy = spyOn(Socket.prototype, "connect").mockImplementation(() => { throw Error("No TCP allowed in maintenance fixture"); });
-  const run: Parameters<typeof runtime.registerNativeProvider>[0]["streamSimple"] = () => { calls++; throw Error("No model calls allowed in maintenance"); };
+  const run = () => { calls++; throw Error("No model calls allowed in maintenance"); };
   const provider: Parameters<typeof runtime.registerNativeProvider>[0] = { id: model.provider, name: "Synthetic Codex", getModels: () => [model], auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: { apiKey: "synthetic-only", headers: { "x-fixture": "owned" } }, source: "fixture" }) } }, stream: run, streamSimple: run };
   runtime.registerNativeProvider(provider);
   expect(runtime.getRegisteredNativeProvider(model.provider)).toBe(provider);
@@ -86,7 +88,16 @@ applicationTest("all 23 installed: explicit offline maintenance preserves enable
     expect(runtime.getRegisteredNativeProvider(model.provider)).toBe(provider);
     expect(() => backend!.bind({} as never)).toThrow("Offline maintenance");
     expect(() => backend!.attachChannel!({} as never)).toThrow("Offline maintenance");
-    await expect(backend.sessionOptions.dispatchSidePrompt!("web:default", "forbidden")).rejects.toThrow("Offline maintenance");
+    const root = getDb();
+    const executionRows = () => ["tasks", "submissions", "entries"].map(table => root.query(`SELECT * FROM ${table} ORDER BY id`).all());
+    const before = executionRows();
+    expect(before).toEqual([[], [], []]);
+    await expect(backend.sessionOptions.dispatchSidePrompt!("web:default", "forbidden", {})).rejects.toThrow("Offline maintenance");
+    await expect(backend.sessionOptions.dispatchScheduledAgent!({} as never)).rejects.toThrow("Offline maintenance");
+    await expect(backend.sessionOptions.dispatchHostCommand!("web:default", "/model synthetic/forbidden")).rejects.toThrow("Offline maintenance");
+    await expect(backend.sessionOptions.getDurableSession!("web:default")!.compact!()).rejects.toThrow("Offline maintenance");
+    expect(executionRows()).toEqual(before);
+    expect(calls).toBe(0);
     const treeBefore = await backend.sessionOptions.getDurableSession!("web:default")!.readTree!();
     expect(peerStarts).toBe(0);
     expect(socketSpy).toHaveBeenCalledTimes(0);

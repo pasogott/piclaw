@@ -21,6 +21,7 @@
     "native-process-exit.test.ts",
     "native-admission-boundary.test.ts",
     "default-application-runtime.test.ts",
+    "offline-maintenance-default-factory.test.ts",
     "host-codex-model-services.test.ts",
     "host-codex-turn-routing.test.ts",
     "../../runtime/src/types/gifenc.d.ts",

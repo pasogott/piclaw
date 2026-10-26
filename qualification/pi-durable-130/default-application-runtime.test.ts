@@ -1729,6 +1729,24 @@ for (const scenario of ["native-routing-bash-active", "native-routing-control-ra
     await reopened.prepareInputSourceAdmission!(chat);
     expect(backend.sessionOptions.getDurableSession!(chat)).toBeDefined();
     expect(root.query("SELECT id FROM conversations ORDER BY id").all()).toHaveLength(before.length + 1);
+    // Lookup 1 is assertConversationAvailable; callback fences are lookups 2/3.
+    // Keep the early refusal and also revoke AFTER the publisher stages metadata.
+    const allocationRows = () => ["durable_metadata", "record_ids", "conversations", "entries", "tasks", "submissions", "documents", "document_revisions"]
+      .map(table => root.query(`SELECT * FROM ${table}`).all());
+    for (const revokeAt of [2, 3]) {
+      const deniedChat = `web:model-revoked-on-check-${revokeAt}`;
+      storeChatMetadata(deniedChat, new Date().toISOString());
+      const allocationBefore = allocationRows();
+      const availableModels = modelRegistry.getAvailable.bind(modelRegistry);
+      let availabilityChecks = 0;
+      const revoke = spyOn(modelRegistry, "getAvailable").mockImplementation(() => ++availabilityChecks < revokeAt ? availableModels() : []);
+      try {
+        await expect(reopened.prepareInputSourceAdmission!(deniedChat)).rejects.toThrow("Host model no longer available");
+        expect(availabilityChecks).toBe(revokeAt);
+      } finally { revoke.mockRestore(); }
+      expect(allocationRows()).toEqual(allocationBefore);
+      expect(backend.sessionOptions.getDurableSession!(deniedChat)).toBeUndefined();
+    }
     expect(calls).toBe(1);
     backend.stop(); await backend.close(); await reopenedPool.shutdown(); await reopenedBase.queue.shutdown();
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
