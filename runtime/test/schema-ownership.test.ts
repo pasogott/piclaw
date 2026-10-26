@@ -134,3 +134,12 @@ test("FTS virtual and exact shadow tables have owners; similarly named impostors
     expect(() => assertSchemaInventory(readSchemaInventory(db), contract, "fixture")).toThrow("Unowned object table:search_invented");
   } finally { db.close(); }
 });
+
+test("safe-integer metadata produces the same derived-index fingerprints", () => {
+  const plain = new Database(":memory:"), safe = new Database(":memory:", { safeIntegers: true });
+  try {
+    for (const db of [plain, safe]) db.exec(base);
+    expect(readSchemaInventory(safe)).toEqual(readSchemaInventory(plain));
+    expect(assertSchemaInventory(readSchemaInventory(safe), contractFor(plain), "fixture").errors).toEqual([]);
+  } finally { plain.close(); safe.close(); }
+});

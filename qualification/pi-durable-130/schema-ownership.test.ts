@@ -2,6 +2,15 @@ import "./src/test-guard.js";
 import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import { expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
+import { createSession, defineDocFamily } from "../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BACKGROUND_CONTEXT } from "../../runtime/durable-engine/qualification/context.ts";
+import { prepareHistoricalAccountCopy, applyHistoricalAccountCopy } from "../../runtime/scripts/lib/historical-account-copies.js";
+import { snapshotHistoricalDatabase } from "../../runtime/scripts/lib/historical-account-retirement.js";
+import historicalAccounts from "../../runtime/test/fixtures/historical-account-schema.json";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { assertSchemaInventory, readSchemaInventory, type SchemaContract } from "../../runtime/scripts/lib/schema-ownership.js";
@@ -101,4 +110,53 @@ applicationTest("historical core upgrade classifies its one approved spelling di
     expect(persistent(reopened.objects)).toEqual(persistent(result.objects));
     expect(getDb().query("SELECT * FROM piclaw_schema_migrations WHERE owner='piclaw-agent-sessions'").all()).toEqual(before.receipts);
   } finally { closeDatabase(); }
+});
+
+applicationTest("offline historical retirement preserves real SDK document families and approved add-on schemas", async () => {
+  const fixture = await openNativeSchemaFixture(true);
+  await fixture.close();
+  const path = join(process.env.PICLAW_STORE!, "messages.db");
+  const Family = defineDocFamily({ kind: "qualification.retirement-family", version: 1, scope: "session", family: true,
+    initial: (seed: { value: string }) => seed, checkpointWhen: () => false });
+  async function withSdk(databasePath: string, body: (session: ReturnType<typeof createSession>, db: Database) => Promise<void>) {
+    const owner = acquireRuntimeLock({ lockPath: join(process.env.PICLAW_WORKSPACE!, "schema-owner.lock"),
+      strictOwnership: true, maintenance: true, disabled: false });
+    owner.assertCurrentOwner();
+    const db = new Database(databasePath, { strict: true, safeIntegers: true });
+    try {
+      const adapter = new BunSqliteDatabase(databasePath, { root: db,
+        assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true });
+      const session = createSession(await SqliteStorage.open(adapter));
+      try { await body(session, db); }
+      finally { await session.close(BACKGROUND_CONTEXT); }
+    } finally { db.close(); owner.release(); }
+  }
+  await withSdk(path, async (session, db) => {
+    await session.commit(async tx => { await tx.doc(Family, "retained-key", { value: "retain SDK family discriminator" }); }, BACKGROUND_CONTEXT);
+    expect(await session.snapshot(Family, "retained-key", BACKGROUND_CONTEXT)).toEqual({ value: "retain SDK family discriminator" });
+    for (const batch of historicalAccounts) db.exec(batch.sql);
+  });
+  const source = new Database(path, { readonly: true, strict: true, safeIntegers: true });
+  let before: string, docs: unknown[];
+  try {
+    before = snapshotHistoricalDatabase(source, true);
+    docs = source.query("SELECT * FROM documents ORDER BY id").all();
+    expect(source.query("SELECT 1 FROM documents WHERE family=1").get()).not.toBeNull();
+  } finally { source.close(); }
+  const directory = join(process.env.PICLAW_WORKSPACE!, "historical-retirement");
+  const plan = prepareHistoricalAccountCopy(path, directory);
+  expect(plan.blocked).toEqual([]);
+  expect(plan.expectedPhysicalTables).toBe(42);
+  const result = applyHistoricalAccountCopy(directory, plan.sha256);
+  expect(result.expectedPhysicalTables).toBe(42);
+  await withSdk(join(directory, "candidate.db"), async (session, db) => {
+    expect(await session.snapshot(Family, "retained-key", BACKGROUND_CONTEXT)).toEqual({ value: "retain SDK family discriminator" });
+    expect(db.query("SELECT * FROM documents ORDER BY id").all()).toEqual(docs!);
+    expect(snapshotHistoricalDatabase(db, true)).toBe(before!);
+    const classified = assertSchemaInventory(readSchemaInventory(db), contract, "native-addons");
+    expect(classified.errors).toEqual([]);
+    expect(classified.objects.some(o => o.owner === "addon:code-review")).toBe(true);
+    expect(classified.objects.filter(o => o.owner === "archive:input-authority")).toHaveLength(13);
+    expect(db.query("SELECT * FROM documents WHERE family=1").all().length).toBeGreaterThan(0);
+  });
 });
