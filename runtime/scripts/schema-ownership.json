@@ -1122,7 +1122,8 @@
       "references": [
         "addon:code-review/database.ts",
         "addon:code-review/store.ts",
-        "runtime/durable-engine/src/default-application-runtime.ts"
+        "runtime/durable-engine/src/default-application-runtime.ts",
+        "docs/development/code-review-persistence.md"
       ]
     },
     "core:application-documents": {
