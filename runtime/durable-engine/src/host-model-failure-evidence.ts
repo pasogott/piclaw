@@ -13,26 +13,31 @@ export type ModelFailureEvidence = {
 
 /** Keep error fields only: never serialize the provider message, prompt, partial
  * answer, headers, credentials or opaque thinking/signature fields. */
-function errorFields(error: unknown): Record<string, unknown> {
-  try {
-    if (typeof error === "string") return { message: error.slice(0, 8192) };
-    if (!error || typeof error !== "object") return { message: String(error).slice(0, 1024) };
-    const input = error as Record<string, unknown>, output: Record<string, unknown> = {};
-    for (const key of ["name", "code", "status", "statusCode", "stopReason", "errorMessage", "message", "stack"]) {
-      const value = input[key];
-      if (typeof value === "string") output[key] = value.slice(0, key === "stack" ? 4096 : 8192);
-      else if (typeof value === "number" && Number.isFinite(value)) output[key] = value;
-    }
-    return output;
-  } catch { return { message: "Error fields could not be read" }; }
+function errorFields(error: unknown, seen = new Set<object>(), depth = 0): Record<string, unknown> {
+  if (typeof error === "string") return { message: error.slice(0, 8192) };
+  if (!error || typeof error !== "object") return { message: typeof error === "function" ? "Non-error value" : String(error).slice(0, 1024) };
+  if (depth >= 4 || seen.has(error)) return { message: "Error cause omitted" };
+  seen.add(error);
+  const input = error as Record<string, unknown>, output: Record<string, unknown> = {};
+  const read = (key: string): unknown => { try { return input[key]; } catch { return undefined; } };
+  for (const key of ["name", "code", "status", "statusCode", "stopReason", "errorMessage", "message", "stack"]) {
+    const value = read(key);
+    if (typeof value === "string") output[key] = value.slice(0, key === "stack" ? 4096 : 8192);
+    else if (typeof value === "number" && Number.isFinite(value)) output[key] = value;
+  }
+  const cause = read("cause");
+  if (cause !== undefined) output.cause = errorFields(cause, seen, depth + 1);
+  return output;
 }
 
 function redact(value: unknown): unknown {
-  const { data } = previewSessionRecordingRedaction(value, { mode: "redacted", redaction: { mode: "redacted", redaction: { maxRedactedStringLength: 8192 } } });
+  const { data } = previewSessionRecordingRedaction(value, { mode: "redacted", redaction: { maxStringLength: 8192 } });
   function visit(item: unknown): unknown {
     if (typeof item === "string") return item
       .replace(/https?:\/\/[^\s"<>]+/gi, "[URL redacted]")
-      .replace(/((?:signature|api[_-]?key|access[_-]?token|refresh[_-]?token|password)"?\s*[:=]\s*")[^"]*/gi, "$1[REDACTED]");
+      // A labelled payload can be structured or unquoted. Discard its tail;
+      // attempting to regex-parse nested request JSON can leave prompt fragments.
+      .replace(/\b((?:signature|thinking|prompt|messages?|content|input|output|partial(?:[_-]?(?:output|answer))?|headers|request(?:[_-]?body)?|credentials|authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)[\s\S]*/gi, "$1[REDACTED]");
     if (Array.isArray(item)) return item.map(visit);
     if (item && typeof item === "object") return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, visit(child)]));
     return item;
@@ -48,9 +53,11 @@ export function retainModelFailureEvidence(directory: string, input: ModelFailur
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw Error("Model failure evidence directory is not private");
   const id = randomUUID();
   const errors = { error: errorFields(input.error), ...(input.providerError === undefined ? {} : { providerError: errorFields(input.providerError) }) };
-  const body = JSON.stringify({ schema: 1, id, at: new Date().toISOString(), provider: input.provider, model: input.model,
-    requestId: input.requestId ?? null, scope: input.scope ?? null, failure: input.failure,
-    providerFailure: input.providerFailure ?? null, errors: redact(errors),
+  const details = redact({ provider: input.provider.slice(0, 256), model: input.model.slice(0, 512),
+    requestId: input.requestId?.slice(0, 1024) ?? null,
+    scope: input.scope ? { ...input.scope, kind: input.scope.kind.slice(0, 128) } : null,
+    failure: input.failure, providerFailure: input.providerFailure ?? null, errors }) as Record<string, unknown>;
+  const body = JSON.stringify({ schema: 1, id, at: new Date().toISOString(), ...details,
     originalErrorSha256: createHash("sha256").update(JSON.stringify(errors)).digest("hex") });
   const fd = openSync(join(directory, `${id}.json`), "wx", 0o600);
   try { writeFileSync(fd, body + "\n"); fsyncSync(fd); } finally { closeSync(fd); }

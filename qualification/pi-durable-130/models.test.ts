@@ -11,7 +11,7 @@ import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-w
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
 import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi, SimpleStreamOptions } from "../../runtime/durable-engine/qualification/ai.ts";
 import { createHostModels, type HostModelPolicy } from "../../runtime/durable-engine/src/index.js";
-import { modelFailureDetail } from "../../runtime/durable-engine/src/host-model-failure.js";
+import { modelFailureDetail, parseModelFailure } from "../../runtime/durable-engine/src/host-model-failure.js";
 import { addLogSink, removeLogSink, type LogRecord } from "../../runtime/src/utils/logger.js";
 
 // These ESM-only public exports have no require condition; resolve from root.
@@ -31,10 +31,10 @@ function barrier() {
   const promise = new Promise<void>((resolve) => { release = resolve; });
   return { promise, release };
 }
-async function bounded(promise: Promise<void>) {
+async function bounded<T>(promise: Promise<T>) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+    return await Promise.race([promise, new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error("Fixture barrier not reached within 1500ms")), 1500);
     })]);
   } finally { clearTimeout(timer); }
@@ -761,7 +761,7 @@ test("provider failure preserves safe category, accounting and a single dispatch
   try {
     const result = await f.models.completeSimple(f.model, context);
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("Host model request failed [phase=provider; category=timeout; http=504]");
+    expect(parseModelFailure(result.errorMessage)).toEqual({ phase: "provider", category: "timeout", httpStatus: 504 });
     expect(f.calls()).toBe(1); expect(settlements).toBe(1); expect(abandonments).toBe(1);
     expect(result.usage.cost.total).toBe(0.3);
     expect(records.filter(record => record.operation === "durable_model.request_failed")).toHaveLength(1);
@@ -774,7 +774,7 @@ test("unresolved accounting does not overwrite the original provider timeout", a
   const f = await fixture(false, false, false, false, true, `HTTP 504 timed out ${token}`);
   f.policy.prepareRequest = async () => ({ async dispatch() {}, async settle() { throw Error(token); }, async abandon() {} });
   const result = await f.models.completeSimple(f.model, context);
-  expect(result.errorMessage).toBe("Host model request failed [phase=accounting; category=timeout; http=504]");
+  expect(parseModelFailure(result.errorMessage)).toEqual({phase:"accounting",category:"timeout",httpStatus:504});
   expect(f.calls()).toBe(1);
   expect(JSON.stringify(result)).not.toContain(token);
 });
@@ -814,13 +814,16 @@ for (const invalid of ['invalid-usage', 'wrong-owner', 'wrong-response'] as cons
   expect(f.calls()).toBe(1);
 });
 
-for (const exhausted of [false, true]) test(`SDK bounded retry retains failures and never repeats committed tools: exhausted=${exhausted}`, async () => {
+for (const archiveFails of [false, true]) for (const exhausted of [false, true]) test(`SDK bounded retry retains failures and never repeats committed tools: exhausted=${exhausted}, archiveFails=${archiveFails}`, async () => {
   const { retainModelFailureEvidence } = await import("../../runtime/durable-engine/src/host-model-failure-evidence.js");
   const { readdir, readFile } = await import("node:fs/promises");
   const f = await fixture(false, true, false, false, exhausted ? "retry-always" : "retry-once", "HTTP 504 timed out; upstream request interrupted");
   const directory = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "retained-model-retry-"));
   const requests: {id:string;state:string}[] = [];
-  f.policy.retainFailure = evidence => retainModelFailureEvidence(join(directory, "failures"), evidence);
+  f.policy.retainFailure = evidence => {
+    if (archiveFails) throw Error("fixture evidence storage unavailable");
+    return retainModelFailureEvidence(join(directory, "failures"), evidence);
+  };
   f.policy.prepareRequest = async () => {
     const row = {id: crypto.randomUUID(), state: "reserved"}; requests.push(row);
     return {id:row.id, async dispatch() {row.state = "dispatched";}, async settle(message) {
@@ -840,12 +843,12 @@ for (const exhausted of [false, true]) test(`SDK bounded retry retains failures 
     expect(effects).toBe(1); expect(f.calls()).toBe(3);
     expect(requests.map(row=>row.state)).toEqual(exhausted ? ["settled","unresolved","unresolved"] : ["settled","unresolved","settled"]);
     expect(new Set(requests.map(row=>row.id)).size).toBe(3);
-    const files=await readdir(join(directory,"failures")); expect(files.length).toBe(exhausted ? 2 : 1);
+    const files=archiveFails ? [] : await readdir(join(directory,"failures")); expect(files.length).toBe(archiveFails ? 0 : exhausted ? 2 : 1);
     for(const file of files) {const evidence=JSON.parse(await readFile(join(directory,"failures",file),"utf8"));expect(evidence.providerFailure).toMatchObject({category:"timeout",httpStatus:504});expect(evidence.errors.providerError.errorMessage).toContain("upstream request interrupted");expect(requests.map(row=>row.id)).toContain(evidence.requestId);}
     const page=await root.entries({order:"ascending"},100,undefined,durableContext);
     const failures=page.items.filter(entry=>entry.kind==="pi.assistant" && entry.model?.[0]?.role==="assistant" && entry.model[0].stopReason==="error");
-    expect(failures.length).toBe(files.length);
-    for(const entry of failures) expect(JSON.stringify(entry)).toContain("evidence=");
+    expect(failures.length).toBe(exhausted ? 2 : 1);
+    for(const entry of failures) expect(JSON.stringify(entry).includes("evidence=")).toBe(!archiveFails);
   } finally {await harness.close(durableContext); await rm(directory,{recursive:true,force:true});}
 });
 
@@ -857,9 +860,89 @@ test("retention write failure preserves original provider classification and unr
   addLogSink(sink);
   try {
     const result=await f.models.completeSimple(f.model,context);
-    expect(result.stopReason).toBe("error");expect(result.errorMessage).toBe("Host model request failed [phase=accounting; category=timeout; http=504]");
+    expect(result.stopReason).toBe("error");expect(parseModelFailure(result.errorMessage)).toEqual({phase:"accounting",category:"timeout",httpStatus:504});
     expect(seen).toMatchObject({requestId:"original-unresolved-request",failure:{phase:"accounting",category:"timeout",httpStatus:504},providerError:{errorMessage:"HTTP 504 upstream interrupted; PRIVATE_ORIGINAL_REASON"}});
     expect(abandoned).toBe(1);expect(JSON.stringify(records)).toContain("durable_model.evidence_failed");
     for(const secret of ["PRIVATE_ORIGINAL_REASON","PRIVATE_SETTLEMENT_FAILURE","PRIVATE_ARCHIVE_FAILURE"])expect(JSON.stringify(records)+JSON.stringify(result)).not.toContain(secret);
   }finally{removeLogSink(sink);}
+});
+
+test("malformed diagnostic hook result cannot strand the model stream", async () => {
+  const fx=await fixture(false,false,false,false,true,"ECONNRESET provider interrupted");
+  fx.policy.retainFailure=()=>"not-a-receipt-id";
+  const result=await bounded(fx.models.complete(fx.model,context));
+  expect(result.stopReason).toBe("error");
+  expect(parseModelFailure(result.errorMessage)?.category).toBe("transport");
+  expect(result.errorMessage).not.toContain("not-a-receipt-id");
+  expect(fx.calls()).toBe(1);
+});
+
+test("throwing caller model getters fail closed before invocation", async () => {
+  const fx=await fixture();
+  await fx.models.complete(fx.model,context);
+  const before=fx.calls();
+  const model={...fx.model};Object.defineProperty(model,"provider",{get(){throw Error(token);}});
+  expect(()=>fx.models.complete(model,context)).toThrow();
+  expect(fx.calls()).toBe(before);
+});
+
+for(const kind of ["image","classifier"] as const) test(`${kind} provider failures retain bounded evidence and their actual stage`, async()=>{
+  const fx=await fixture(true),retained:any[]=[];
+  fx.policy.retainFailure=input=>{retained.push(input);return "00000503-0000-0000-0000-000000000000";};
+  let providerCalls=0;
+  (fx.runtime as any)[kind==="image"?"generateImages":"classify"]=async()=>{providerCalls++;throw Error(token);};
+  const result=kind==="image"?await fx.models.generateImages(fx.models.getModelOfType("image",ref.provider,ref.id)!,imageContext)
+    :await fx.models.classify(fx.models.getModelOfType("classifier",ref.provider,ref.id)!,classifierContext);
+  expect(result.stopReason).toBe("error");
+  expect(parseModelFailure(result.errorMessage)).toEqual({phase:"provider",category:"unknown",evidenceId:"00000503-0000-0000-0000-000000000000"});
+  expect(JSON.stringify(result)).not.toContain(token);
+  expect(retained.length).toBe(1);
+  expect(retained[0].error.message).toBe(token);
+  expect(providerCalls).toBe(1);
+});
+
+test("abort during retry backoff survives reopen without replay or resolving uncertain holds", async () => {
+  const f = await fixture(false, true, false, false, "retry-always", "HTTP 504 timed out");
+  const directory = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "cancel-model-retry-"));
+  const path = join(directory, "sdk.sqlite");
+  const requests: { id: string; state: string }[] = [];
+  f.policy.prepareRequest = async () => {
+    const row = { id: crypto.randomUUID(), state: "reserved" }; requests.push(row);
+    return { id: row.id, async dispatch() { row.state = "dispatched"; }, async settle(message) {
+      if (message.stopReason === "error") { row.state = "unresolved"; throw Error("Native request settlement unresolved"); }
+      row.state = "settled";
+    }, async abandon() { if (row.state === "dispatched") row.state = "unresolved"; } };
+  };
+  let effects = 0;
+  const tool = defineTool({ name: "fixture_tool", description: "Committed effect counter", callers: ["model"], replay: "unsafe", parameters: Type.Object({ value: Type.Number() }),
+    execute: async () => { effects++; return { output: [{ type: "text", text: "effect committed" }] }; } });
+  const registry = createRegistry(); registry.install(defineExtension({ name: "cancel-retry-fixture", tools: [tool] }));
+  const options = { models: f.models, registry, settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 60_000 }, compaction: { enabled: false } } };
+  let harness = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path)), options, durableContext);
+  let watch: Awaited<ReturnType<Awaited<ReturnType<typeof harness.root>>["watch"]>> | undefined;
+  try {
+    let root = await harness.root(durableContext, { agent: { model: { provider: ref.provider, modelId: ref.id }, tools: [tool] } });
+    let reachedBackoff!: () => void;
+    const backoff = new Promise<void>(resolve => { reachedBackoff = resolve; });
+    watch = await root.watch(durableContext);
+    watch.start(async view => { if ((view.docs["pi.live"] as any)?.generation?.retry) reachedBackoff(); });
+    const submission = await root.submit({ type: "input", requestId: "cancel-backoff", content: "Perform one effect and continue" }, durableContext);
+    await bounded(backoff);
+    expect(f.calls()).toBe(2); expect(effects).toBe(1);
+    await bounded(root.abort(durableContext));
+    expect(await bounded(submission.wait(durableContext))).toMatchObject({ status: "unanswered", reason: "aborted" });
+    expect(requests.map(row => row.state)).toEqual(["settled", "unresolved"]);
+    const entries = await root.entries({ order: "ascending" }, 100, undefined, durableContext);
+    expect(entries.items.some(entry => entry.kind === "pi.assistant" && entry.model?.[0]?.role === "assistant" && entry.model[0].stopReason === "error")).toBe(true);
+    const held = JSON.stringify(requests);
+    await watch.stop(); watch = undefined;
+    await harness.close(durableContext);
+    harness = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path)), options, durableContext);
+    root = await harness.root(durableContext);
+    expect(await root.entries({ order: "ascending" }, 100, undefined, durableContext)).toEqual(entries);
+    harness.resume();
+    await Bun.sleep(20);
+    expect(f.calls()).toBe(2); expect(effects).toBe(1);
+    expect(JSON.stringify(requests)).toBe(held);
+  } finally { await watch?.stop(); await harness.close(durableContext); await rm(directory, { recursive: true, force: true }); }
 });
