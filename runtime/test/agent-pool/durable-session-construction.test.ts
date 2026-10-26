@@ -48,6 +48,7 @@ for (const empty of [false, true]) {
       Object.defineProperties(serviceOptions, Object.getOwnPropertyDescriptors(compatibility));
       services = createAgentPoolServices(serviceOptions);
       const databaseBefore = getDb().serialize();
+      let runnerOptionReads = 0;
       // Backend-owned lookup remains live for post-startup routes.
       for (const chat of ["web:bound", "web:unknown"]) {
         await expect(pool.getSessionForIntrospection(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
@@ -63,6 +64,13 @@ for (const empty of [false, true]) {
         await expect(pool.renameChatJid(chat, "web:renamed")).rejects.toThrow("Durable chat identity rename unavailable");
         expect(await pool.applyControlCommand(chat, { type: "rollup", raw: "/rollup" })).toMatchObject({ status: "error", message: "Durable branch rollup unavailable" });
       }
+      for (const chat of ["web:bound", "web:unknown", "dream:manual:fixture", "operation:fixture", "custom:room"]) {
+        const options = { get budgetWorkId() { runnerOptionReads++; return `forbidden-native-${empty}-${chat}`; } };
+        const output = await pool.runAgent("must not enter legacy orchestration", chat, options);
+        expect(getDb().serialize()).toEqual(databaseBefore);
+        expect(output).toEqual({ status: "error", result: null, error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" });
+      }
+      expect(runnerOptionReads).toBe(0);
       expect(getDb().serialize()).toEqual(databaseBefore);
       if (!empty) {
         expect(await pool.saveSessionPosition("web:bound")).toBe("leaf");
