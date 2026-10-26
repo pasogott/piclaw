@@ -121,6 +121,7 @@
     "rehearsal.test.ts",
     "remote-peer-default-factory.test.ts",
     "resource-default-factory.test.ts",
+    "routing-policy.test.ts",
     "runtime-upgrade-workflow.test.ts",
     "runtime.test.ts",
     "scheduled-allocation.test.ts",
