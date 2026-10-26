@@ -28,7 +28,10 @@ browserTest("Classic Draft, Thoughts and Output use one accessible disclosure pi
       const url = new URL(req.url);
       if (url.pathname === "/") {
         const skin = url.searchParams.get("skin") === "visual" ? "visual" : "classic";
-        return new Response(`<!doctype html><html lang="en" data-theme="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/${skin}/dist/app.bundle.css"></head><body><main id="fixture" style="margin:16px;max-width:900px"></main><script type="module" src="/fixture.js"></script></body></html>`, {headers:{"Content-Type":"text/html"}});
+        const body = url.searchParams.has("viewport")
+          ? '<div class="app-shell chat-only"><div class="container" style="margin:0;width:100%;max-width:none"><div class="timeline">Timeline</div><div id="fixture" style="display:contents"></div><div class="chat-surface-compose" style="flex-shrink:0"><div id="fixture-compose" style="height:72px">Composer</div></div></div></div>'
+          : '<main id="fixture" style="margin:16px;max-width:900px"></main>';
+        return new Response(`<!doctype html><html lang="en" data-theme="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/${skin}/dist/app.bundle.css"></head><body>${body}<script type="module" src="/fixture.js"></script></body></html>`, {headers:{"Content-Type":"text/html"}});
       }
       if (url.pathname === "/fixture.js") return new Response(Bun.file(join(scratch, "fixture.js")));
       if (url.pathname.startsWith("/static/")) return new Response(Bun.file(join(web, url.pathname)));
@@ -113,6 +116,76 @@ browserTest("Classic Draft, Thoughts and Output use one accessible disclosure pi
         {key:"thought",expanded:true},{key:"thought",expanded:false},
         {key:"thought",expanded:true},{key:"thought",expanded:false},
       ]);
+      expect(errors).toEqual([]);
+      await page.close();
+    }
+    // Use the real chat flex/overflow layout: a tall pane must not displace the
+    // composer or make its sole collapse control unreachable in a short window.
+    for (const viewport of [{width:1100,height:600},{width:768,height:360},{width:390,height:700}]) {
+      const page = await browser.newPage({viewport});
+      page.setDefaultTimeout(5000);
+      const errors: string[] = [];
+      page.on("pageerror", e => errors.push(e.message));
+      await page.route("**/*", route => {
+        if (!route.request().url().startsWith(origin + "/")) {unexpected.push("external request"); return route.abort();}
+        return route.continue();
+      });
+      await page.goto(`${origin}/?viewport=1`);
+      await page.waitForFunction(() => typeof (window as any).renderPaneFixture === "function");
+      const settle = () => page.evaluate(() => new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      }));
+      for (const [key, prefix] of [["draft","LONGDRAFT"],["thought","LONGTHOUGHT"],["tool-output","LONGOUTPUT"]]) {
+        await page.setViewportSize(viewport);
+        const text = lines(prefix, 1000);
+        await page.evaluate(p => (window as any).renderPaneFixture(p), key === "tool-output"
+          ? {status:{type:"tool",output_preview:text,output_total_lines:1000}}
+          : {[key]:text});
+        await settle();
+        const pane = page.locator(`.agent-thinking[data-panel-key="${key}"]`);
+        const group = page.locator(".agent-status-panel");
+        const pill = pane.locator("button.agent-thinking-truncation");
+        await pill.click();
+        await page.waitForFunction(k => document.querySelector(`.agent-thinking[data-panel-key="${k}"]`)?.getAttribute("data-expanded") === "true", key);
+        await settle();
+        const region = (await group.boundingBox())!;
+        const composer = (await page.locator("#fixture-compose").boundingBox())!;
+        expect(region.y).toBeGreaterThanOrEqual(0);
+        expect(region.y + region.height).toBeLessThanOrEqual(composer.y + 1);
+        expect(composer.y + composer.height).toBeLessThanOrEqual(viewport.height + 1);
+        expect(await pill.innerText()).toBe("less");
+        const checkControl = async (height: number) => {
+          const r = (await pill.boundingBox())!;
+          expect(r.y).toBeGreaterThanOrEqual(0);
+          expect(r.y + r.height).toBeLessThanOrEqual(height + 1);
+        };
+        await checkControl(viewport.height);
+        await group.evaluate(el => {el.scrollTop = el.scrollHeight;});
+        await settle();
+        expect(await group.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+        await checkControl(viewport.height);
+        const tail = await pane.locator(".agent-thinking-body").evaluate((el, token) => {
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            const offset = (node.textContent || "").lastIndexOf(token);
+            if (offset < 0) continue;
+            const range = document.createRange();range.setStart(node, offset);range.setEnd(node, offset + token.length);
+            const r = range.getBoundingClientRect();return {top:r.top,bottom:r.bottom};
+          }
+          throw new Error("Last line missing");
+        }, prefix + "1000");
+        expect(tail.top).toBeGreaterThanOrEqual(region.y - 1);
+        expect(tail.bottom).toBeLessThanOrEqual(region.y + region.height + 1);
+        // Dynamic viewport changes include tablet rotation and keyboard-sized windows.
+        const shorter = Math.max(240, viewport.height - 120);
+        await page.setViewportSize({width:viewport.width,height:shorter});
+        await settle();
+        await checkControl(shorter);
+        expect(await page.locator("#fixture-compose").evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(shorter + 1);
+        await pill.click();
+        await page.waitForFunction(k => document.querySelector(`.agent-thinking[data-panel-key="${k}"]`)?.getAttribute("data-expanded") === "false", key);
+      }
       expect(errors).toEqual([]);
       await page.close();
     }

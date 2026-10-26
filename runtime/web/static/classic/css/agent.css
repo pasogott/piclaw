@@ -274,6 +274,23 @@
     box-sizing: border-box;
 }
 
+/* Keep live pane content inside the chat viewport, with one scroll region. */
+.agent-status-panel-core {
+    min-height: 0;
+    max-height: calc(var(--app-height, 100dvh) * 0.6);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+}
+
+/* The existing pill stays reachable while a long pane scrolls underneath it. */
+.agent-status-panel-core > .agent-thinking[data-collapsible='true'] > .agent-thinking-title {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: var(--bg-secondary);
+}
+
 .agent-thinking {
     padding: calc(var(--chat-surface-padding-y) + var(--output-pad, 0px)) calc(var(--chat-surface-padding-x) + var(--output-pad, 0px));
     margin: 0;
