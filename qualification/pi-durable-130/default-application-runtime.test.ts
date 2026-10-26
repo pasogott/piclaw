@@ -817,21 +817,27 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   }
   if (scenario === "native-nonweb-admission") {
     const {processMessages}=await import('../../runtime/src/runtime/message-loop.js');
+    const {startRuntimeLoop}=await import('../../runtime/src/runtime/coordinator.js');
     const {RuntimeState}=await import('../../runtime/src/runtime/state.js');
     const state=new RuntimeState(workspace);
     const direct=spyOn(pool,'runAgent'),control=spyOn(pool,'applyControlCommand'),slash=spyOn(pool,'applySlashCommand');
     const saves=spyOn(state,'saveTimestamps'),marked=spyOn(state,'markCommandProcessed');
     const tables=['budget_work','budget_request_reservations','service_effect_s01_chats','service_effect_s01_sources','service_effect_s01_operations','messages','chat_cursors',
-      'conversations','entries','tasks','submissions','documents','document_revisions'];
+      'conversations','entries','tasks','submissions','documents','document_revisions','router_state'];
     const snapshot=()=>tables.map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
     try {
       for(const [index,text] of ['@Pi ordinary pending input','@Pi /model fixture/unavailable','@Pi /help'].entries()) {
-        const chat=`custom:native-unbound:${index}`;storeChatMetadata(chat,new Date().toISOString());
+        const chat=`custom:native-unbound:${index}`;storeChatMetadata(chat,new Date().toISOString());state.chatJids.add(chat);
         storeMessage({id:`unadmitted-nonweb-${index}`,chat_jid:chat,sender:'user',sender_name:'User',content:text,timestamp:`2026-01-01T00:00:0${index}.000Z`,is_from_me:false,is_bot_message:false});
         const before=snapshot();
         await expect(processMessages(chat,{agentPool:pool,state,assistantName:'Pi',triggerPattern:/@Pi/i})).rejects.toThrow('Native non-web message processing requires host input admission');
         expect(snapshot()).toEqual(before);
       }
+      const beforePoll=snapshot(),stop=new AbortController();
+      const cancel=setTimeout(()=>stop.abort(),0);
+      try{await startRuntimeLoop({agentPool:pool,state,queue:base.queue,assistantName:'Pi',triggerPattern:/@Pi/i,pollIntervalMs:60_000,signal:stop.signal});}
+      finally{clearTimeout(cancel);stop.abort();}
+      expect(state.lastTimestamp).toBe('');expect(base.queue.getMetrics().enqueued).toBe(0);expect(snapshot()).toEqual(beforePoll);
       expect(state.lastAgentTimestamp).toEqual({});expect(direct).not.toHaveBeenCalled();expect(control).not.toHaveBeenCalled();expect(slash).not.toHaveBeenCalled();
       expect(saves).not.toHaveBeenCalled();expect(marked).not.toHaveBeenCalled();expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
     } finally {

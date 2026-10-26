@@ -41,6 +41,7 @@ describe("runtime coordinator", () => {
     expect(capturedLoopDeps).not.toBeNull();
     if (!capturedLoopDeps) throw new Error("Expected loop deps to be captured");
 
+    expect(capturedLoopDeps.agentPool).toBe(agentPool);
     expect(capturedLoopDeps.queue).toBe(queue);
     expect(capturedLoopDeps.state).toBe(state);
     expect(capturedLoopDeps.assistantName).toBe("Pi");

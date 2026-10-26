@@ -38,6 +38,7 @@ export async function startRuntimeLoop(deps: StartRuntimeLoopDeps): Promise<void
   });
 
   await runMessageLoopImpl({
+    agentPool: deps.agentPool,
     queue: deps.queue,
     state: deps.state,
     assistantName: deps.assistantName,
