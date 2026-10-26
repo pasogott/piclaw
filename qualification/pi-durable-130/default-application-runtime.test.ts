@@ -1,7 +1,7 @@
 import { resolveRequestPrincipal } from "../../runtime/src/channels/web/auth/principal.js";
 import "./src/test-guard.js";
 import { hydrateMcpKeychainCredentials } from "../../runtime/src/secure/mcp-keychain.js";
-import { getConfigPath } from "../../runtime/src/core/config-context.js";
+import { getConfigPath, getDataDir } from "../../runtime/src/core/config-context.js";
 import { delegateImages } from "./delegate-image-fixtures.ts";
 import { installGoalFixture } from "./goal-fixture.ts";
 import { expect, test, spyOn } from "bun:test";
@@ -44,6 +44,7 @@ import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-
 import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
+import { qualifyNativeRecoveryUnitFixture } from "./native-recovery-unit-fixture.ts";
 import { installOfficeViewerFixture } from "./office-viewer-fixture.ts";
 import { installEditableTableFixture } from "./editable-table-fixture.ts";
 import { installDrawioFixture } from "./drawio-fixture.ts";
@@ -155,7 +156,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-runner-denial", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -279,6 +280,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   const codemodeReviewCancelled = scenario === "native-codemode-code-review-cancel";
   const nativeReview = scenario === "native-code-review" || codemodeReview;
   const reviewPackage = nativeReview ? installCodeReviewFixture(workspace) : undefined;
+  const recoveryPackage = scenario === "native-recovery-unit" ? installCodeReviewFixture(workspace) : undefined;
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
     code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
   } }];
@@ -664,6 +666,16 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       return captured;
     }));
   }
+  const recoveryBarrier=recoveryPackage ? (()=>{
+    let enter!:()=>void, release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}), held=new Promise<void>(resolve=>{release=resolve;});
+    const original=HostConversationRuntime.prototype.wait;let firstWait=true;
+    const hook=spyOn(HostConversationRuntime.prototype,"wait").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof original>){
+      await original.apply(this,args);
+      if(firstWait){firstWait=false;enter();await held;}
+    });
+    captureSpies.push(hook);return {entered,release,hook};
+  })():undefined;
   if (scenario === "native-mcp-http-deny") {
     await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject before models"); })).rejects.toThrow();
     expect(existsSync(mcpPid)).toBe(false);
@@ -746,6 +758,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if(recoveryPackage) backend.attachChannel!({broadcastEvent(){}});
   if (scenario.startsWith("native-code-review-lifecycle-")) {
     const phase = scenario.slice("native-code-review-lifecycle-".length);
     const objects = () => root.query("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name GLOB 'addon_code_review_*' ORDER BY name").all();
@@ -1671,7 +1684,42 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     return;
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
-  const dispatchOutcome = await dispatch!();
+  let dispatchOutcome: Awaited<ReturnType<NonNullable<typeof dispatch>>>;
+  if(recoveryPackage) {
+    const pending=dispatch!();
+    try {
+      await recoveryBarrier!.entered;
+      const {QueuedFollowupLifecycleService}=await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+      const followups=new QueuedFollowupLifecycleService();
+      const queued=root.transaction(()=>followups.enqueueAcceptedFollowupOnce("recovery-attached-input","web:default","recovery accepted steer",new Date().toISOString(),{source:"user"},bound.getQueuedInputSourceAdmission!("web:default")!)).immediate();
+      expect(queued).not.toBeNull();
+      const steering=bound.getAcceptedQueuedSteering!("web:default")!;expect(steering).toBeDefined();
+      const accepted=await steering.accept(queued!);await accepted.dispatch();
+    } finally {recoveryBarrier!.hook.mockRestore();recoveryBarrier!.release();}
+    dispatchOutcome=await pending;
+  } else dispatchOutcome = await dispatch!();
+  if (recoveryPackage) {
+    try {
+      expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(2);
+      expect(root.query("SELECT submission_id FROM piclaw_durable_intent_bindings_v1").all()).toHaveLength(1);
+      expect((await pool.runSidePrompt("web:default","recovery side input",{budgetWorkId:"fixture-recovery-side"})).status).toBe("success");
+      expect(calls).toBe(3);
+      const service = (await import(join(recoveryPackage,"runtime.ts"))).reviewService();
+      const branch = (root.query("SELECT branch_id FROM chat_branches WHERE chat_jid='web:default'").get() as {branch_id:string}).branch_id;
+      service.createFromCapture({ownerId:"default",actorId:"default",kind:"operator",workspaceId:"recovery"},
+        {title:"Recovery review",focusPath:"saved.ts",target:{chatId:"web:default",incarnation:branch,label:"Default"}},
+        {workspaceId:"recovery",worktreeId:"fixture",mode:"source",base:null,head:null,capturedAt:"2026-01-01T00:00:00Z",
+          files:[{oldPath:null,newPath:"saved.ts",oldText:null,newText:"saved recovery source\n",change:"source"}]}, {requestId:"recovery-review"});
+      backend.stop(); await backend.close();
+      await qualifyNativeRecoveryUnitFixture(root,workspace,getDataDir());
+      expect(calls).toBe(3); expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+    } finally {
+      backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies,...sdkSpies]) spy.mockRestore();
+      owner.release(); closeDatabase();
+    }
+    return;
+  }
   if (expectedFailedTurn) { expect(dispatchOutcome).toBe("settled"); assertFailedTurn(); }
   if (scenario === "native-events") {
     expect(dispatchOutcome).toBe("settled");
