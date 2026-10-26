@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AgentDoc, defineDoc, InboxDoc, LiveDoc, type ConversationId, type TaskId, type ToolTaskInput, type Tx } from "@earendil-works/pi-durable";
+import { AgentDoc, defineDocFamily, InboxDoc, LiveDoc, type ConversationId, type TaskId, type ToolTaskInput, type ConversationRecord, type Tx } from "@earendil-works/pi-durable";
 import {
   assertNativeBackgroundDeadline,nativeBackgroundPolicyHash,readNativeBackgroundPolicy,
   type NativeBackgroundPolicy,
@@ -8,9 +8,11 @@ import {
 type Claim={taskId:number;callId:string;toolName:string};
 /** Correlation and a bounded quota only. The immutable payload/S01 admission
  * own policy authority; this document never authorises execution or replay.
- * `initial` prevents a fork from inheriting its parent's background grant. */
-export const NativeBackgroundPolicyDoc=defineDoc({kind:"app.background-policy",version:1,scope:"conversation",history:"latest",fork:"initial",
-  checkpointWhen:()=>false,initial:()=>({sourceId:null as string|null,policySha256:null as string|null,calls:[] as Claim[]})});
+ * Each accepted input has a family member; `initial` prevents a fork from
+ * inheriting its parent's background grant. Explicit continuation never resets
+ * an earlier input's quota. */
+export const NativeBackgroundPolicyDoc=defineDocFamily({kind:"app.background-policy",version:1,family:true,scope:"conversation",history:"latest",fork:"initial",
+  checkpointWhen:()=>false,initial:(_seed:null)=>({sourceId:null as string|null,policySha256:null as string|null,calls:[] as Claim[]})});
 function current(assertCurrent:()=>void){
   const result:unknown=assertCurrent();
   if(result!==undefined){void Promise.resolve(result).catch(()=>{});throw Error("Background host authority must be synchronous");}
@@ -25,6 +27,8 @@ function bound(doc:Readonly<{sourceId:string|null;policySha256:string|null;calls
     tasks.add(claim.taskId);
   }
 }
+export { bound as assertNativeBackgroundBindingData };
+
 async function assertAgentPolicy(tx:Tx,id:ConversationId,policy:NativeBackgroundPolicy){
   const agent=await tx.doc(AgentDoc,id);
   if(agent.model?.provider!==policy.model.provider||agent.model.modelId!==policy.model.modelId||typeof agent.instructions!=="string"||
@@ -33,14 +37,21 @@ async function assertAgentPolicy(tx:Tx,id:ConversationId,policy:NativeBackground
 }
 /** Call only in the host-owned public allocation transaction, after current
  * grant/model checks. Existing same-policy binding is replay, never quota reset. */
-export async function bindNativeBackgroundPolicy(tx:Tx,id:ConversationId,input:NativeBackgroundPolicy,assertCurrent:()=>void){
+export async function bindNativeBackgroundPolicy(tx:Tx,id:ConversationId,input:NativeBackgroundPolicy,assertCurrent:()=>void,created?:ConversationRecord){
   current(assertCurrent);const policy=readNativeBackgroundPolicy(input);await assertAgentPolicy(tx,id,policy);
-  const doc=await tx.doc(NativeBackgroundPolicyDoc,id);current(assertCurrent);
+  const doc=await tx.doc(NativeBackgroundPolicyDoc,id,policy.sourceId,null);current(assertCurrent);
   if(doc.sourceId!==null||doc.policySha256!==null){bound(doc,policy);return;}
-  const conversation=await tx.conversation(id),entries=await tx.scanEntries({conversationId:id},1);
-  const tasks=await tx.scanTasks({conversationId:id},1),inbox=await tx.doc(InboxDoc,id),live=await tx.doc(LiveDoc,id);
-  current(assertCurrent);
-  if(!conversation||conversation.parent||conversation.owner||entries.items.length||tasks.items.length||inbox.items.length||live.run||doc.calls.length)throw Error("Fresh private background conversation required");
+  if(created){
+    // Only the exact record returned by this transaction's createConversation.
+    // Public Tx forbids table reads after its first table write. The host
+    // allocation path creates/configures/binds this record without task writes.
+    if(created.id!==id||created.parent||created.owner||doc.calls.length)throw Error('Fresh private background conversation required');
+  }else{
+    const conversation=await tx.conversation(id),entries=await tx.scanEntries({conversationId:id},1);
+    const tasks=await tx.scanTasks({conversationId:id},1),inbox=await tx.doc(InboxDoc,id),live=await tx.doc(LiveDoc,id);
+    current(assertCurrent);
+    if(!conversation||conversation.parent||conversation.owner||entries.items.length||tasks.items.length||inbox.items.length||live.run||doc.calls.length)throw Error("Fresh private background conversation required");
+  }
   doc.sourceId=policy.sourceId;doc.policySha256=nativeBackgroundPolicyHash(policy);current(assertCurrent);
 }
 /** A fresh host effect guard and exact accepted source remain mandatory. This
@@ -49,7 +60,7 @@ export async function bindNativeBackgroundPolicy(tx:Tx,id:ConversationId,input:N
 export async function assertNativeBackgroundExecution(tx:Tx,id:ConversationId,input:NativeBackgroundPolicy,now:number,assertCurrent:()=>void){
   current(assertCurrent);const policy=readNativeBackgroundPolicy(input);
   assertNativeBackgroundDeadline(policy,now);await assertAgentPolicy(tx,id,policy);
-  bound(await tx.doc(NativeBackgroundPolicyDoc,id),policy);current(assertCurrent);
+  bound(await tx.doc(NativeBackgroundPolicyDoc,id,policy.sourceId,null),policy);current(assertCurrent);
 }
 /** Before-intent quota claim, using actual public SDK task/assistant/live-slot
  * evidence. Re-entry of one SDK task never spends another call. This receipt is
@@ -77,7 +88,7 @@ export async function claimNativeBackgroundTool(tx:Tx,id:ConversationId,input:Na
       ![...(live.tools??[]),...(live.nestedTools??[])].some(slot=>slot.taskId===source.parent&&slot.callId===source.parentCallId&&slot.status==="running"))
       throw Error("Exact pending background nested call required");
   }else throw Error("Unsupported background tool task");
-  const doc=await tx.doc(NativeBackgroundPolicyDoc,id);current(assertCurrent);bound(doc,policy);
+  const doc=await tx.doc(NativeBackgroundPolicyDoc,id,policy.sourceId,null);current(assertCurrent);bound(doc,policy);
   const prior=doc.calls.find(claim=>claim.taskId===call.taskId);
   if(prior){if(prior.taskId!==call.taskId||prior.callId!==call.callId||prior.toolName!==call.toolName)throw Error("Native background tool claim conflict");return;}
   if(policy.maxToolCalls===null)return; // Explicitly uncapped host policy; no unbounded quota ledger.

@@ -3,7 +3,7 @@ import { hashCanonicalRequest } from "../service-effects/contracts/common.js";
 
 export type NativeBackgroundOrigin =
   | Readonly<{ kind:"dream"; invocationId:string; chatJid:string; mode:"manual"|"auto" }>
-  | Readonly<{ kind:"addon"; operationId:string; addonId:string; principalId:string; target:string; grantRevision:string }>;
+  | Readonly<{ kind:"addon"; operationId:string; addonId:string; principalId:string; target:string; grantRevision:string; inputSequence:number }>;
 export type NativeBackgroundPolicy = Readonly<{
   version:1; sourceId:string; origin:NativeBackgroundOrigin;
   workId:string; parentWorkId:string|null;
@@ -35,11 +35,11 @@ function origin(value:unknown):NativeBackgroundOrigin{
     if(value.mode!=="manual"&&value.mode!=="auto")throw invalid();
     return Object.freeze({kind:"dream",invocationId:value.invocationId,chatJid:value.chatJid,mode:value.mode});
   }
-  fields(value,["kind","operationId","addonId","principalId","target","grantRevision"]);
-  if(value.kind!=="addon")throw invalid();
+  fields(value,["kind","operationId","addonId","principalId","target","grantRevision","inputSequence"]);
+  if(value.kind!=="addon"||!Number.isSafeInteger(value.inputSequence)||(value.inputSequence as number)<1)throw invalid();
   for(const key of ["operationId","addonId","principalId","target","grantRevision"])text(value[key],128);
   return Object.freeze({kind:"addon",operationId:value.operationId as string,addonId:value.addonId as string,
-    principalId:value.principalId as string,target:value.target as string,grantRevision:value.grantRevision as string});
+    principalId:value.principalId as string,target:value.target as string,grantRevision:value.grantRevision as string,inputSequence:value.inputSequence as number});
 }
 /** Stable caller identity excludes mutable execution choices. A changed grant,
  * model, prompt or deadline must conflict with the same source, never allocate
@@ -47,14 +47,19 @@ function origin(value:unknown):NativeBackgroundOrigin{
 export function nativeBackgroundSourceId(value:NativeBackgroundOrigin):string{
   const who=origin(value);
   const identity=who.kind==="dream"?{kind:who.kind,invocationId:who.invocationId,chatJid:who.chatJid}:
-    {kind:who.kind,operationId:who.operationId,addonId:who.addonId,principalId:who.principalId};
+    {kind:who.kind,operationId:who.operationId,addonId:who.addonId,principalId:who.principalId,inputSequence:who.inputSequence};
   return "background:"+hashCanonicalRequest(identity);
 }
+export function nativeBackgroundContextKey(value:NativeBackgroundOrigin):string{
+  const who=origin(value);
+  return 'background-context:'+hashCanonicalRequest(who.kind==='dream'?{kind:who.kind,invocationId:who.invocationId,chatJid:who.chatJid}:
+    {kind:who.kind,operationId:who.operationId,addonId:who.addonId,principalId:who.principalId});
+}
 export function nativeBackgroundIdentity(value:NativeBackgroundPolicy){
-  const policy=readNativeBackgroundPolicy(value),suffix=policy.sourceId.slice("background:".length);
-  return Object.freeze({sourceId:policy.sourceId,requestId:policy.sourceId,payloadRef:policy.sourceId,operationId:"operation:"+policy.sourceId,
+  const policy=readNativeBackgroundPolicy(value),contextKey=nativeBackgroundContextKey(policy.origin),suffix=contextKey.slice("background-context:".length);
+  return Object.freeze({contextKey,sourceId:policy.sourceId,requestId:policy.sourceId,payloadRef:policy.sourceId,operationId:"operation:"+policy.sourceId,
     chatJid:policy.origin.kind==="addon"?"operation:"+policy.origin.operationId:
-      `dream:${policy.origin.mode}:${sha(policy.origin.chatJid).slice(0,16)}:${policy.origin.invocationId}`,
+      `dream:${suffix}`,
     branchId:"background:"+suffix});
 }
 function policyFields(value:Record<string,unknown>,who:NativeBackgroundOrigin):NativeBackgroundPolicy{

@@ -24,6 +24,28 @@ function fixture(name: string, trace: string[]) {
   };
   return { failure, state, port, backend };
 }
+const preparedBackground = {incarnation:'native-domain',conversationId:7,chatJid:'operation:accepted',branchId:'background:'+'a'.repeat(64),operationId:'operation:background:'+'a'.repeat(64),sourceSeq:1,
+  sourceId:'background:'+'a'.repeat(64),payloadRef:'background:'+'a'.repeat(64),requestId:'background:'+'a'.repeat(64),requestHash:'0'.repeat(64)};
+test('background admission facade: waits for confirmed cleanup and never replays an uncertain call',async()=>{
+  const trace:string[]=[],old=fixture('old',trace),next=fixture('new',trace),gate=deferred<void>(),failure=Error('uncertain source publication');let prepares=0,oldCalls=0,nextCalls=0;
+  old.state.closeGate=gate.promise;const signal=new AbortController().signal;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,prepareAddonOperation:async()=>{oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,prepareAddonOperation:async(id,received)=>{expect(id).toBe('accepted');expect(received).toBe(signal);nextCalls++;return preparedBackground;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted',signal)).rejects.toBe(failure);expect(oldCalls).toBe(1);
+  let finished=false;const explicitRetry=backend.sessionOptions.prepareAddonOperation!('accepted',signal).then(value=>{finished=true;return value;});
+  await tick();expect(finished).toBe(false);expect(nextCalls).toBe(0);expect(prepares).toBe(1);
+  gate.resolve();expect(await explicitRetry).toEqual(preparedBackground);expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);expect(prepares).toBe(2);
+  await backend.close();await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toThrow('Native runtime closing');
+});
+test('background admission facade: uncertain cleanup prevents replacement admission',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('uncertain close');let prepares=0;
+  old.state.closeError=cleanup;const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,prepareAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
 function failAbort(f: ReturnType<typeof fixture>, method: "abort" | "abortRetry" = "abort") {
   const error = Error("Session failed after a storage error");
   f.port[method] = async () => { f.failure.resolve(error); await tick(); throw error; };

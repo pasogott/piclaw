@@ -14,7 +14,7 @@ import { openFixture,context } from "./src/fixture.js";
  * host callback is NOT production grant/S01 admission or a native AgentPool. */
 export async function backgroundPolicyFixture(mode:"allowed"|"limit"|"ceiling"|"forged-call"|"revoked"|"expired"|"configuration"|"parallel"|"reused-call-id"|"api-change"|"long-call"){
   const f=await openFixture({acquired:true});let permitted=true,now=Date.parse('2026-10-26T15:20:00.000Z');
-  const payload=createNativeBackgroundPayload({origin:{kind:'addon',operationId:'policy-fixture',addonId:'qualification',principalId:'fixture',target:'effect',grantRevision:'1'},
+  const payload=createNativeBackgroundPayload({origin:{kind:'addon',operationId:'policy-fixture',addonId:'qualification',principalId:'fixture',target:'effect',grantRevision:'1',inputSequence:1},
     workId:'fixture:work',parentWorkId:null,model:{provider:'qualification',modelId:'synthetic',api:mode==='api-change'?'different-api':'openai-completions'},allowedTools:['host_effect'],maxToolCalls:mode==='limit'?0:mode==='reused-call-id'?2:1,
     acceptedAt:new Date(now).toISOString(),expiresAt:new Date(now+60_000).toISOString(),prompt:'use-tool',instructions:'Background quota fixture'});
   const policy=payload.policy,check=()=>{if(!permitted)throw Error('Synthetic background grant revoked');};
@@ -61,7 +61,7 @@ export async function backgroundPolicyFixture(mode:"allowed"|"limit"|"ceiling"|"
     const effects=mode==='reused-call-id'?2:mode==='allowed'||mode==='parallel'?1:0;
     expect(f.host.effects).toBe(effects);expect(f.host.credentialLookups).toBe(0);
     expect(settled.status).toBe(['revoked','expired','configuration','api-change'].includes(mode)?'unanswered':'done');
-    const state=(await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,context))!;
+    const state=(await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,policy.sourceId,context))!;
     expect(state.sourceId).toBe(policy.sourceId);expect(state.policySha256).toBe(nativeBackgroundPolicyHash(policy));expect(state.calls).toHaveLength(effects);
     if(effects)expect(state.calls[0]!.toolName).toBe('host_effect');
     if(mode==='parallel'||mode==='reused-call-id'||mode==='long-call')expect(attempts).toBe(mode==='reused-call-id'?3:2);
@@ -69,12 +69,12 @@ export async function backgroundPolicyFixture(mode:"allowed"|"limit"|"ceiling"|"
     // Rebinding cannot widen permissions or erase a used quota.
     if(mode==='allowed'){
       await f.root.commit(tx=>bindNativeBackgroundPolicy(tx,f.root.id,policy,check),context);
-      expect((await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,context))!.calls).toEqual(state.calls);
+      expect((await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,policy.sourceId,context))!.calls).toEqual(state.calls);
       await expect(f.root.commit(tx=>bindNativeBackgroundPolicy(tx,f.root.id,{...policy,maxToolCalls:2},check),context)).rejects.toThrow('binding conflict');
       const latest=await f.root.entries({order:'descending'},1,undefined,context);
       const fork=await f.root.commit(tx=>tx.forkConversation(f.root.id,latest.items[0]!.id,{ownership:{kind:'ownerless'}}),context);
       await expect(f.harness.commit(tx=>bindNativeBackgroundPolicy(tx,fork.id,policy,check),context)).rejects.toThrow('Fresh private background conversation required');
-      expect((await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,context))!.calls).toEqual(state.calls);
+      expect((await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,policy.sourceId,context))!.calls).toEqual(state.calls);
     }
   }finally{await f.close();}
 }
@@ -89,7 +89,7 @@ export async function backgroundPolicyOwnerFixture(){
 export async function backgroundPolicyReopenFixture(){
   const dir=await mkdtemp(join(process.env.PICLAW_WORKSPACE!,'background-policy-')),path=join(dir,'candidate.sqlite');
   let owner:TestOwner|undefined,f:Awaited<ReturnType<typeof openFixture>>|undefined;
-  const payload=createNativeBackgroundPayload({origin:{kind:'addon',operationId:'reopen-policy',addonId:'qualification',principalId:'fixture',target:'effect',grantRevision:'1'},
+  const payload=createNativeBackgroundPayload({origin:{kind:'addon',operationId:'reopen-policy',addonId:'qualification',principalId:'fixture',target:'effect',grantRevision:'1',inputSequence:1},
     workId:'fixture:reopen',parentWorkId:null,model:{provider:'qualification',modelId:'synthetic',api:'openai-completions'},allowedTools:['host_effect'],maxToolCalls:1,
     acceptedAt:'2026-10-26T15:20:00.000Z',expiresAt:'2026-10-26T15:23:00.000Z',prompt:'use-tool',instructions:'Persistent quota fixture'});
   const policy=payload.policy,now=Date.parse(policy.acceptedAt);
@@ -113,13 +113,13 @@ export async function backgroundPolicyReopenFixture(){
   };
   try{
     f=await open();const first=await f.submit(policy.sourceId,payload.prompt);expect((await first.wait(context)).status).toBe('done');expect(f.host.effects).toBe(1);
-    const state=await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,context);expect(state?.calls).toHaveLength(1);await close();
+    const state=await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,policy.sourceId,context);expect(state?.calls).toHaveLength(1);await close();
     f=await open();expect((await f.harness.inspect(context)).scheduling).toBe('paused');
     const replay=await f.submit(policy.sourceId,payload.prompt);expect((await replay.wait(context)).status).toBe('done');expect(f.host.modelCalls).toBe(0);expect(f.host.effects).toBe(0);
     // Deliberate SDK-only negative probe: production admission must never accept
     // a second primary in this one-operation private context. Quota cannot reset.
     expect((await (await f.submit('negative-quota-probe',payload.prompt)).wait(context)).status).toBe('done');expect(f.host.effects).toBe(0);
-    expect(await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,context)).toEqual(state);expect(f.host.credentialLookups).toBe(0);
+    expect(await f.harness.snapshot(NativeBackgroundPolicyDoc,f.root.id,policy.sourceId,context)).toEqual(state);expect(f.host.credentialLookups).toBe(0);
     await close();await rm(dir,{recursive:true});
   }finally{await close();} // Cleanup failure retains the owned copy/lease instead of forcing removal.
 }

@@ -22,6 +22,9 @@ export interface HostBindingOptions {
   readonly getConversationBinding?: (chat: string, branch: string) => { conversationId: ConversationId } | undefined;
   /** Resolve the EXISTING host payload. Never persist another plaintext copy here. */
   readonly resolveContent: (payloadRef: string, input: AcceptedInput) => Promise<string>;
+  /** Exact persisted private context/source proof, separate from live permission. */
+  readonly resolveBackground?: (input:AcceptedInput)=>ConversationId|undefined;
+  readonly assertBackgroundExecution?: (input:AcceptedInput)=>void;
 }
 const conflict = () => new Error("Host binding conflict");
 function identity(value: string) {
@@ -49,6 +52,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
 } {
   const domain = identity(options.domain), incarnation = identity(options.incarnation);
   const assertOwner = options.assertOwner.bind(options), resolveContent = options.resolveContent.bind(options);
+  const resolveBackground=options.resolveBackground?.bind(options),assertBackgroundExecution=options.assertBackgroundExecution?.bind(options);
   const manifest = options.manifest.map(b => Object.freeze({ chatJid: identity(b.chatJid),
     branchId: identity(b.branchId), conversationId: b.conversationId }));
   const lookup = options.getConversationBinding?.bind(options) ?? ((chat: string, branch: string) => manifest.find(b => b.chatJid === chat && b.branchId === branch));
@@ -56,7 +60,10 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
   function resolveConversation(input: AcceptedInput): ConversationId | undefined {
     assertOwner();
     const i = inputSnapshot(input), root = lookup(i.chatJid, i.branchId)?.conversationId;
-    if (i.incarnation !== incarnation || !root || i.conversationId === root) return undefined;
+    if (i.incarnation !== incarnation || !root) return undefined;
+    const background=resolveBackground?.(i);
+    if(background!==undefined){if(background!==root||background!==i.conversationId)throw conflict();return background;}
+    if(i.conversationId===root)return undefined;
     const side = db.query(`SELECT b.* FROM piclaw_durable_bindings_v1 b
       JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq
       JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid AND o.primary_source_seq=b.source_seq
@@ -130,7 +137,8 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     // Internal work is not blanket tool authority. Only the exact side-prompt
     // namespace can bind here; execution/recovery still need their own routing.
     if (!source || (source.kind === "internal" &&
-      (!/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(source.source_id) ||
+      (!(/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(source.source_id) ||
+          /^background:[0-9a-f]{64}$/.test(source.source_id)&&resolveBackground?.(i)===i.conversationId) ||
         source.payload_ref !== source.source_id || i.requestId !== source.source_id))) throw new Error("Unverified host source");
   }
   async function bindContent(i: AcceptedInput) {
@@ -221,6 +229,10 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
           AND o.cancellation_source_id IS NULL AND o.terminal_disposition IS NULL`)
         .get(i.chatJid, i.sourceSeq, i.sourceId, i.payloadRef, i.operationId);
       if (!current) throw Error("Host operation authority unavailable");
+      if(i.sourceId.startsWith('background:')){
+        if(resolveBackground?.(i)!==i.conversationId||!assertBackgroundExecution)throw Error('Background execution authority unavailable');
+        assertBackgroundExecution(i);
+      }
       assertOwner();
     },
     async findSource(chatJid: string, sourceSeq: number) {

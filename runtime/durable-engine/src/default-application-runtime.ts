@@ -16,7 +16,10 @@ import { createHostCodexToolGroup, type HostCodexToolGroupAddon } from "./host-c
 import { HostCodexModelServices } from "./host-codex-model-services.js";
 import { createHostCodexArtifactStore, createHostCodexAnswerMaterializer } from "./host-codex-artifacts.js";
 import type { CodexOperation, NativeCodexFactories } from "./host-codex-model-profile.js";
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync,openSync,closeSync,fsyncSync,fstatSync,lstatSync,realpathSync } from "node:fs";
+import { readNativeBackgroundContexts,readNativeBackgroundPayloads,publishNativeBackgroundContext,backgroundPolicyProvenance,type NativeBackgroundContext } from './host-background-context.js';
+import { addonBackgroundOrigin,prepareAddonBackgroundPayload,assertAddonBackgroundCurrent } from './host-addon-background.js';
+import { nativeBackgroundIdentity,nativeBackgroundSourceId,assertNativeBackgroundModel,type NativeBackgroundPayload } from '../../src/agent-pool/background-operation-contract.js';
 import { join, extname } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
@@ -155,6 +158,20 @@ function validateApplicationMapping(root: ReturnType<typeof getDb>, value: unkno
       !root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=?").get(b.chatJid, b.branchId))) throw Error("Invalid durable application conversation manifest");
 }
 
+function readBackgroundPayloadText(ref:string):string|undefined {
+  if(typeof ref!=='string'||!/^background:[a-f0-9]{64}$/.test(ref))throw Error('Invalid background payload reference');
+  const file=join(DATA_DIR,'durable-answers',createHash('sha256').update(ref).digest('hex'));
+  let named;try{named=lstatSync(file);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}
+  if(!named.isFile()||named.nlink!==1||(process.getuid&&named.uid!==process.getuid())||realpathSync(file)!==file||named.size>1024*1024||(named.mode&0o077)!==0)throw Error('Invalid private background payload file');
+  const fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{
+    const before=fstatSync(fd);if(before.dev!==named.dev||before.ino!==named.ino)throw Error('Background payload identity changed');
+    const value=readFileSync(fd,'utf8'),after=fstatSync(fd),current=lstatSync(file);
+    if(!current.isFile()||current.nlink!==1||(current.mode&0o077)!==0||after.dev!==current.dev||after.ino!==current.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs||Buffer.byteLength(value)!==before.size)throw Error('Background payload changed while reading');
+    return value;
+  }finally{closeSync(fd);}
+}
+
 /** Validate persisted SDK storage, conversation identities and execution routes. */
 export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, sessionsDir: string): void {
   const files = existsSync(sessionsDir) ? readdirSync(sessionsDir, { recursive: true, withFileTypes: true }) : [];
@@ -181,10 +198,23 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
       if (rows.length !== 1 || rows[0]!.kind !== "base" || rows[0]!.version !== 1 || rows[0]!.content !== JSON.stringify({ domain: mapping.domain, chatJid: b.chatJid, branchId: b.branchId, sessionId: b.sessionId })) throw Error("Invalid durable application identity");
     }
   }
+  const privateContexts=mapping?readNativeBackgroundContexts(root,mapping.domain):[];
+  const privatePayloads=mapping?readNativeBackgroundPayloads(root,privateContexts,readBackgroundPayloadText):new Map<string,NativeBackgroundPayload>();
   if (mapping) for (const table of ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"]) {
     if (!exists(table)) continue;
-    const rows = root.query(`SELECT domain, incarnation, chat_jid, branch_id, conversation_id, operation_id, source_seq FROM ${table}`).all() as { domain: string; incarnation: string; chat_jid: string; branch_id: string; conversation_id: number; operation_id: string; source_seq: number }[];
+    const rows = root.query(`SELECT domain, incarnation, chat_jid, branch_id, conversation_id, operation_id, source_seq,source_id,payload_ref,request_id,request_hash FROM ${table}`).all() as { domain: string; incarnation: string; chat_jid: string; branch_id: string; conversation_id: number; operation_id: string; source_seq: number;source_id:string;payload_ref:string;request_id:string;request_hash:string }[];
     for (const row of rows) {
+      const privateContext=privateContexts.find(entry=>entry.chatJid===row.chat_jid&&entry.branchId===row.branch_id&&entry.conversationId===row.conversation_id);
+      if(privateContext){
+        const payload=privatePayloads.get(row.source_id),id=payload&&nativeBackgroundIdentity(payload.policy);
+        const proof=payload&&root.query(`SELECT 1 FROM service_effect_s01_sources s JOIN service_effect_s01_operations o ON o.chat_jid=s.chat_jid AND o.primary_source_seq=s.source_seq
+          JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq AND os.operation_id=o.operation_id
+          WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=? AND s.kind='internal' AND s.provenance_ref=? AND o.operation_id=?`)
+          .get(row.chat_jid,row.source_seq,row.source_id,row.payload_ref,backgroundPolicyProvenance(payload),row.operation_id);
+        if(table!=='piclaw_durable_bindings_v1'||!payload||!id||row.domain!==mapping.domain||row.incarnation!==mapping.domain||id.contextKey!==privateContext.contextKey||id.operationId!==row.operation_id||
+          id.payloadRef!==row.payload_ref||id.requestId!==row.request_id||row.request_hash!==hashCanonicalRequest({type:'input',requestId:id.requestId,content:payload.prompt})||!proof)throw Error('Invalid private background routing provenance');
+        continue;
+      }
       const scope = mapping.bindings.find(b => b.chatJid === row.chat_jid && b.branchId === row.branch_id);
       if (row.domain !== mapping.domain || row.incarnation !== mapping.domain || !scope) throw Error("Invalid durable application routing provenance");
       if (scope.conversationId === row.conversation_id) continue;
@@ -954,6 +984,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let harness: Awaited<ReturnType<typeof Harness.open>> | undefined;
   let mapping!: { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
   let primary: unknown;
+  let backgroundContexts:readonly NativeBackgroundContext[]=[];
+  let backgroundPayloads=new Map<string,NativeBackgroundPayload>();
   // Bootstrap publishes metadata even in explicit offline maintenance. Runtime
   // creation checks execution admission separately, before and after publication.
   async function publishApplicationBinding(tx: import("@earendil-works/pi-durable").Tx, domain: string, chatJid: string, branchId: string) {
@@ -1000,6 +1032,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const persisted = await harness.snapshot(ApplicationConversations, app.id, context);
     validateApplicationMapping(root, persisted);
     mapping = JSON.parse(JSON.stringify(persisted));
+    backgroundContexts=readNativeBackgroundContexts(root,mapping.domain);
+    backgroundPayloads=readNativeBackgroundPayloads(root,backgroundContexts,readBackgroundPayloadText);
     // Older native bootstrap omitted thinkingLevel entirely. Repair only that
     // omission through the public SDK; an explicitly selected off is preserved.
     const missingThinking = await app.commit(async tx => {
@@ -1116,6 +1150,29 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: (input, onlyIfIdle = true) => bundle.admitHostFollowup(input, onlyIfIdle),
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+        background:{contexts:backgroundContexts,payloads:backgroundPayloads,
+          sourceIdForAddon:id=>nativeBackgroundSourceId(addonBackgroundOrigin(root,id)),
+          prepareAddon(id,existing){
+            const choice=existing?{provider:existing.policy.model.provider,id:existing.policy.model.modelId}:ref;check(choice,lifetime.signal);
+            const physical=host.modelRuntime.getPhysicalModel(choice.provider,choice.id)!;
+            const payload=prepareAddonBackgroundPayload(root,id,{provider:physical.provider,modelId:physical.id,api:physical.api},existing,name=>defaultToolNames.includes(name as typeof defaultToolNames[number])&&tools.some(tool=>tool.name===name));
+            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);return payload;
+          },
+          assertCurrent(payload){check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
+            const model=host.modelRuntime.getPhysicalModel(payload.policy.model.provider,payload.policy.model.modelId)!;assertNativeBackgroundModel(payload.policy,model);},
+          put(payload){assert();const file=payloadPath(payload.policy.sourceId),encoded=JSON.stringify(payload);if(Buffer.byteLength(encoded)>1024*1024)throw Error('Background payload exceeds storage bound');
+            mkdirSync(payloadDir,{recursive:true});let fd:number,created=false;
+            try{fd=openSync(file,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);created=true;}
+            catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;if(readBackgroundPayloadText(payload.policy.sourceId)!==encoded)throw Error('Immutable background input collision');
+              fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);}
+            try{if(created)writeFileSync(fd,encoded,'utf8');fsyncSync(fd);}finally{closeSync(fd);}
+            if(readBackgroundPayloadText(payload.policy.sourceId)!==encoded)throw Error('Background payload publication changed');
+            const directory=openSync(payloadDir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}
+          },
+          publish: (tx,payload)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!],()=>{
+            check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
+          }),
+        },
         assertAdmission: input => processControls!.assertAdmission(input),
         assertInputAdmission(chat) { assertAdmission(); ensureLiveWatch(chat); },
         materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
@@ -1242,6 +1299,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const position = bundle.sessionOptions.getDurableSession?.(chat);
       return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
     },
+    prepareAddonOperation:async()=>{throw Error('Offline maintenance cannot admit background operations');},
     dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
     dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
     bind(options) {

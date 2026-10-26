@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   createNativeBackgroundPayload,readNativeBackgroundPayload,readNativeBackgroundPolicy,
-  nativeBackgroundSourceId,nativeBackgroundIdentity,nativeBackgroundPolicyHash,
+  nativeBackgroundSourceId,nativeBackgroundIdentity,nativeBackgroundContextKey,nativeBackgroundPolicyHash,
   assertNativeBackgroundRetry,assertNativeBackgroundDeadline,assertNativeBackgroundModel,type NativeBackgroundPolicyInput,
 } from "../../src/agent-pool/background-operation-contract.js";
 const input=():NativeBackgroundPolicyInput=>({
-  origin:{kind:'addon',operationId:'op:fixture',addonId:'fixture-addon',principalId:'operator:fixture',target:'private-review',grantRevision:'rev:7'},
+  origin:{kind:'addon',operationId:'op:fixture',addonId:'fixture-addon',principalId:'operator:fixture',target:'private-review',grantRevision:'rev:7',inputSequence:1},
   workId:'operation-work:fixture',parentWorkId:'parent-work:fixture',model:{provider:'qualification',modelId:'synthetic',api:'openai-completions'},
   allowedTools:['write','read'],maxToolCalls:3,acceptedAt:'2026-10-26T15:20:00.000Z',expiresAt:'2026-10-26T15:23:00.000Z',
   prompt:'PRIVATE_PROMPT π',instructions:'PRIVATE_INSTRUCTIONS',
@@ -35,7 +35,14 @@ test('background policy: different principals and operations never share a sourc
   const dream={...input(),origin:{kind:'dream' as const,invocationId:'invocation:fixture',chatJid:'web:original',mode:'manual' as const},maxToolCalls:null};
   const manual=createNativeBackgroundPayload(dream).policy,auto=createNativeBackgroundPayload({...dream,origin:{...dream.origin,mode:'auto'}}).policy;
   expect(manual.sourceId).toBe(auto.sourceId);expect(()=>assertNativeBackgroundRetry(manual,auto)).toThrow('retry identity conflict');
-  expect(nativeBackgroundIdentity(manual).chatJid).toStartWith('dream:manual:');expect(nativeBackgroundIdentity(manual).branchId).toStartWith('background:');
+  expect(nativeBackgroundIdentity(manual).chatJid).toStartWith('dream:');expect(nativeBackgroundIdentity(manual).branchId).toStartWith('background:');
+});
+test('background policy: explicit owner queue sequence creates another input without duplicating private context',()=>{
+  const prior=input(),origin=prior.origin as Extract<typeof prior.origin,{kind:'addon'}>;
+  const first=createNativeBackgroundPayload(prior).policy,next=createNativeBackgroundPayload({...prior,origin:{...origin,inputSequence:2}}).policy;
+  expect(first.sourceId).not.toBe(next.sourceId);expect(nativeBackgroundContextKey(first.origin)).toBe(nativeBackgroundContextKey(next.origin));
+  expect(nativeBackgroundIdentity(first).chatJid).toBe(nativeBackgroundIdentity(next).chatJid);expect(nativeBackgroundIdentity(first).branchId).toBe(nativeBackgroundIdentity(next).branchId);
+  for(const inputSequence of [0,-1,NaN,1.5])expect(()=>createNativeBackgroundPayload({...prior,origin:{...origin,inputSequence}})).toThrow('Invalid native background');
 });
 test('background policy: payload decoding rejects changed content, schema, and binding identity instead of adopting it',()=>{
   const payload=createNativeBackgroundPayload(input());

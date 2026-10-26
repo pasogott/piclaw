@@ -16,6 +16,7 @@ import {
 import { withExternalAddonRegistrationContext } from "../../src/addons/external-routes.js";
 import { createTempWorkspace, type TempWorkspace } from "../helpers.js";
 import type { RunAgentOptions } from "../../src/agent-pool/contracts.js";
+import {readAddonOperation,readAddonOperationInputSequence} from '../../src/db/addon-operations.js';
 
 let ws: TempWorkspace;
 let config: OperationsConfig;
@@ -153,6 +154,22 @@ test("host sends only a dedicated operation session, mandatory tool ceiling, bou
     service.shutdown();
     await service.waitForIdle();
   }
+});
+
+test('native input identity uses queued events rather than mutable status/input markers',async()=>{
+  const epochs:(number|null)[]=[];let calls=0;
+  const host=createOperationHost({runAgent:async(_prompt,chat,options)=>{
+    const id=chat.slice('operation:'.length);epochs.push(readAddonOperationInputSequence(id));
+    options.onOperationInputCommitted?.();epochs.push(readAddonOperationInputSequence(id));calls++;
+    return calls===1?{status:'success',result:null,requiresToolEnabledContinuation:true}:{status:'success',result:'completed'};
+  }},()=>config);
+  const service=new AddonOperationService(host),client=service.bind(principal);
+  try{
+    const first=await client.admit({target:'echo',idempotencyKey:'input-epochs',text:'first'});await service.waitForIdle();
+    expect(readAddonOperation(first.operation!.id)?.status).toBe('input_required');expect(readAddonOperationInputSequence(first.operation!.id)).toBe(1);
+    await client.continue(first.operation!.id,'second');await service.waitForIdle();
+    expect(epochs).toEqual([1,1,4,4]);expect(readAddonOperation(first.operation!.id)?.sequence).toBe(6);expect(readAddonOperationInputSequence(first.operation!.id)).toBe(4);
+  }finally{service.shutdown();await service.waitForIdle();}
 });
 
 test("generic ABI registration belongs to startup package, not a caller supplied add-on id", async () => {

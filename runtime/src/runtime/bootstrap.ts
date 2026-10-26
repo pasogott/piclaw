@@ -13,7 +13,7 @@ import type { WebChannelOpts } from "../channels/web.js";
 export interface RuntimeBackend {
   /** Resolves only after a failed public SDK session has closed its storage. */
   readonly storageFailure?: Promise<unknown>;
-  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand">>;
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
   attachChannel?(channel: NativeTurnViewChannel & { resumePendingChats?(chatJid?: string): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
@@ -90,6 +90,11 @@ export async function createRecoverableRuntimeBackend(prepare: () => Promise<Run
   };
   const sessionOptions: RuntimeBackend["sessionOptions"] = Object.freeze({
     getDurableSession,
+    prepareAddonOperation: current.sessionOptions.prepareAddonOperation ? async (...args) => {
+      await ready();
+      if(!current.sessionOptions.prepareAddonOperation)throw Error("Native add-on admission unavailable");
+      return current.sessionOptions.prepareAddonOperation(...args); // No automatic replay after uncertain admission.
+    } : undefined,
     dispatchScheduledAgent: current.sessionOptions.dispatchScheduledAgent ? async (...args) => {
       await ready();
       if (!current.sessionOptions.dispatchScheduledAgent) throw Error("Native scheduled dispatch unavailable");

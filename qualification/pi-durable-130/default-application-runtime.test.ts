@@ -19,7 +19,7 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync, renameSync, rmSync,linkSync,chmodSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
@@ -156,7 +156,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-runner-denial", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -812,6 +812,94 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       await close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
       owner.release(); closeDatabase();
+    }
+    return;
+  }
+  if(scenario==='native-addon-admission'||scenario==='native-addon-admission-rollback'||scenario==='native-addon-admission-overlap'||scenario==='native-addon-admission-rejected'||scenario==='native-addon-admission-alias'){
+    const operations=await import('../../runtime/src/db/addon-operations.js');
+    const configuration=getConfigPath(),saved=existsSync(configuration)?readFileSync(configuration,'utf8'):undefined;
+    const configured=saved?JSON.parse(saved):{};configured.domains??={};
+    const grant={revision:'native-r1',target:'fixture',allowedTools:['read','write'],timeoutMs:60_000,maxToolCalls:2,parentWorkId:'native-addon-parent'};
+    configured.domains.operations={enabled:true,grants:[{addonId:'native-fixture',principalId:'operator',...grant,enabled:true,approvalRequired:false}]};
+    mkdirSync(join(workspace,'.piclaw'),{recursive:true});writeFileSync(configuration,JSON.stringify(configured),{mode:0o600});
+    const {ensureBudgetWork}=await import('../../runtime/src/db/budget-limits.js');ensureBudgetWork({id:grant.parentWorkId,chatJid:'web:default',executionKind:'interactive'});
+    const text='Admit a private operation without legacy context',id='native-addon-fixture',at=new Date().toISOString();
+    operations.admitAddonOperation({id,addonId:'native-fixture',principalId:'operator',idempotencyKey:'native-admission',inputHash:createHash('sha256').update(JSON.stringify([grant.target,text])).digest('hex'),text,target:grant.target,grant,
+      chatJid:'operation:'+id,workId:'operation:'+id,status:'queued',sequence:1,createdAt:at,updatedAt:at,output:null,reason:null});
+    operations.transitionAddonOperation(id,['queued'],'working');
+    let reopened:Awaited<ReturnType<typeof createDefaultApplicationRuntime>>|undefined,reopenedBase:ReturnType<typeof createRuntimeBaseServices>|undefined,reopenedPool:AgentPool|undefined;
+    try{
+      const publicRows=()=>['chats','chat_branches','messages','chat_cursors'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      const before=publicRows(),ordinary=(await pool.getDurableSessionMetadata('web:default'));
+      if(scenario==='native-addon-admission-rejected'){
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));const owned=snapshot();
+        await expect(pool.prepareAddonOperation(id)).rejects.toThrow('grant changed');expect(snapshot()).toEqual(owned);expect(publicRows()).toEqual(before);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      if(scenario==='native-addon-admission-overlap'){
+        const chat='operation:'+id;storeChatMetadata(chat,at);await bound.prepareInputSourceAdmission!(chat);
+        const snapshot=()=>['chats','chat_branches','conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot();await expect(pool.prepareAddonOperation(id)).rejects.toThrow('already bound to a public/imported context');
+        expect(snapshot()).toEqual(owned);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      if(scenario==='native-addon-admission-rollback'){
+        const ownedRows=()=>['service_effect_s01_chats','service_effect_s01_sources','service_effect_s01_operations','service_effect_s01_operation_sources','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const untouched=ownedRows();root.exec("CREATE TEMP TRIGGER fail_background_binding BEFORE INSERT ON piclaw_durable_bindings_v1 WHEN NEW.source_id LIKE 'background:%' BEGIN SELECT RAISE(ABORT,'background binding fault'); END");
+        try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('background binding fault');}
+        finally{root.exec('DROP TRIGGER fail_background_binding');}
+        expect(ownedRows()).toEqual(untouched);expect(publicRows()).toEqual(before);expect(calls).toBe(0);
+        const contexts=root.query('SELECT id FROM conversations').all();
+        backend.stop();await backend.close();
+        await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration);
+        reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+        reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+        const recovered=await reopenedPool.prepareAddonOperation(id);expect(recovered.sourceSeq).toBe(1);expect(root.query('SELECT id FROM conversations').all()).toEqual(contexts);
+        expect(await reopenedPool.prepareAddonOperation(id)).toEqual(recovered);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+        return;
+      }
+      const admitted=await pool.prepareAddonOperation(id);
+      if(scenario==='native-addon-admission-alias'){
+        const file=join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),held=file+'.owned';
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot();renameSync(file,held);symlinkSync(held,file);
+        try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{rmSync(file);}
+        linkSync(held,file);try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{rmSync(file);renameSync(held,file);}
+        chmodSync(file,0o644);try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{chmodSync(file,0o600);}
+        expect(await pool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      expect(admitted.chatJid).toBe('operation:'+id);expect(admitted.sourceId).toStartWith('background:');
+      expect(publicRows()).toEqual(before);expect(backend.sessionOptions.getDurableSession?.(admitted.chatJid)).toBeUndefined();expect(await pool.getDurableSessionMetadata(admitted.chatJid)).toBeNull();
+      expect(()=>bound.getInputSourceAdmission!(admitted.chatJid)).toThrow('Unbound application conversation');
+      expect(await pool.getDurableSessionMetadata('web:default')).toEqual(ordinary);
+      expect(root.query('SELECT submission_id FROM piclaw_durable_bindings_v1 WHERE operation_id=?').get(admitted.operationId)).toEqual({submission_id:null});
+      expect(root.query('SELECT phase FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'claimed'});
+      expect(root.query('SELECT execution_kind,parent_work_id FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({execution_kind:'background',parent_work_id:'operation:'+id});
+      operations.markAddonOperationInputCommitted(id); // Mutable compatibility marker is not native payload authority.
+      expect(await pool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(root.query('SELECT count(*) AS n FROM submissions').get()).toEqual({n:0});
+      backend.stop();await backend.close();
+      await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration);
+      configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));
+      reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+      reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const reopenedBound=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+      await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('grant changed'); // Revocation did not prevent passive cold recovery.
+      configured.domains.operations.enabled=true;writeFileSync(configuration,JSON.stringify(configured));
+      expect(await reopenedPool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(publicRows()).toEqual(before);
+      const privateRows=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      root.query('UPDATE budget_work SET parent_work_id=? WHERE id=?').run(grant.parentWorkId,'durable-operation:'+admitted.operationId);
+      const cutAncestry=privateRows();await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('budget ancestry unavailable');expect(privateRows()).toEqual(cutAncestry);
+      root.query('UPDATE budget_work SET parent_work_id=? WHERE id=?').run('operation:'+id,'durable-operation:'+admitted.operationId);
+      const accepted=privateRows();configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));
+      await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('grant changed');expect(privateRows()).toEqual(accepted);
+      const ordinaryMessage={id:'ordinary-after-background-revocation',chat_jid:'web:default',sender:'user',sender_name:'User',content:'An unrelated ordinary input must still run',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+      const ordinaryRow=root.transaction(()=>{const rowId=storeMessage(ordinaryMessage);reopenedBound.getInputSourceAdmission!('web:default')!({message:ordinaryMessage,rowId,database:root});return rowId;}).immediate();
+      expect(await reopenedBound.dispatchAcceptedInput!('web:default',ordinaryMessage.id,ordinaryRow)!()).toBe('settled');expect(calls).toBe(1);
+      expect(root.query('SELECT phase FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'claimed'});
+      expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    }finally{
+      if(saved===undefined)rmSync(configuration,{force:true});else writeFileSync(configuration,saved);
+      reopened?.stop();await reopened?.close();await reopenedBase?.queue.shutdown();await reopenedPool?.shutdown();
+      backend.stop();await backend.close();await channel.stop();await base.queue.shutdown();await pool.shutdown();
+      for(const spy of [...captureSpies,...sdkSpies])spy.mockRestore();owner.release();closeDatabase();
     }
     return;
   }

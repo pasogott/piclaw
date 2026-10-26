@@ -33,7 +33,9 @@ import type { ScheduledRunLease } from "../../src/service-effects/contracts/sche
 import { QueuedFollowupLifecycleService } from "../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import type { QueuedFollowupItem } from "../../src/queued-followups.js";
 import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import type { ConversationId,Tx } from "@earendil-works/pi-durable";
+import { nativeBackgroundIdentity,readNativeBackgroundPayload,type NativeBackgroundPayload } from "../../src/agent-pool/background-operation-contract.js";
+import { backgroundPolicyProvenance,type NativeBackgroundContext } from "./host-background-context.js";
 
 import { createDurableQueuedSteering } from "../../src/agent-pool/durable-queued-steering.js";
 import { storeWebMessage } from "../../src/channels/web/messaging/message-store.js";
@@ -75,6 +77,17 @@ export function applicationOwnership(lock: RuntimeLockHandle) {
 export interface ApplicationBootstrapOptions {
   root: Database;
   path: string;
+  background?: {
+    contexts:readonly NativeBackgroundContext[];
+    payloads:ReadonlyMap<string,NativeBackgroundPayload>;
+    sourceIdForAddon(operationId:string):string;
+    prepareAddon(operationId:string,existing:NativeBackgroundPayload|undefined):NativeBackgroundPayload;
+    assertCurrent(payload:NativeBackgroundPayload):void;
+    /** Installed only with fully qualified model/tool/accounting/abort ports. */
+    assertExecution?: (payload:NativeBackgroundPayload)=>void;
+    put(payload:NativeBackgroundPayload):void|Promise<void>;
+    publish(tx:Tx,payload:NativeBackgroundPayload):Promise<NativeBackgroundContext>;
+  };
   ownership: ReturnType<typeof applicationOwnership>;
   manifest: Manifest;
   /** Original host session identities, not a new bootstrap-generated identity. */
@@ -137,9 +150,20 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   // Never invent a branch or choose a first/default row for an existing chat.
   assertApplicationBranchRoutes(root, manifest, config.historicalBindings === true);
   const routeIndex = new Map(manifest.map(b => [b.chatJid, Object.freeze({ ...b, sessionId: sessions.get(b.chatJid)! })]));
+  const backgroundSource = config.background;
+  const background = backgroundSource&&Object.freeze({contexts:backgroundSource.contexts.map(entry=>Object.freeze({...entry})),payloads:new Map(backgroundSource.payloads),
+    sourceIdForAddon:backgroundSource.sourceIdForAddon.bind(backgroundSource),prepareAddon:backgroundSource.prepareAddon.bind(backgroundSource),
+    assertCurrent:backgroundSource.assertCurrent.bind(backgroundSource),assertExecution:backgroundSource.assertExecution?.bind(backgroundSource),put:backgroundSource.put.bind(backgroundSource),publish:backgroundSource.publish.bind(backgroundSource)});
+  const privateIndex = new Map((background?.contexts??[]).map(b=>[b.chatJid,Object.freeze({...b})]));
+  const backgroundPayloads = new Map(background?.payloads??[]);
+  if(privateIndex.size!==(background?.contexts.length??0)||new Set([...privateIndex.values()].map(entry=>entry.conversationId)).size!==privateIndex.size)throw Error('Duplicate private background identity');
+  if([...privateIndex.values()].some(b=>routeIndex.has(b.chatJid)||manifest.some(publicBinding=>publicBinding.conversationId===b.conversationId||publicBinding.branchId===b.branchId)))throw Error('Private background context overlaps a public route');
+  const recoveryManifest = [...manifest,...privateIndex.values()].map(({chatJid,branchId,conversationId})=>({chatJid,branchId,conversationId}));
+  const scopeFor = (chat:string)=>routeIndex.get(chat)??privateIndex.get(chat);
   const lookup = (chat: string, branch: string) => {
-    const binding = routeIndex.get(chat);
+    const binding = scopeFor(chat);
     if (binding?.branchId !== branch) return undefined;
+    if(privateIndex.get(chat)===binding)return binding;
     // Match the explicit synthetic-main contract used by branch preflight.
     if (branch !== "main" && !root.query(
       "SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL",
@@ -173,6 +197,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     // Resolve only actual root messages and verify both accepted reference and source identity.
     async function content(ref: string, input: AcceptedInput | { chatJid: string; sourceId: string }) {
       assert();
+      if(input.sourceId.startsWith('background:')){
+        const payload=backgroundPayloads.get(input.sourceId);
+        if(!payload||ref!==payload.policy.sourceId||nativeBackgroundIdentity(payload.policy).chatJid!==input.chatJid||!(privateIndex.has(input.chatJid)))throw Error('Unverified background input payload');
+        return payload.prompt;
+      }
       if (input.sourceId.startsWith("side-prompt:") && ref === input.sourceId &&
         (!("conversationId" in input) || bindings.resolveConversation(input) === input.conversationId)) {
         const payload = await config.answers.resolver.resolve(ref); assert();
@@ -194,7 +223,24 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       }
       return readApplicationMessagePayload(root, r.incarnation, input, ref);
     }
-    const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
+    const resolveBackground = (input:AcceptedInput) => {
+      if(!input.sourceId.startsWith('background:'))return undefined;
+      const payload=backgroundPayloads.get(input.sourceId),scope=privateIndex.get(input.chatJid);
+      if(!payload||!scope)return undefined;
+      const id=nativeBackgroundIdentity(payload.policy);
+      if(id.contextKey!==scope.contextKey||id.chatJid!==input.chatJid||id.branchId!==input.branchId||id.operationId!==input.operationId||id.sourceId!==input.sourceId||input.payloadRef!==id.payloadRef||input.requestId!==id.requestId||input.conversationId!==scope.conversationId||
+        input.requestHash!==hashCanonicalRequest({type:'input',requestId:id.requestId,content:payload.prompt}))throw Error('Background native binding conflict');
+      const proof=root.query(`SELECT 1 FROM service_effect_s01_sources s JOIN service_effect_s01_operations o ON o.chat_jid=s.chat_jid AND o.primary_source_seq=s.source_seq
+        JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq AND os.operation_id=o.operation_id
+        WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=? AND s.kind='internal' AND s.provenance_ref=? AND o.operation_id=?`)
+        .get(input.chatJid,input.sourceSeq,id.sourceId,id.payloadRef,backgroundPolicyProvenance(payload),id.operationId);
+      if(!proof)throw Error('Background accepted source proof missing');return scope.conversationId;
+    };
+    const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest:recoveryManifest, getConversationBinding: lookup,
+      assertOwner: assert, resolveContent: content,resolveBackground,
+      assertBackgroundExecution(input){const payload=backgroundPayloads.get(input.sourceId);if(!payload||!background)throw Error('Background authority unavailable');background.assertCurrent(payload);
+        if(!background.assertExecution)throw Error('Native background execution port is not qualified');
+        const result:unknown=background.assertExecution(payload);if(result!==undefined){void Promise.resolve(result).catch(()=>{});throw Error('Background execution guard must be synchronous');}} });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
@@ -238,10 +284,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           () => candidateDatabase.withCompactionGuard(body)),
         withSessionResetGuard: (chatJid, body) => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
           () => candidateDatabase.withSessionResetGuard(chatJid, body)),
-        existingConversationIds: manifest.map(b => b.conversationId),
+        existingConversationIds: recoveryManifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
-      recovery: { manifest, work, bindings, async readAcceptedInput(source) {
+      recovery: { manifest:recoveryManifest, work, bindings, async readAcceptedInput(source) {
         assert();
         if (source.kind !== "message" && source.kind !== "scheduled_agent" && source.kind !== "internal") throw Error("Unsupported recovered source");
         const binding = await bindings.findSource(source.chatJid, source.sourceSeq);
@@ -252,7 +298,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const operationId = binding?.operationId ?? pendingSideOperation?.operation_id ?? source.targetOperationId;
         if (!operationId) throw Error("Missing recovered operation identity");
         const operation = value(await work.getOperation(operationId));
-        const scope = routeIndex.get(source.chatJid);
+        const scope = scopeFor(source.chatJid);
         if (!operation || !scope) throw Error("Missing recovered operation");
         return { claimed: { source, operation }, branchId: scope.branchId,
           requestId: binding?.requestId ?? (pendingSideOperation ? source.sourceId : `queued-steer:${source.sourceId}`), content: await content(source.payloadRef, (source.kind === "scheduled_agent" || source.kind === "internal") && binding ? binding : source) };
@@ -279,6 +325,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
     const hostControls = new Map<Promise<unknown>, string>();
+    const backgroundPreparing = new Map<string,Promise<AcceptedInput>>();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
@@ -420,6 +467,57 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     };
     const preparing = new Map<string, Promise<void>>();
     const assertLive = () => { assert(); if (closing || shutdown.signal.aborted) throw Error("Application closing"); };
+    async function prepareAddonOperation(operationId:string,signal?:AbortSignal):Promise<AcceptedInput>{
+      assertLive();config.assertAdmission?.();signal?.throwIfAborted();if(!background)throw Error('Native background admission unavailable');
+      const sourceId=background.sourceIdForAddon(operationId),prior=backgroundPayloads.get(sourceId);
+      const payload=readNativeBackgroundPayload(background.prepareAddon(operationId,prior)),identity=nativeBackgroundIdentity(payload.policy);
+      const check=()=>{assertLive();config.assertAdmission?.();signal?.throwIfAborted();const result:unknown=background.assertCurrent(payload);
+        if(result!==undefined){void Promise.resolve(result).catch(()=>{});throw Error('Background admission guard must be synchronous');}};
+      check();if(identity.sourceId!==sourceId)throw Error('Background source identity changed');
+      if(routeIndex.has(identity.chatJid))throw Error('Background identity is already bound to a public/imported context');
+      if(backgroundPreparing.has(sourceId))return backgroundPreparing.get(sourceId)!;
+      const existing=privateIndex.get(identity.chatJid);
+      if(existing&&!prior)throw Error('Explicit native continuation admission is not yet qualified');
+      backgroundPayloads.set(sourceId,payload);
+      let commitPossible=false;
+      const preparing=(async()=>{
+        await background.put(payload);check();
+        let scope=existing;
+        if(!scope){commitPossible=true;
+          const created=await candidateDatabase.withAdmissionGuard(check,()=>activeController.addConversation(tx=>background.publish(tx,payload),check));check();
+          if(created.contextKey!==identity.contextKey||created.chatJid!==identity.chatJid||created.branchId!==identity.branchId)throw Error('Published background context mismatch');
+          scope=Object.freeze({...created});privateIndex.set(identity.chatJid,scope);
+        }
+        if(scope.contextKey!==identity.contextKey||scope.branchId!==identity.branchId)throw Error('Background owner context changed');
+        const context=scope;
+        commitPossible=true;
+        const accepted=root.transaction(()=>{
+          check();const current=work.getAcceptedSource(identity.chatJid,identity.sourceId);
+          if(current){
+            const row=root.query('SELECT source_seq,request_hash,conversation_id FROM piclaw_durable_bindings_v1 WHERE domain=? AND incarnation=? AND operation_id=?')
+              .get(r.incarnation,r.incarnation,identity.operationId) as {source_seq:number;request_hash:string;conversation_id:number}|null;
+            if(!row||row.source_seq!==current.sourceSeq||row.conversation_id!==context.conversationId||row.request_hash!==hashCanonicalRequest({type:'input',requestId:identity.requestId,content:payload.prompt}))throw Error('Background replay binding unavailable');
+            const budget=getBudgetWork(operationBudgetWorkId(identity.operationId),root);
+            if(!budget||budget.chat_jid!==identity.chatJid||budget.execution_kind!=='background'||budget.parent_work_id!==payload.policy.workId)throw Error('Background replay budget ancestry unavailable');
+            return current.sourceSeq;
+          }
+          const frontier=root.query('SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?').get(identity.chatJid) as {consumed_through_source_seq:number;active_operation_id:string|null}|null;
+          if(frontier?.active_operation_id)throw Error('Background owner already has accepted work');
+          const provenanceRef=backgroundPolicyProvenance(payload);
+          const claimed=work.acceptAndClaimSourceInTransaction(sealed({effect:{...effect(`accept:${sourceId}`),provenanceRef},chatJid:identity.chatJid,sourceId,kind:'internal',payloadRef:sourceId,targetOperationId:null,parentSourceSeq:null,acceptedAt:payload.policy.acceptedAt,createWakeIntent:false}),
+            sealed({effect:{...effect(`claim:${sourceId}`),provenanceRef},chatJid:identity.chatJid,expectedFrontier:frontier?.consumed_through_source_seq??0,newOperationId:identity.operationId,claimedAt:r.now()}),root);
+          root.query(`INSERT INTO piclaw_durable_bindings_v1(domain,incarnation,conversation_id,chat_jid,branch_id,operation_id,source_seq,source_id,payload_ref,request_id,request_hash)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(r.incarnation,r.incarnation,context.conversationId,identity.chatJid,identity.branchId,identity.operationId,claimed.source.sourceSeq,sourceId,sourceId,sourceId,hashCanonicalRequest({type:'input',requestId:sourceId,content:payload.prompt}));
+          ensureBudgetWork({id:operationBudgetWorkId(identity.operationId),chatJid:identity.chatJid,executionKind:'background',parentWorkId:payload.policy.workId},root);
+          check();return claimed.source.sourceSeq;
+        }).immediate();
+        const input:AcceptedInput=Object.freeze({incarnation:r.incarnation,conversationId:context.conversationId,chatJid:identity.chatJid,branchId:identity.branchId,operationId:identity.operationId,
+          sourceSeq:accepted,sourceId,payloadRef:sourceId,requestId:sourceId,requestHash:hashCanonicalRequest({type:'input',requestId:sourceId,content:payload.prompt})});
+        check();if(resolveBackground(input)!==input.conversationId)throw Error('Accepted background correlation failed');return input;
+      })();
+      const pending=preparing.then(input=>{backgroundPreparing.delete(sourceId);return input;},error=>{if(!commitPossible)backgroundPreparing.delete(sourceId);throw error;});
+      backgroundPreparing.set(sourceId,pending);return pending;
+    }
     function prepareInputSourceAdmission(chat: string): Promise<void> {
       assert(); config.assertAdmission?.();
       if (closing || shutdown.signal.aborted) return Promise.reject(Error("Application closing"));
@@ -822,7 +920,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       // Inventory only. The process coordinator supplies the original owner
       // fence, including its final check after the borrowed SDK lease closes.
       assertProcessControlIdle() {
-        if (preparing.size || hostControls.size) throw Error("Host admission or credential/control work is active or uncertain");
+        if (preparing.size || hostControls.size || backgroundPreparing.size) throw Error("Host admission or credential/control work is active or uncertain");
       },
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined) {
         if (projection) { assertLive(); if (inputProjection) throw Error("Application input projection already bound"); }
@@ -838,7 +936,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return hostFollowups.enqueueAcceptedFollowupOnce(input.sourceId, input.chatJid, input.text, input.queuedAt,
           { source: "goal.continuation" }, admission, onlyIfIdle);
       },
-      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,
+      prepareAddonOperation,
+      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,prepareAddonOperation,
         dispatchHostCommand: config.dispatchHostCommand ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound command chat"); return config.dispatchHostCommand!(chat, text); } : undefined }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
@@ -866,6 +965,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
       assertProcessControlIdle(): void;
+      prepareAddonOperation(operationId:string,signal?:AbortSignal):Promise<AcceptedInput>;
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
       dispatchAcceptedInput: typeof dispatch;
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;

@@ -1,3 +1,4 @@
+import type Database from "bun:sqlite";
 import { getDb } from "./connection.js";
 import { ensureBudgetWork, setBudgetWorkStatus } from "./budget-limits.js";
 import {
@@ -45,10 +46,24 @@ export function operationSnapshot(r: OperationRecord): OperationSnapshot {
     reason: r.reason,
   };
 }
-export function readAddonOperation(id: string): OperationRecord | null {
+export function readAddonOperation(id: string, database:Database=getDb()): OperationRecord | null {
   return fromRow(
-    getDb().query("SELECT * FROM addon_operations WHERE id=?").get(id),
+    database.query("SELECT * FROM addon_operations WHERE id=?").get(id),
   );
+}
+/** The latest queued owner event identifies an explicitly accepted execution
+ * turn (new input or owner resume). Working/cancel status and mutable committed
+ * markers cannot mint a new epoch. This is never permission to resend old text. */
+export function readAddonOperationInputSequence(id:string,database:Database=getDb()):number|null {
+  const record=readAddonOperation(id,database);if(!record)return null;
+  for(const row of database.query('SELECT sequence,snapshot_json FROM addon_operation_events WHERE operation_id=? ORDER BY sequence DESC LIMIT 128').all(id) as {sequence:number;snapshot_json:string}[]){
+    const snapshot=JSON.parse(row.snapshot_json) as OperationSnapshot;
+    if(snapshot.status!=='queued')continue;
+    if(!Number.isSafeInteger(row.sequence)||row.sequence<1||snapshot.id!==record.id||snapshot.sequence!==row.sequence||snapshot.workId!==record.workId||snapshot.target!==record.target)
+      throw Error('Invalid add-on input identity event');
+    return row.sequence;
+  }
+  return null;
 }
 export function admitAddonOperation(record: OperationRecord): {
   created: boolean;
