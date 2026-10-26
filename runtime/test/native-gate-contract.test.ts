@@ -31,7 +31,7 @@ describe('canonical offline native contract', () => {
     expect(stages[3].cwd).toBe(join(ROOT, 'qualification/pi-durable-130'));
     expect(() => nativeStages({ ...contract, typeProjects: [] })).toThrow('both private type projects');
     expect(() => nativeStages({ ...contract, integrationTests: [] })).toThrow('required accepted-source');
-    for (const required of ['default-application-runtime.test.ts', 'runtime.test.ts', 'goal-tools.test.ts', 'goal-usage.test.ts', 'goal-settlement.test.ts', 'goal-terminal-race.test.ts', 'installed-goal-catalog.test.ts', 'native-compaction-settings.test.ts']) expect(contract.tests).toContain(required);
+    for (const required of ['default-application-runtime.test.ts', 'runtime.test.ts', 'goal-tools.test.ts', 'goal-usage.test.ts', 'goal-settlement.test.ts', 'goal-terminal-race.test.ts', 'installed-goal-catalog.test.ts', 'native-compaction-settings.test.ts', 'routing-policy.test.ts']) expect(contract.tests).toContain(required);
   });
 
   test('missing prerequisites and selection state fail actionably before any package or provider work', async () => {
