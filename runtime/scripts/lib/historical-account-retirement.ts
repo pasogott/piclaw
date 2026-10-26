@@ -92,12 +92,12 @@ export function snapshotHistoricalDatabase(db: Database, retainedOnly = false): 
       const info = kinds.find(t => t.schema === "main" && fold(t.name) === table.name);
       if (!info) throw Error("Missing table metadata during snapshot");
       if (Number(info.wr) === 0) {
-        for (const alias of ["_rowid_", "rowid", "oid"]) {
-          if (names.has(alias)) continue;
-          try {
-            const probe = db.prepare(`SELECT t.${quote(alias)} FROM main.${quote(table.name)} AS t LIMIT 0`);
-            probe.finalize(); columns.unshift(alias); break;
-          } catch { /* A virtual module may not expose rowid; try every unshadowed alias. */ }
+        const alias = ["_rowid_", "rowid", "oid"].find(name => !names.has(name));
+        if (alias) {
+          // Unknown virtual modules or failed metadata reads refuse the snapshot;
+          // never silently omit a rowid after a failed probe.
+          const probe = db.prepare(`SELECT t.${quote(alias)} FROM main.${quote(table.name)} AS t LIMIT 0`);
+          probe.finalize(); columns.unshift(alias);
         }
       }
       if (!columns.length) throw Error("No accessible logical columns during snapshot");
