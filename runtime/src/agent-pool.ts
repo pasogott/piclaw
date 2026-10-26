@@ -322,6 +322,11 @@ export class AgentPool {
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly addonAdmission?: AgentPoolOptions["prepareAddonOperation"];
+  private readonly addonDispatch?: AgentPoolOptions["dispatchAddonOperation"];
+  dispatchAddonOperation(operationId:string,signal:AbortSignal):Promise<AgentOutput>{
+    if(!this.durableApplication||!this.addonDispatch)throw Error('Native add-on execution unavailable');
+    return this.addonDispatch(operationId,signal);
+  }
   prepareAddonOperation(operationId:string,signal?:AbortSignal){
     if(!this.durableApplication||!this.addonAdmission)throw Error("Native add-on operation admission unavailable");
     signal?.throwIfAborted();return this.addonAdmission(operationId,signal);
@@ -340,6 +345,7 @@ export class AgentPool {
 
   constructor(options: AgentPoolOptions) {
     this.addonAdmission = options.prepareAddonOperation?.bind(options);
+    this.addonDispatch = options.dispatchAddonOperation?.bind(options);
     this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);

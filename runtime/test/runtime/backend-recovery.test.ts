@@ -46,6 +46,27 @@ test('background admission facade: uncertain cleanup prevents replacement admiss
   await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
 });
 
+test('background execution facade: joins cleanup, requires explicit same-owner retry and never automatically replays',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('unknown native dispatch');let prepares=0,oldCalls=0,nextCalls=0;
+  const signal=new AbortController().signal;old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchAddonOperation:async()=>{oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,dispatchAddonOperation:async(id,received)=>{expect([id,received]).toEqual(['accepted',signal]);nextCalls++;return{status:'success',result:'original native receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(failure);expect(oldCalls).toBe(1);
+  let finished=false;const explicit=backend.sessionOptions.dispatchAddonOperation!('accepted',signal).then(result=>{finished=true;return result;});
+  await tick();expect(finished).toBe(false);expect(prepares).toBe(1);expect(nextCalls).toBe(0);
+  gate.resolve();expect(await explicit).toEqual({status:'success',result:'original native receipt'});expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);expect(prepares).toBe(2);
+  await backend.close();await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toThrow('Native runtime closing');
+});
+test('background execution facade: uncertain cleanup prevents replacement or any retry',async()=>{
+  const old=fixture('old',[]),failure=Error('unknown dispatch'),cleanup=Error('uncertain close');let prepares=0;
+  old.state.closeError=cleanup;const signal=new AbortController().signal;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
 function failAbort(f: ReturnType<typeof fixture>, method: "abort" | "abortRetry" = "abort") {
   const error = Error("Session failed after a storage error");
   f.port[method] = async () => { f.failure.resolve(error); await tick(); throw error; };

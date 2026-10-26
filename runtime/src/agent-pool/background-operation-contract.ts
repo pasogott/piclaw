@@ -115,5 +115,6 @@ export function assertNativeBackgroundModel(policy:NativeBackgroundPolicy,physic
 }
 export function assertNativeBackgroundDeadline(policy:NativeBackgroundPolicy,now:number):void{
   const snapshot=readNativeBackgroundPolicy(policy);
-  if(!Number.isSafeInteger(now)||now<Date.parse(snapshot.acceptedAt)||now>=Date.parse(snapshot.expiresAt))throw Error("Native background deadline unavailable or expired");
+  if(!Number.isSafeInteger(now)||now<Date.parse(snapshot.acceptedAt))throw Error("Native background deadline unavailable or expired");
+  if(now>=Date.parse(snapshot.expiresAt)){const error=Error('Native background deadline unavailable or expired');error.name='TimeoutError';throw error;}
 }

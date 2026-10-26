@@ -17,6 +17,8 @@ import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } f
 import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import-schema.js";
+import { assertNativeBackgroundExecution,claimNativeBackgroundTool } from './host-background-policy.js';
+import { nativeBackgroundIdentity,readNativeBackgroundPolicy,type NativeBackgroundPolicy } from '../../src/agent-pool/background-operation-contract.js';
 import { projectPublicHistory } from "./session-tree.js";
 import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
@@ -81,7 +83,7 @@ export interface RuntimeOptions {
   readonly onMaintenanceSettled?: (workId: string) => void;
   readonly cancelSideSource?: (input: AcceptedInput) => void;
   /** Atomically persist operator cancellation against this exact operation version. */
-  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number) => void;
+  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number, cause?:'background_cancelled'|'background_timeout') => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   readonly withSessionResetGuard?: <T>(chatJid: string, body: () => Promise<T>) => Promise<T>;
@@ -1381,6 +1383,21 @@ export class HostConversationRuntime {
       });
     });
   }
+  /** Exact accepted private input, public SDK configuration and bounded quota.
+   * The same synchronous source fence also guards the actual host effect. */
+  qualifyBackgroundRequest(inputs:readonly HostInputBinding[],raw:NativeBackgroundPolicy,call?:{taskId:TaskId;callId:string;toolName:string}){
+    const policy=readNativeBackgroundPolicy(raw),captured=inputs.map(input=>Object.freeze({...inputSnapshot(input),submissionId:input.submissionId})),identity=nativeBackgroundIdentity(policy);
+    if(captured.length!==1||captured[0]!.sourceId!==identity.sourceId||captured[0]!.operationId!==identity.operationId||captured[0]!.chatJid!==identity.chatJid)throw Error('Exact background accepted input required');
+    const input=captured[0]!,actual=call&&Object.freeze({...call});
+    return this.observe(async()=>{
+      const check=()=>this.assertCapturedSourceCurrent(captured),guard=this.options.withPromptContextGuard;
+      if(!guard)throw Error('Background SDK transaction guard unavailable');check();
+      await guard(check,()=>this.harness.commit(async tx=>{
+        if(actual)await claimNativeBackgroundTool(tx,input.conversationId,policy,actual,Date.now(),check);
+        else await assertNativeBackgroundExecution(tx,input.conversationId,policy,Date.now(),check);
+      },this.context));check();
+    });
+  }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     return this.captureSource(conversationId, taskId);
@@ -1801,7 +1818,8 @@ export class HostConversationRuntime {
         throw new Error("Unsupported final assistant content");
       if (message.stopReason !== "stop" && message.stopReason !== "length") throw new Error("Unsupported final assistant stop reason");
       const text = message.content.map(part => part.type === "text" ? part.text : "").join("");
-      if (text.length > 65536) throw new Error("Answer exceeds qualification bound");
+      const addonBackground=/^background:[a-f0-9]{64}$/.test(input.sourceId)&&input.chatJid.startsWith('operation:')&&this.options.operationConversationFor?.(input)===input.conversationId;
+      if (addonBackground ? Buffer.byteLength(text,'utf8')>256*1024 : text.length>65536) throw new Error("Answer exceeds qualification bound");
       answer = freezeTree({ message: structuredClone(message), text });
     }
     return { operation, submissionId: record.id, status, answer };
@@ -1880,6 +1898,25 @@ export class HostConversationRuntime {
       // Publish the public failed-storage proof before a caller considers recovery.
       if (this.storageClosing) await this.storageEnded;
       throw error;
+    });
+  }
+  /** Only an exact private ownerless/unforked context may be aborted wholesale.
+   * Cancellation is owner cleanup and does not require a current spend grant. */
+  abortBackground(input:AcceptedInput,cause:'background_cancelled'|'background_timeout'='background_cancelled'):Promise<boolean>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      const o=this.options;
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||copy.requestId!==copy.sourceId||copy.payloadRef!==copy.sourceId||
+        o.operationConversationFor?.(copy)!==copy.conversationId||o.conversationFor(copy.chatJid,copy.branchId)!==copy.conversationId||!o.cancelOperationSource)throw Error('Exact private background abort required');
+      const state=await this.readState(copy);this.fence();
+      if(state.operation.terminal||state.status?.status==='done')return false;
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Exact private background abort required');
+      if(!state.operation.cancellation)o.cancelOperationSource(copy,state.operation.version,undefined,cause);
+      this.fence();await this.progress(copy);
+      const conversation=await this.harness.conversation(copy.conversationId,this.context);this.fence();
+      if(!conversation)throw Error('Missing private background conversation');
+      await conversation.abort(this.context);this.fence();return true;
     });
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */

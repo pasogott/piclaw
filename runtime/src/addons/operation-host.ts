@@ -8,6 +8,8 @@ import type { OperationHost,OperationPrincipal,OperationAdmission } from "./oper
 
 /** Injectable AgentPool surface keeps operation tests provider-free. */
 export interface OperationAgentPool {
+  isDurableRuntime?():boolean;
+  dispatchAddonOperation?(operationId:string,signal:AbortSignal):Promise<AgentOutput>;
   runAgent(
     prompt: string,
     chatJid: string,
@@ -66,7 +68,9 @@ export function createOperationHost(
   const host: OperationHost = {
     authorize: (principal,target,action) => authorizeAddonOperation(principal,target,action,readConfig),
     async execute(input) {
-      const output = await pool.runAgent(input.text, input.chatJid, {
+      const native=pool.isDurableRuntime?.()===true;
+      if(native&&!pool.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
+      const output = native ? await pool.dispatchAddonOperation!(input.operationId,input.signal) : await pool.runAgent(input.text, input.chatJid, {
         turnId: input.operationId,
         budgetWorkId: input.workId,
         budgetParentWorkId: input.grant.parentWorkId,
@@ -94,7 +98,7 @@ export function createOperationHost(
       if (output.failureCategory === "provider_budget")
         return { status: "budget_blocked", reason: "budget_boundary" };
       if (output.status === "error") {
-        if (input.signal.aborted && output.failureCategory === "aborted")
+        if ((native || input.signal.aborted) && output.failureCategory === "aborted")
           return { status: "cancelled", reason: "executor_cancelled" };
         return {
           status: "failed",

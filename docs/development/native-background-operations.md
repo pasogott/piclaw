@@ -1,6 +1,8 @@
 # Native background operation policy
 
-The immutable policy, per-input SDK quota and initial granted add-on admission path are implemented. `AgentPool.prepareAddonOperation()` derives authority from the persisted add-on owner and current host grant, publishes a private context, and composes the accepted source/binding/budget identity. It starts no model or tool. Background execution remains explicitly blocked until qualified execution ports are installed. Dispatch, continuation, cancellation/settlement and Dream/add-on execution-caller migration remain unfinished under #1670.
+The initial granted add-on path now uses native dispatch and settlement when no budget cap is enabled. `AgentPool.prepareAddonOperation()` derives authority from the persisted owner and current host grant, publishes a private context, and composes the accepted source/binding/budget identity without starting a model or tool. `dispatchAddonOperation()` uses that same identity through native submit/wait/settle; the real operation host selects it without calling the legacy runner.
+
+This remains unfinished under #1670: capped requests still fail closed, explicit continuation/resume and interrupted working-owner recovery need qualification, and Dream still uses the legacy runner. Initial execution tests do not establish full issue acceptance or merge readiness.
 
 ## Immutable input and retry identity
 
@@ -35,7 +37,9 @@ A quota claim never authorises resending a tool. Keep the SDK tool's existing sa
 
 The pinned SDK treats a thrown generation `beforeRequest` hook as a reported hook failure. It can continue the model request. That hook cannot serve as an admission fence.
 
-Production wiring must enforce policy through the existing host model bridge's source capture, request accounting and post-auth checks, and recheck current authority at actual tool effect boundaries after awaits. Before-tool quota checks are an additional boundary, not a replacement for those effect checks.
+The initial dispatcher enforces policy through the host model bridge's exact source capture, public SDK configuration checks, request accounting and post-auth checks. Synchronous host effect guards repeat current grant, model, policy-document, configuration, ancestry and execution-lease checks after awaits. A public SDK before-intent hook claims the actual tool task's quota. The hook returns unchanged for proven ordinary/Delegate inputs; unknown/private references still fail. Before-tool quota checks supplement the effect guards.
+
+The execution lease permits only an explicit dispatcher waiter. A failed/uncertain dispatch remains cached and sealed until reopen; it cannot silently start another request. This memory fence grants nothing without the persisted accepted source and current host permission. The existing awaited post-auth header transform is not an atomic network-send hook.
 
 The component fixture uses a public awaited header transform to exercise model refusal. That fixture is not an atomic post-auth dispatch proof and does not qualify production grants or an AgentPool caller.
 
@@ -43,9 +47,11 @@ The component fixture uses a public awaited header transform to exercise model r
 
 The sole application SDK owner publishes `app.background-contexts`; these private identities are separate from public chat routes and session controls. A fsynced immutable payload precedes metadata publication. EF-S01 accept/claim, native correlation and operation-budget ancestry then share one host transaction. A failed binding insert rolls back that whole host frame; the staged empty context and its payload remain for exact reopen/retry. They grant no execution.
 
-Same-input admission reuses the context/source/deadline, including after the compatibility owner replaces its mutable text with a committed-input marker. Missing original bytes are never reconstructed from that marker. Fresh grants and budget ancestry are checked; an existing public/imported binding cannot be reparented as a private context.
+Same-input admission reuses the context/source/deadline, including after the compatibility owner replaces its mutable text with a committed-input marker. The persisted working transition fixes the original start time; preparation cannot start another timeout window. Missing original bytes are never reconstructed from that marker. Fresh grants and budget ancestry are checked; an existing public/imported binding cannot be reparented as a private context.
 
 Read-only recovery proves the private manifest, policy family and immutable bytes without applying live grant permission. A revoked operation can be inspected/reopened while an unrelated ordinary chat continues. This includes a private input whose original model is no longer approved: retain that exact choice, deny re-admission/execution, and allow ordinary contexts using a still-approved model to reopen. Public/root contexts and unclassified agent documents retain their existing startup model-approval requirement. New spending/effect admission still requires current permission.
+
+The initial dispatcher joins native cancellation before settlement and persists a distinct timeout/cancellation cause. An already committed completion wins its race with cancellation. Replaying a terminal result reads the original SDK answer and EF-S02 outcome, including with a fresh signal after reopen; it submits no new input and spends no quota. Private settlement has no timeline row, outbox delivery or side-result cache. The add-on API retains its 256KiB UTF-8 output limit; the ordinary native answer bound is unchanged. Budget requests with unknown outcomes retain their holds and active operation work.
 
 Complete recovery-unit capture includes `native-background-input` references from policy families, even for staged contexts without an accepted source. It validates the policy/hash/owner/content binding; missing or modified input fails without a published manifest. No private source or payload is inferred from a filename alone.
 
@@ -54,12 +60,12 @@ Complete recovery-unit capture includes `native-background-input` references fro
 Before marking #1670 complete:
 
 1. Derive policy from trusted Dream/add-on records and current grants. Preserve the original absolute deadline, parent ancestry and exact model approval on retry.
-2. Extend the implemented private fresh-context/source publication to qualified dispatch and explicit continuation. Keep private contexts out of public chat targets, web admission and session controls; do not fabricate a web user message or branch.
+2. Extend initial dispatch to qualified explicit continuation/resume and interrupted working-owner recovery. Keep private contexts out of public chat targets, web admission and session controls; do not fabricate a web user message or branch.
 3. Compose EF-S01 acceptance/claim, native binding and accounting ancestry on the existing application store. Reuse exact source/request identities after lost ACK. A staged empty context cannot grant execution.
 4. Extend exact controller recovery and immutable binding checks for these private contexts. Unknown tasks remain denied. Revoked/expired work must not block passive inspection of unrelated chats or be replayed as a new run.
-5. Install quota/model/effect fences with live grant revalidation. Complete capped request accounting without weakening existing budget denials. Preserve cancellation and unsafe tool uncertainty.
+5. Extend the initial quota/model/effect fences to complete capped request accounting without weakening existing budget denials. Qualify revocation during held provider/tool execution, preterminal lost acknowledgements and unsafe tool uncertainty.
 6. Settle private results through existing SDK answers and EF-S02, without a second result-cache authority. Retain the implemented recovery closure for active and staged background payloads.
-7. Migrate Dream and granted add-on callers, including deterministic refresh, descriptor-bound lock ownership, cancellation, restart and source-owned cleanup. An uncertain still-running operation must retain its waiter/ownership; releasing a Dream lease while that work can still mutate notes is unsafe.
+7. Migrate Dream and finish the add-on service's interrupted-working and continuation lifecycle, including deterministic refresh, descriptor-bound lock ownership, cancellation, restart and source-owned cleanup. An uncertain still-running operation must retain its waiter/ownership; releasing a Dream lease while that work can still mutate notes is unsafe.
 8. Qualify actual native AgentPool callers with a synthetic provider, grants/tool ceilings, budget ancestry, deadlines, revocation, cancellation, same-ID lost ACK/reopen and no repeated effects. Component tests alone cannot establish this integration.
 
 ## Component evidence
@@ -68,6 +74,8 @@ Before marking #1670 complete:
 - Existing registered `qualification/pi-durable-130/host-controller.test.ts`, filter `^background policy SDK:`: actual SDK task quotas, concurrent calls, forged identity, revocation, expiry, configuration/API mismatch, repeated provider call IDs and a paused disk reopen with same-input replay. A deliberate second-input probe checks retained quota; it does not authorise production admission of another primary in a private one-operation context.
 - Existing default-factory cases `native-addon-admission`, `native-addon-admission-rollback`, `native-addon-admission-overlap`, `native-addon-admission-rejected` and `native-addon-admission-alias`: real native pool admission/reopen, private visibility, grant and ancestry refusal, shared-store rollback, payload alias/mode refusal and complete paused recovery. Admission itself makes no model call; one unrelated ordinary request proves revoked private work does not block it.
 - Default-factory cases `native-addon-admission-model-revoked` and `native-addon-admission-public-model-revoked`: passive recovery retains a revoked private model and denies new admission without modifying its records; an approved ordinary request still runs. An unapproved public model continues to block startup without database changes. The original private-startup failure and removed-public-guard counterfactual are retained.
-- Removed-quota and removed-deadline counterfactuals produce real SDK failures; source is restored byte-exact afterwards.
+- Native default-factory execution cases cover the real operation host and service, exact private results/reopen, grant withdrawal before tools and during credential resolution, cancellation/deadline outcomes, tool ceilings, quota and a 140KB Unicode result. The deadline fixture controls the host clock and named deadline callback at credential resolution; its 200ms policy and 30s harness limit are unchanged. This avoids making slow fixture publication count as the intended in-flight expiry. The accounting variant proves three reserved/dispatched/settled requests with background ancestry; unknown usage retains its unresolved hold across terminal replay/reopen with zero extra provider calls.
+- Completed private execution is captured as a complete recovery unit with exactly the immutable background input and native answer; verification and paused qualification succeed. Missing/tampered input still refuses publication.
+- Removing the production quota hook permits a second write to overwrite the fixture marker. Removing fresh grant revalidation lets revoked work complete. The defining tests fail; source is restored byte-exact afterwards. Earlier removed-quota/deadline component counterfactuals remain evidence too.
 
 No full suite, live database/configuration/credential access, deployment, restart, retention schedule, restore promotion or new UI pattern is implied. See [the current runner boundary](native-runner-boundary.md) and [complete recovery unit](native-recovery-unit.md).

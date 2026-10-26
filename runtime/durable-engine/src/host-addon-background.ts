@@ -42,7 +42,7 @@ export function prepareAddonBackgroundPayload(root:Database,id:string,model:Nati
   // bytes. Explicit continuations require an existing private-context proof.
   if(!prior&&createHash('sha256').update(JSON.stringify([record.target,record.text])).digest('hex')!==record.inputHash)
     throw Error('Original add-on input payload unavailable');
-  const acceptedAt=prior?.policy.acceptedAt??new Date().toISOString();
+  const acceptedAt=prior?.policy.acceptedAt??record.updatedAt; // Persisted working transition owns the original timeout.
   const payload=createNativeBackgroundPayload({origin,workId:record.workId,parentWorkId:record.grant.parentWorkId,model:prior?.policy.model??model,
     allowedTools:record.grant.allowedTools,maxToolCalls:record.grant.maxToolCalls,acceptedAt,
     expiresAt:prior?.policy.expiresAt??new Date(Date.parse(acceptedAt)+record.grant.timeoutMs).toISOString(),

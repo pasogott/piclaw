@@ -29,11 +29,13 @@ function bound(doc:Readonly<{sourceId:string|null;policySha256:string|null;calls
 }
 export { bound as assertNativeBackgroundBindingData };
 
-async function assertAgentPolicy(tx:Tx,id:ConversationId,policy:NativeBackgroundPolicy){
-  const agent=await tx.doc(AgentDoc,id);
+export function assertNativeBackgroundAgentData(agent:Readonly<{model?:{provider:string;modelId:string};instructions?:unknown;tools?:unknown}>,policy:NativeBackgroundPolicy){
   if(agent.model?.provider!==policy.model.provider||agent.model.modelId!==policy.model.modelId||typeof agent.instructions!=="string"||
     createHash("sha256").update(agent.instructions).digest("hex")!==policy.instructionsSha256||!Array.isArray(agent.tools)||
     agent.tools.some(name=>typeof name!=="string")||JSON.stringify([...agent.tools].sort())!==JSON.stringify(policy.allowedTools))throw Error("Native background agent configuration changed");
+}
+async function assertAgentPolicy(tx:Tx,id:ConversationId,policy:NativeBackgroundPolicy){
+  assertNativeBackgroundAgentData(await tx.doc(AgentDoc,id),policy);
 }
 /** Call only in the host-owned public allocation transaction, after current
  * grant/model checks. Existing same-policy binding is replay, never quota reset. */

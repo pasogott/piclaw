@@ -77,4 +77,8 @@ test('background policy: absolute deadline is inclusive at admission and never r
   expect(()=>assertNativeBackgroundDeadline(policy,start)).not.toThrow();expect(()=>assertNativeBackgroundDeadline(policy,end-1)).not.toThrow();
   for(const now of [start-1,end,end+1,NaN,Infinity])expect(()=>assertNativeBackgroundDeadline(policy,now)).toThrow('deadline unavailable or expired');
   const restored=readNativeBackgroundPolicy(JSON.parse(JSON.stringify(policy)));expect(()=>assertNativeBackgroundDeadline(restored,end)).toThrow('expired');
+  for(const [now,name] of [[end,'TimeoutError'],[start-1,'Error'],[NaN,'Error']] as const){
+    let error:unknown;try{assertNativeBackgroundDeadline(restored,now);}catch(caught){error=caught;}
+    expect(error).toBeInstanceOf(Error);expect((error as Error).name).toBe(name);
+  }
 });

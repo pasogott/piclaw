@@ -222,6 +222,8 @@ export interface PreparedNativeBackgroundInput {
 export interface AgentPoolOptions {
   /** Host-owned add-on admission; policy is derived from its persisted owner/grant. */
   prepareAddonOperation?: (operationId:string,signal?:AbortSignal)=>Promise<PreparedNativeBackgroundInput>;
+  /** Trusted persisted owner ID only; never a caller-supplied prompt or grant. */
+  dispatchAddonOperation?: (operationId:string,signal:AbortSignal)=>Promise<AgentOutput>;
   /** Application-owned native slash commands; never constructs a legacy session. */
   dispatchHostCommand?: (chatJid: string, rawText: string) => Promise<import("../agent-control/agent-control-types.js").AgentControlResult>;
   /** Select the durable backend for the entire pool. Captured bindings are exhaustive;

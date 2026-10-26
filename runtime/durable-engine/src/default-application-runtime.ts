@@ -17,13 +17,13 @@ import { HostCodexModelServices } from "./host-codex-model-services.js";
 import { createHostCodexArtifactStore, createHostCodexAnswerMaterializer } from "./host-codex-artifacts.js";
 import type { CodexOperation, NativeCodexFactories } from "./host-codex-model-profile.js";
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync,openSync,closeSync,fsyncSync,fstatSync,lstatSync,realpathSync } from "node:fs";
-import { readNativeBackgroundContexts,readNativeBackgroundPayloads,publishNativeBackgroundContext,backgroundPolicyProvenance,type NativeBackgroundContext } from './host-background-context.js';
+import { readNativeBackgroundContexts,readNativeBackgroundPayloads,publishNativeBackgroundContext,backgroundPolicyProvenance,assertStoredBackgroundExecution,type NativeBackgroundContext } from './host-background-context.js';
 import { addonBackgroundOrigin,prepareAddonBackgroundPayload,assertAddonBackgroundCurrent } from './host-addon-background.js';
 import { nativeBackgroundIdentity,nativeBackgroundSourceId,assertNativeBackgroundModel,type NativeBackgroundPayload } from '../../src/agent-pool/background-operation-contract.js';
 import { join, extname } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
-import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, defineTool, type ToolExecutionApi, type ConversationId } from "@earendil-works/pi-durable";
+import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, defineTool, type ToolExecutionApi, type ToolHooks, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createCodemodeTool } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -42,7 +42,8 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
-import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork } from "./host-request-accounting.js";
+import { getBudgetWork } from '../../src/db/budget-limits.js';
+import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork,operationBudgetWorkId } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
@@ -791,6 +792,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (scope.taskKind === "pi.generation") {
         const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
         requestSources.set(scope.signal, captured);
+        const background=bundle.backgroundPolicyFor(captured.inputs[0]!);
+        if(background)await runtime().qualifyBackgroundRequest(captured.inputs,background);
         return () => {
           signal!.throwIfAborted();
           runtime().assertCapturedSourceCurrent(captured.inputs);
@@ -843,10 +846,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const captured = requestSources.get(scope.signal);
       if (!captured) throw Error("Native request source capture unavailable");
       const scheduled = root.query("SELECT task_id FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId) as { task_id: string } | null;
+      const background=bundle.backgroundPolicyFor(captured.inputs[0]!);
+      if(background)assertNativeBackgroundModel(background,model);
       return reserveHostRequest({ database: root, operationId: captured.operation.operationId,
         chatJid: captured.operation.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
-        maxTokens: options?.maxTokens, executionKind: captured.delegateModel ? "delegate" : scheduled ? "scheduled" : "interactive",
-        scheduledTaskId: scheduled?.task_id, signal,
+        maxTokens: options?.maxTokens, executionKind: captured.delegateModel ? "delegate" : scheduled ? "scheduled" : background ? 'background' : "interactive",
+        backgroundPolicy:background,scheduledTaskId: scheduled?.task_id, signal,
         assertCurrent() { assert(); scope.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); } });
     },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
@@ -972,6 +977,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return result;
   } }));
   registry.install(defineExtension({ name: "app.host-builtins", tools, hooks: processControls.extension.hooks }));
+  const backgroundExtension=defineExtension({name:'app.host-background-policy',hooks:[{task:'pi.tool',handlers:{beforeTool:async(call:Parameters<ToolHooks['beforeTool']>[0],api:Parameters<ToolHooks['beforeTool']>[1])=>{
+    const captured=await runtime().capturePendingToolSource(api.conversationId,api.taskId,call.id);
+    const policy=bundle.backgroundPolicyFor(captured.inputs[0]!);if(!policy)return; // Proven ordinary/Delegate input; private/unknown references still throw.
+    await runtime().qualifyBackgroundRequest(captured.inputs,policy,{taskId:api.taskId,callId:call.id,toolName:call.name});
+  }}}]});
+  registry.install(backgroundExtension);
   // Goal and Plan retain immutable context before request-only system hooks.
   // Their shared materializer repairs only source-owned trailing snapshots at
   // the SDK pinned cutoff; neither prompt moves across later tool results.
@@ -1166,6 +1177,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
           },
           assertCurrent(payload){check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
             const model=host.modelRuntime.getPhysicalModel(payload.policy.model.provider,payload.policy.model.modelId)!;assertNativeBackgroundModel(payload.policy,model);},
+          assertExecution(payload){
+            const identity=nativeBackgroundIdentity(payload.policy),binding=readNativeBackgroundContexts(root,mapping.domain).find(entry=>entry.contextKey===identity.contextKey);
+            if(!binding||binding.chatJid!==identity.chatJid)throw Error('Private background execution context unavailable');
+            assertStoredBackgroundExecution(root,binding.conversationId,payload);
+            const budget=getBudgetWork(operationBudgetWorkId(identity.operationId),root);
+            if(budget?.status!=='active'||budget.execution_kind!=='background'||budget.chat_jid!==identity.chatJid||budget.parent_work_id!==payload.policy.workId)throw Error('Background execution budget ancestry changed');
+          },
           put(payload){assert();const file=payloadPath(payload.policy.sourceId),encoded=JSON.stringify(payload);if(Buffer.byteLength(encoded)>1024*1024)throw Error('Background payload exceeds storage bound');
             mkdirSync(payloadDir,{recursive:true});let fd:number,created=false;
             try{fd=openSync(file,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);created=true;}
@@ -1175,7 +1193,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
             if(readBackgroundPayloadText(payload.policy.sourceId)!==encoded)throw Error('Background payload publication changed');
             const directory=openSync(payloadDir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}
           },
-          publish: (tx,payload)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!],()=>{
+          publish: (tx,payload)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!,backgroundExtension],()=>{
             check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal);assertAddonBackgroundCurrent(root,payload);
           }),
         },
@@ -1306,6 +1324,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
     },
     prepareAddonOperation:async()=>{throw Error('Offline maintenance cannot admit background operations');},
+    dispatchAddonOperation:async()=>{throw Error('Offline maintenance cannot execute background operations');},
     dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
     dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
     bind(options) {

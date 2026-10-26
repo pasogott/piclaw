@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { apply } from "@earendil-works/chord/delta";
 import { configure,defineDoc,type ConversationId,type Extension,type ToolRegistration,type Tx } from "@earendil-works/pi-durable";
 import { nativeBackgroundIdentity,nativeBackgroundPolicyHash,readNativeBackgroundPayload,type NativeBackgroundPayload } from "../../src/agent-pool/background-operation-contract.js";
-import { bindNativeBackgroundPolicy,assertNativeBackgroundBindingData } from "./host-background-policy.js";
+import { bindNativeBackgroundPolicy,assertNativeBackgroundBindingData,assertNativeBackgroundAgentData } from "./host-background-policy.js";
 
 export type NativeBackgroundContext = {contextKey:string;chatJid:string;branchId:string;conversationId:ConversationId;sessionId:string};
 export const NativeBackgroundContexts=defineDoc({kind:'app.background-contexts',version:1,scope:'conversation',history:'latest',fork:'initial',checkpointWhen:()=>false,
@@ -44,6 +44,16 @@ export function storedBackgroundDocument(root:Database,id:number):any {
     if(row.kind==='base')value=JSON.parse(row.content);else if(row.kind==='delta'&&value)value=apply(value,JSON.parse(row.content));else throw Error('Invalid background document revisions');
   }
   if(!value)throw Error('Missing background document value');return value;
+}
+/** Synchronous effect fence over the same public document materialisation used
+ * by read-only recovery. No await separates this proof from a host syscall. */
+export function assertStoredBackgroundExecution(root:Database,conversationId:number,payload:NativeBackgroundPayload):void{
+  const agents=root.query(`SELECT id,family,key_value FROM documents WHERE kind='"pi.agent"' AND scope_kind='conversation' AND owner_id=? AND retired_at IS NULL`).all(conversationId) as {id:number;family:number;key_value:string}[];
+  const policies=root.query(`SELECT id,family,key_value FROM documents WHERE kind='"app.background-policy"' AND scope_kind='conversation' AND owner_id=? AND key_value=? AND retired_at IS NULL`).all(conversationId,JSON.stringify(payload.policy.sourceId)) as {id:number;family:number;key_value:string}[];
+  if(agents.length!==1||Number(agents[0]!.family)!==0||agents[0]!.key_value!==JSON.stringify('')||policies.length!==1||Number(policies[0]!.family)!==1)throw Error('Exact background execution documents required');
+  const agent=storedBackgroundDocument(root,agents[0]!.id);
+  assertNativeBackgroundAgentData(agent,payload.policy);assertNativeBackgroundBindingData(storedBackgroundDocument(root,policies[0]!.id),payload.policy);
+  if(!Array.isArray(agent.extensions)||JSON.stringify([...agent.extensions].sort())!==JSON.stringify(['app.host-background-policy','app.host-builtins']))throw Error('Background execution extensions changed');
 }
 function listBackgroundBindings(root:Database,contexts:readonly NativeBackgroundContext[]){
   const result:{context:NativeBackgroundContext;state:any;sourceId:string}[]=[],present=new Set<number>(),seen=new Set<string>();

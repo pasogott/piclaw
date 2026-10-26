@@ -172,6 +172,18 @@ test('native input identity uses queued events rather than mutable status/input 
   }finally{service.shutdown();await service.waitForIdle();}
 });
 
+test('native operation host forwards only the persisted owner ID and signal without legacy fallback',async()=>{
+  let legacy=0;const calls:unknown[][]=[],signal=new AbortController().signal;
+  const host=createOperationHost({isDurableRuntime:()=>true,dispatchAddonOperation:async(...args)=>{calls.push(args);return{status:'success',result:'native result'};},runAgent:async()=>{legacy++;throw Error('Legacy must remain unreachable');}},()=>config);
+  expect(await host.execute({operationId:'accepted-native',chatJid:'operation:accepted-native',workId:'operation:accepted-native',text:'untrusted input is not dispatch authority',principal,grant:config.grants[0],signal})).toEqual({status:'completed',output:'native result'});
+  expect(calls).toEqual([['accepted-native',signal]]);expect(legacy).toBe(0);
+});
+test('native operation host refuses a missing dispatcher without falling back to runAgent',async()=>{
+  let legacy=0;const host=createOperationHost({isDurableRuntime:()=>true,runAgent:async()=>{legacy++;return{status:'success',result:'must not run'};}},()=>config);
+  await expect(host.execute({operationId:'missing-native',chatJid:'operation:missing-native',workId:'operation:missing-native',text:'input',principal,grant:config.grants[0],signal:new AbortController().signal})).rejects.toThrow('Native add-on execution unavailable');
+  expect(legacy).toBe(0);
+});
+
 test("generic ABI registration belongs to startup package, not a caller supplied add-on id", async () => {
   resetAddonRuntimeContributionsForTests();
   setAddonOperationHost(
