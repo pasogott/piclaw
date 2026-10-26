@@ -43,3 +43,35 @@ test("timeout, conversion and accounting notices explain different failure stage
   expect(modelFailureNotice(modelFailureDetail({ phase: "conversion", category: "unknown" }), 1)).toContain("response could not be processed safely");
   expect(modelFailureNotice(modelFailureDetail({ phase: "accounting", category: "unknown" }), 1)).toContain("outcome may be uncertain");
 });
+
+
+test("private failure receipts retain original reasons without prompts, secrets or opaque signatures", async () => {
+  const { retainModelFailureEvidence } = await import("../../runtime/durable-engine/src/host-model-failure-evidence.js");
+  const {mkdtemp,readFile,stat,rm,mkdir}=await import("node:fs/promises");const {join}=await import("node:path");
+  const directory=await mkdtemp(join(process.env.PICLAW_WORKSPACE!,"model-failure-evidence-"));
+  try {
+    const path=join(directory,"private");
+    const id=retainModelFailureEvidence(path,{provider:"fixture",model:"fixture",requestId:"request-original",failure:{phase:"accounting",category:"unknown"},error:Error("Settlement unresolved"),providerError:{errorMessage:"server_error Authorization: Bearer token-should-be-redacted https://private.invalid/request signature:\"opaque-secret\"",content:[{type:"thinking",thinking:"private thought",signature:"opaque-secret"}]}});
+    const text=await readFile(join(path,id+".json"),"utf8"),record=JSON.parse(text);
+    expect(record.errors.providerError.errorMessage).toContain("server_error");
+    for(const secret of ["token-should-be-redacted","private.invalid","opaque-secret","private thought"]) expect(text).not.toContain(secret);
+    expect(record.requestId).toBe("request-original");expect(record.originalErrorSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await stat(path)).mode&0o777).toBe(0o700);expect((await stat(join(path,id+".json"))).mode&0o777).toBe(0o600);
+    const failure={phase:"provider" as const,category:"transport" as const,evidenceId:id};
+    expect(parseModelFailure(modelFailureDetail(failure))).toEqual(failure);expect(modelFailureNotice(modelFailureDetail(failure),27677)).toContain(id);
+    const publicDir=join(directory,"public");await mkdir(publicDir,{mode:0o755});expect(()=>retainModelFailureEvidence(publicDir,{provider:"fixture",model:"fixture",failure:{phase:"provider",category:"unknown"},error:Error("no write")})).toThrow("not private");
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+
+test("retained bounded failures preserve SDK transient retry and quota stop decisions", async () => {
+  const {isRetryableAssistantError}=await import("../../runtime/durable-engine/node_modules/@earendil-works/pi-ai/dist/utils/retry.js");
+  const evidenceId="b7e94df0-a012-40da-b950-29b1c1b0999b";
+  for(const [reason,retry]of [["ECONNRESET",true],["HTTP 503 unavailable",true],["HTTP 504 timeout",true],["HTTP 401 unauthorized",false],["HTTP 429 insufficient_quota",false],["HTTP 429 subscription_sharing_usage_limit_exceeded",false],["unknown provider failure",false]] as const){
+    const failure={...classifyModelFailure("provider",Error(reason)),evidenceId};
+    const detail=modelFailureDetail(failure);expect(parseModelFailure(detail)).toEqual(failure);
+    const message={stopReason:"error",errorMessage:detail} as Parameters<typeof isRetryableAssistantError>[0];
+    expect(isRetryableAssistantError(message)).toBe(retry);
+  }
+  expect(classifyModelFailure("provider",Error("HTTP 429 insufficient_quota"))).toEqual({phase:"provider",category:"quota",httpStatus:429});
+});

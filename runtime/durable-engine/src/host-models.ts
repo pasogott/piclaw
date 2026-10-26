@@ -2,6 +2,7 @@ import type { HostCodexModelServices } from "./host-codex-model-services.js";
 import { createLogger } from "../../src/utils/logger.js";
 import { taskModelRequestScope } from "./task-model-boundary-shim.js";
 import { classifyModelFailure, modelFailureDetail, type ModelFailure, type ModelFailurePhase } from "./host-model-failure.js";
+import type { ModelFailureEvidence } from "./host-model-failure-evidence.js";
 const log = createLogger("durable.models");
 import {
   createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
@@ -23,7 +24,9 @@ export interface HostModelPolicy {
   /** Invocation-local source fence retained through asynchronous credential resolution. */
   captureSourceGuard?(signal: AbortSignal | undefined): (() => void) | Promise<() => void>;
   onEvent?(event: AssistantMessageEvent, requestSignal?: AbortSignal): void;
+  retainFailure?(evidence: ModelFailureEvidence): string | Promise<string>;
   prepareRequest?(model: Model<Api>, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<{
+    readonly id?: string;
     dispatch(): Promise<void>; settle(message: AssistantMessage): Promise<void>; abandon(): Promise<void>;
   } | undefined>;
   /** Includes host model approval and budget admission; never auth/login approval. */
@@ -219,6 +222,7 @@ export function createHostModels(
     let terminalUsage: Usage | undefined;
     let phase: ModelFailurePhase = "validation";
     let providerFailure: ModelFailure | undefined;
+    let providerError: unknown;
     let scope: ReturnType<typeof taskModelRequestScope>;
     let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
@@ -242,13 +246,13 @@ export function createHostModels(
           phase = "provider";
           const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
           for await (const event of stream) {
-            if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); providerFailure = classifyModelFailure("provider", event.error); throw new Error("Host request failed"); }
+            if (event.type === "error") { providerError = event.error; captureTerminalUsage(event.error); providerFailure = classifyModelFailure("provider", event.error); await request?.settle(event.error); throw new Error("Host request failed"); }
             if (event.type === "done") await request?.settle(event.message);
           output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
               : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
           }
           const result = await stream.result();
-          if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); providerFailure = classifyModelFailure("provider", result); throw new Error("Host request failed"); }
+          if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; captureTerminalUsage(result); providerFailure = classifyModelFailure("provider", result); await request?.settle(result); throw new Error("Host request failed"); }
           output.end(projectMessage(result, model));
           return;
         }
@@ -302,7 +306,7 @@ export function createHostModels(
         }
         const result = await stream.result();
         captureTerminalUsage(result);
-        if (result.stopReason === "error" || result.stopReason === "aborted") providerFailure = classifyModelFailure("provider", result);
+        if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; providerFailure = classifyModelFailure("provider", result); }
         phase = "accounting";
         await request?.settle(result);
         phase = "conversion";
@@ -313,15 +317,22 @@ export function createHostModels(
       } catch (cause) {
         // Preserve the provider reason even when accounting/conversion fails next.
         const failure = providerFailure ? { ...providerFailure, phase } : classifyModelFailure(phase, cause);
+        let evidenceId: string | undefined;
+        try {
+          evidenceId = await policy.retainFailure?.({ provider: model.provider, model: model.id, requestId: request?.id,
+            scope: scope ? { conversationId: scope.conversationId, taskId: scope.taskId, kind: scope.taskKind } : undefined, failure, providerFailure, error: cause, providerError: providerError ?? (phase === "provider" ? cause : undefined) });
+        } catch {
+          log.warn("Native model failure evidence could not be retained", { operation: "durable_model.evidence_failed", phase, taskId: scope?.taskId, conversationId: scope?.conversationId });
+        }
         log.warn("Native model request failed", { operation: "durable_model.request_failed", provider: model.provider,
-          model: model.id, taskId: scope?.taskId, conversationId: scope?.conversationId, ...failure });
+          model: model.id, taskId: scope?.taskId, conversationId: scope?.conversationId, ...failure, ...(evidenceId ? { evidenceId } : {}) });
         try { await codex?.finish(); } catch {
           log.warn("Native model conversion cleanup remains unresolved", { operation: "durable_model.cleanup_failed", phase: "conversion", taskId: scope?.taskId, conversationId: scope?.conversationId });
         }
         // Persist only the bounded classification; never provider text or partial output.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
           provider: model.provider, model: model.id, timestamp: Date.now(),
-          stopReason: "error", errorMessage: modelFailureDetail(failure),
+          stopReason: "error", errorMessage: modelFailureDetail({ ...failure, ...(evidenceId ? { evidenceId } : {}) }),
           usage: terminalUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
