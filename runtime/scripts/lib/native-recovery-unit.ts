@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createVerifiedSqliteBackup, verifySqliteBackup, type SqliteBackupManifest } from "../../src/db/backup.js";
 import { collectNativeRecoveryReferences, type NativeRecoveryReference } from "./native-recovery-references.js";
 import { assertSchemaInventory, readSchemaInventory, type SchemaContract } from "./schema-ownership.js";
+import { inspectRecoverySubmissions } from "../../durable-engine/src/recovery-submission-inspection.js";
 import { auditInstalledApplicationAddonSources, applicationAddonSourceProfiles } from "../../durable-engine/src/host-extension-catalog.js";
 
 const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -140,11 +141,17 @@ function databaseProof(db: Database) {
 function readonly(path: string) {
   const db = new Database(path, { readonly: true, strict: true, safeIntegers: true }); db.exec("PRAGMA query_only=ON"); return db;
 }
+async function snapshotReferences(path: string, db: Database) {
+  if (!db.query("SELECT 1 FROM piclaw_durable_intent_bindings_v1 LIMIT 1").get()) return collectNativeRecoveryReferences(db);
+  const rows=db.query(`SELECT submission_id FROM piclaw_durable_bindings_v1 WHERE submission_id IS NOT NULL
+    UNION SELECT submission_id FROM piclaw_durable_intent_bindings_v1 WHERE submission_id IS NOT NULL`).all() as {submission_id:number|bigint}[];
+  return collectNativeRecoveryReferences(db,await inspectRecoverySubmissions(path,rows.map(row=>Number(row.submission_id))));
+}
 /** Capture only explicitly selected OFFLINE copies. No source discovery, promotion,
  * overwrite, retry, restore activation, provider call or credential retrieval.
  * Failure preserves incomplete artefacts; only a fully published manifest is a unit.
  */
-export function captureNativeRecoveryUnit(options: RecoveryCaptureOptions): NativeRecoveryUnitManifest {
+export async function captureNativeRecoveryUnit(options: RecoveryCaptureOptions): Promise<NativeRecoveryUnitManifest> {
   const source = offline(options.database), output = offline(options.output);
   const sourceHash = fingerprint(source).sha256;
   for (const suffix of ["-wal","-shm","-journal"]) {
@@ -169,7 +176,7 @@ export function captureNativeRecoveryUnit(options: RecoveryCaptureOptions): Nati
   } finally { sourceDb.close(); }
   const db = readonly(join(output, "database.sqlite"));
   try {
-    const proof = databaseProof(db), references = collectNativeRecoveryReferences(db);
+    const proof = databaseProof(db), references = await snapshotReferences(join(output,"database.sqlite"),db);
     const files = new Map<string, StoredFile>();
     const store = (file: string, data: Uint8Array): StoredFile => {
       const value = { file, sha256: sha(data), byteLength: data.length }, old = files.get(file);
@@ -223,7 +230,7 @@ export function nativeRecoveryManifestSha256(path: string): string {
 
 /** Verify bytes and required external metadata. Never opens a provider, resumes
  * SDK scheduling, rewrites the unit or resolves a credential's secret value. */
-export function verifyNativeRecoveryUnit(path: string, environment: RecoveryEnvironment, expectedManifestSha256?: string): NativeRecoveryUnitManifest {
+export async function verifyNativeRecoveryUnit(path: string, environment: RecoveryEnvironment, expectedManifestSha256?: string): Promise<NativeRecoveryUnitManifest> {
   const unit = directory(offline(path), true);
   const expectedNames = ["artifacts","database.sqlite","manifest.json","payloads"];
   if (JSON.stringify(readdirSync(unit).sort()) !== JSON.stringify(expectedNames)) throw Error("Unexpected recovery artefact or SQLite sidecar");
@@ -257,7 +264,7 @@ export function verifyNativeRecoveryUnit(path: string, environment: RecoveryEnvi
   try {
     const proof = databaseProof(db);
     if (proof.schemaSha256 !== manifest.schemaSha256 || proof.bindingsSha256 !== manifest.bindingsSha256) throw Error("Recovery binding/schema mismatch");
-    const actual = collectNativeRecoveryReferences(db);
+    const actual = await snapshotReferences(join(unit,"database.sqlite"),db);
     const listed = manifest.references.map(({ owner,referenceSha256,location,redactionClass }) => ({ owner,referenceSha256,location,redactionClass }));
     if (JSON.stringify(actual.map(({ owner,ref,location,redactionClass }) => ({ owner,referenceSha256:sha(ref),location,redactionClass }))) !== JSON.stringify(listed)) throw Error("Incomplete recovery reference closure");
     for (const reference of actual) {

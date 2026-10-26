@@ -17,7 +17,7 @@ const sha = (value: string | Uint8Array) => createHash("sha256").update(value).d
 export async function qualifyNativeRecoveryUnit(unitPath: string, environment: RecoveryEnvironment, destinationPath: string, approvedManifestSha256?: string) {
   const unit = resolve(unitPath), destination = assertOfflineRecoveryPath(destinationPath);
   const manifestSha256=approvedManifestSha256 ?? nativeRecoveryManifestSha256(unit);
-  const manifest = verifyNativeRecoveryUnit(unit, environment, manifestSha256);
+  const manifest = await verifyNativeRecoveryUnit(unit, environment, manifestSha256);
   const parent = lstatSync(dirname(destination));
   if (destination === unit || destination.startsWith(unit+sep) || realpathSync(dirname(destination)) !== dirname(destination) ||
     !parent.isDirectory() || (parent.mode&0o077)!==0 || process.getuid && parent.uid!==process.getuid()) throw Error("Explicit private offline restore destination required");
@@ -27,7 +27,7 @@ export async function qualifyNativeRecoveryUnit(unitPath: string, environment: R
   const copy = join(destination,"candidate.sqlite");
   copyFileSync(join(unit,manifest.database.file),copy,constants.COPYFILE_EXCL);
   if(fingerprintRecoveryFile(copy).sha256!==manifest.database.sha256) throw Error("Recovery unit changed before restore");
-  const inspected = ["entries","tasks","submissions","record_ids","piclaw_durable_bindings_v1","piclaw_durable_intent_bindings_v1",
+  const inspected = ["conversations","documents","document_revisions","entries","tasks","submissions","record_ids","piclaw_durable_bindings_v1","piclaw_durable_intent_bindings_v1",
     "service_effect_s01_chats","service_effect_s01_sources","service_effect_s01_operations","service_effect_s01_operation_sources",
     "service_effect_s02_commits","service_effect_s05_outbox","budget_work","budget_request_reservations"];
   const source=new Database(copy,{readonly:true,strict:true,safeIntegers:true});
@@ -59,7 +59,7 @@ export async function qualifyNativeRecoveryUnit(unitPath: string, environment: R
   try {
     if(fingerprintSqliteTables(restored,inspected)!==expected||restored.query("PRAGMA foreign_key_check").get()) throw Error("Restore changed accepted/history/effect identities");
   } finally {restored.close();}
-  verifyNativeRecoveryUnit(unit,environment,manifestSha256);
+  await verifyNativeRecoveryUnit(unit,environment,manifestSha256);
   const receipt={version:1,kind:"piclaw.native-recovery-qualification",databaseSha256:manifest.database.sha256,
     manifestSha256,scheduling:"paused" as const,credentialReads,contexts,executionIdentitySha256:expected};
   const receiptPath=join(destination,"receipt.json");

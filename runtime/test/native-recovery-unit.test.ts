@@ -14,37 +14,37 @@ function fixture() {
     configurations:[{id:"settings",path:join(root,"settings.json")}],credentialReferences:["fixture/keychain"],credentialReferenceAvailable(){probes++;return true;}};
   return {root,source,output,environment,get probes(){return probes;},close(){rmSync(root,{recursive:true,force:true});}};
 }
-test("recovery unit rejects live profile paths before reading files, probing credentials or creating output",()=>{
+test("recovery unit rejects live profile paths before reading files, probing credentials or creating output",async()=>{
   const f=fixture();
   try {
     for(const database of ["/workspace/.piclaw/store/messages.db",join(f.root,".pi/store/messages.db")])
-      expect(()=>captureNativeRecoveryUnit({database,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).toThrow("offline copies");
-    expect(()=>verifyNativeRecoveryUnit("/workspace/.piclaw",f.environment)).toThrow("offline copies");
+      await expect(captureNativeRecoveryUnit({database,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).rejects.toThrow("offline copies");
+    await expect(verifyNativeRecoveryUnit("/workspace/.piclaw",f.environment)).rejects.toThrow("offline copies");
     expect(()=>nativeRecoveryManifestSha256("/workspace/.pi")).toThrow("offline copies");
     expect(f.probes).toBe(0); expect(existsSync(f.output)).toBe(false);
   }finally{f.close();}
 });
-test("recovery unit refuses source file aliases instead of adopting a symlink or hard link",()=>{
+test("recovery unit refuses source file aliases instead of adopting a symlink or hard link",async()=>{
   const f=fixture();
   try {
     const alias=join(f.root,"alias.sqlite"); symlinkSync(f.source,alias);
-    expect(()=>captureNativeRecoveryUnit({database:alias,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).toThrow("symlink");
+    await expect(captureNativeRecoveryUnit({database:alias,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).rejects.toThrow("symlink");
     rmSync(alias);linkSync(f.source,alias);
-    expect(()=>captureNativeRecoveryUnit({database:alias,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).toThrow("Exclusive regular");
+    await expect(captureNativeRecoveryUnit({database:alias,answers:f.root,workspace:f.root,output:f.output,environment:f.environment})).rejects.toThrow("Exclusive regular");
     expect(f.probes).toBe(0);expect(existsSync(f.output)).toBe(false);
   }finally{f.close();}
 });
-test("recovery unit refuses aliased/nonprivate containers before parsing a manifest",()=>{
+test("recovery unit refuses aliased/nonprivate containers before parsing a manifest",async()=>{
   const f=fixture();
   try {
     const real=join(f.root,"real"),alias=join(f.root,"alias");mkdirSync(real,{mode:0o700});symlinkSync(real,alias);
-    expect(()=>verifyNativeRecoveryUnit(alias,f.environment)).toThrow("directory binding");
+    await expect(verifyNativeRecoveryUnit(alias,f.environment)).rejects.toThrow("directory binding");
     const publicDir=join(f.root,"public");mkdirSync(publicDir,{mode:0o755});
-    expect(()=>verifyNativeRecoveryUnit(publicDir,f.environment)).toThrow("directory binding");
+    await expect(verifyNativeRecoveryUnit(publicDir,f.environment)).rejects.toThrow("directory binding");
     expect(f.probes).toBe(0);
   }finally{f.close();}
 });
-test("recovery unit fingerprints large files and primary-key ordered rows without whole-database buffering",()=>{
+test("recovery unit fingerprints large files and primary-key ordered rows without whole-database buffering",async()=>{
   const f=fixture(), db=new Database(":memory:");
   try {
     const data=Buffer.alloc(4*1024*1024,123);writeFileSync(f.source,data);

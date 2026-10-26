@@ -1,7 +1,7 @@
 import { expect, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createVerifiedSqliteBackup } from "../../runtime/src/db/backup.js";
 import { captureNativeRecoveryUnit, nativeRecoveryManifestSha256, verifyNativeRecoveryUnit, type RecoveryEnvironment } from "../../runtime/scripts/lib/native-recovery-unit.js";
@@ -60,10 +60,18 @@ export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace
     configurations:[{id:"runtime-model-policy",path:config}],credentialReferences:["fixture/recovery-profile"],credentialReferenceAvailable:ref=>ref==="fixture/recovery-profile"};
   const output = join(base,"unit");
   const sourceSha256=sha(readFileSync(database));
-  const manifest = captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output,environment});
+  const terminalBinding=new Database(database,{readonly:true});
+  const selected=terminalBinding.query(`SELECT b.incarnation,b.submission_id AS primary_id,i.submission_id AS intent_id FROM piclaw_durable_bindings_v1 b
+    JOIN piclaw_durable_intent_bindings_v1 i ON i.operation_id=b.operation_id`).get() as {incarnation:string;primary_id:number;intent_id:number};
+  terminalBinding.close();expect(selected).toBeDefined();
+  expect(existsSync(join(answers,sha(`runtime-answer:${selected.incarnation}:${selected.primary_id}`)))).toBe(false);
+  const manifest = await captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output,environment});
+  const actualTerminal=manifest.references.find(row=>row.referenceSha256===sha(`runtime-answer:${selected.incarnation}:${selected.intent_id}`));
+  expect(actualTerminal).toBeDefined();
+  expect(readFileSync(join(output,actualTerminal!.file),"utf8")).toBe("factory synthetic reply");
   const approvedManifestSha256=nativeRecoveryManifestSha256(output);
-  expect(verifyNativeRecoveryUnit(output,environment,approvedManifestSha256)).toEqual(manifest);
-  expect(()=>verifyNativeRecoveryUnit(output,environment,"0".repeat(64))).toThrow("approval mismatch");
+  expect(await verifyNativeRecoveryUnit(output,environment,approvedManifestSha256)).toEqual(manifest);
+  await expect(verifyNativeRecoveryUnit(output,environment,"0".repeat(64))).rejects.toThrow("approval mismatch");
   const qualification = await qualifyNativeRecoveryUnit(output,environment,join(base,"qualified-restore"),approvedManifestSha256);
   expect(qualification.scheduling).toBe("paused"); expect(qualification.credentialReads).toBe(0);
   expect(qualification.contexts.length).toBeGreaterThan(1);
@@ -73,33 +81,33 @@ export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace
   expect(manifest.environment.addons.map(row=>row.name)).toContain("@rcarmo/piclaw-addon-code-review");
   const encoded = readFileSync(join(output,"manifest.json"),"utf8");
   expect(encoded).not.toContain("synthetic-only"); expect(encoded).not.toContain(sourcePath);
-  expect(()=>captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output,environment})).toThrow();
-  expect(()=>verifyNativeRecoveryUnit(output,{...environment,credentialReferenceAvailable:()=>false})).toThrow("credential reference");
-  expect(()=>verifyNativeRecoveryUnit(output,{...environment,runtime:{...environment.runtime,sdkVersion:"1.3.0"}})).toThrow("runtime contract");
+  await expect(captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output,environment})).rejects.toThrow();
+  await expect(verifyNativeRecoveryUnit(output,{...environment,credentialReferenceAvailable:()=>false})).rejects.toThrow("credential reference");
+  await expect(verifyNativeRecoveryUnit(output,{...environment,runtime:{...environment.runtime,sdkVersion:"1.3.0"}})).rejects.toThrow("runtime contract");
   const savedConfig=readFileSync(config); writeFileSync(config,"changed configuration");
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("dependency mismatch"); writeFileSync(config,savedConfig);
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("dependency mismatch"); writeFileSync(config,savedConfig);
   const tool=join(addons,".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review/tool.ts"), savedTool=readFileSync(tool);
   writeFileSync(tool,Buffer.concat([savedTool,Buffer.from("\n// modified\n")]));
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("Unqualified installed"); writeFileSync(tool,savedTool);
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("Unqualified installed"); writeFileSync(tool,savedTool);
   const payload = manifest.references.find(row=>row.owner==="native-answer")!, file=join(output,payload.file), savedPayload=readFileSync(file);
-  rmSync(file); expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow(); writeFileSync(file,"corrupt",{mode:0o600});
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("corrupt"); writeFileSync(file,savedPayload,{mode:0o600});
+  rmSync(file); await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow(); writeFileSync(file,"corrupt",{mode:0o600});
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("corrupt"); writeFileSync(file,savedPayload,{mode:0o600});
   const manifestPath=join(output,"manifest.json"); writeFileSync(manifestPath,JSON.stringify({...manifest,references:[]}));
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("reference closure"); writeFileSync(manifestPath,encoded);
-  expect(verifyNativeRecoveryUnit(output,environment)).toEqual(manifest);
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("reference closure"); writeFileSync(manifestPath,encoded);
+  expect(await verifyNativeRecoveryUnit(output,environment)).toEqual(manifest);
   const inputPayload=join(answers,payload.file.slice("payloads/".length)), savedInput=readFileSync(inputPayload);
   rmSync(inputPayload);
   expect((await import("../../runtime/src/db/backup.js")).verifySqliteBackup(database).integrityCheck).toBe("ok"); // DB-only green is insufficient.
   const missingOutput=join(base,"missing-input-unit");
-  expect(()=>captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output:missingOutput,environment})).toThrow("payload missing");
+  await expect(captureNativeRecoveryUnit({database,answers,workspace:sourceWorkspace,output:missingOutput,environment})).rejects.toThrow("payload missing");
   expect(()=>readFileSync(join(missingOutput,"manifest.json"))).toThrow(); writeFileSync(inputPayload,savedInput,{mode:0o600});
   const savedManifest=readFileSync(manifestPath); writeFileSync(manifestPath,JSON.stringify({...manifest,unexpected:"untrusted field"}));
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("manifest fields"); writeFileSync(manifestPath,savedManifest);
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("manifest fields"); writeFileSync(manifestPath,savedManifest);
   const sidecar=join(output,"database.sqlite-wal"); writeFileSync(sidecar,"injected sidecar");
-  expect(()=>verifyNativeRecoveryUnit(output,environment)).toThrow("sidecar"); rmSync(sidecar);
+  await expect(verifyNativeRecoveryUnit(output,environment)).rejects.toThrow("sidecar"); rmSync(sidecar);
   const malformedDatabase=join(base,"malformed-source.sqlite");copyFileSync(database,malformedDatabase);
   const malformed=new Database(malformedDatabase);try{malformed.exec("ALTER TABLE tasks ADD COLUMN unapproved TEXT");}finally{malformed.close();}
-  expect(()=>captureNativeRecoveryUnit({database:malformedDatabase,answers,workspace:sourceWorkspace,output:join(base,"malformed-unit"),environment})).toThrow("schema drift");
+  await expect(captureNativeRecoveryUnit({database:malformedDatabase,answers,workspace:sourceWorkspace,output:join(base,"malformed-unit"),environment})).rejects.toThrow("schema drift");
   const opaqueDatabase=join(base,"opaque-source.sqlite"); copyFileSync(database,opaqueDatabase);
   const uncertain=new Database(opaqueDatabase,{strict:true});
   const opaqueRef="adapter:fixture-secret-reference", instant="2026-01-01T00:00:00.000Z";
@@ -107,30 +115,39 @@ export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace
     available_at,enqueued_at,state_changed_at,repeatability,attempt,certainty,last_error_tag,result_at)
     VALUES('uncertain','notification','unknown','fixture-unknown',?,'fixture:outbox','private',?,?,?,?,'reconciliation_required',1,'unknown','lost_ack',?)`)
     .run("0".repeat(64),opaqueRef,instant,instant,instant,instant);}finally{uncertain.close();}
-  expect(()=>captureNativeRecoveryUnit({database:opaqueDatabase,answers,workspace:sourceWorkspace,output:join(base,"unknown-no-proof"),environment})).toThrow("Adapter-owned payload proof");
+  await expect(captureNativeRecoveryUnit({database:opaqueDatabase,answers,workspace:sourceWorkspace,output:join(base,"unknown-no-proof"),environment})).rejects.toThrow("Adapter-owned payload proof");
   const opaqueFile=join(base,"adapter-payload"), opaqueBytes=new TextEncoder().encode("retained adapter payload");writeFileSync(opaqueFile,opaqueBytes,{mode:0o600});
   const externalPayloads=[{ref:opaqueRef,path:opaqueFile,sha256:sha(opaqueBytes),byteLength:opaqueBytes.length,mediaType:"text/plain",redactionClass:"private" as const}];
   const opaqueUnit=join(base,"opaque-unit");
-  const opaqueManifest=captureNativeRecoveryUnit({database:opaqueDatabase,answers,workspace:sourceWorkspace,output:opaqueUnit,environment,externalPayloads});
-  expect(verifyNativeRecoveryUnit(opaqueUnit,environment)).toEqual(opaqueManifest);
+  const opaqueManifest=await captureNativeRecoveryUnit({database:opaqueDatabase,answers,workspace:sourceWorkspace,output:opaqueUnit,environment,externalPayloads});
+  expect(await verifyNativeRecoveryUnit(opaqueUnit,environment)).toEqual(opaqueManifest);
   expect(readFileSync(join(opaqueUnit,"manifest.json"),"utf8")).not.toContain(opaqueRef);
   const opaqueReceipt=await qualifyNativeRecoveryUnit(opaqueUnit,environment,join(base,"opaque-restore"));
   expect(opaqueReceipt.scheduling).toBe("paused");
   const opaqueRestored=new Database(join(base,"opaque-restore/candidate.sqlite"),{readonly:true});
   try{expect(opaqueRestored.query("SELECT state,certainty FROM service_effect_s05_outbox").all()).toEqual([{state:"unknown",certainty:"unknown"}]);}finally{opaqueRestored.close();}
-  const tamperedDestination=join(base,"tampered-restore"), originalClose=RehearsalSqliteDatabase.prototype.close;
-  let altered=false;
-  const closeHook=spyOn(RehearsalSqliteDatabase.prototype,"close").mockImplementation(async function(this:RehearsalSqliteDatabase){
-    await originalClose.call(this);
-    if(!altered){altered=true;const changed=new Database(join(tamperedDestination,"candidate.sqlite"));try{changed.exec("DELETE FROM service_effect_s05_outbox");}finally{changed.close();}}
-  });
-  try{await expect(qualifyNativeRecoveryUnit(opaqueUnit,environment,tamperedDestination)).rejects.toThrow("Restore changed accepted/history/effect identities");}
-  finally{closeHook.mockRestore();}
-  expect(()=>readFileSync(join(tamperedDestination,"receipt.json"))).toThrow();
-  expect(verifyNativeRecoveryUnit(opaqueUnit,environment)).toEqual(opaqueManifest);
+  for (const mutation of ["outbox","provenance"] as const) {
+    const tamperedDestination=join(base,`tampered-${mutation}`), originalClose=RehearsalSqliteDatabase.prototype.close;
+    let altered=false;
+    const closeHook=spyOn(RehearsalSqliteDatabase.prototype,"close").mockImplementation(async function(this:RehearsalSqliteDatabase){
+      await originalClose.call(this);
+      if(!altered&&existsSync(join(tamperedDestination,"candidate.sqlite"))){altered=true;const changed=new Database(join(tamperedDestination,"candidate.sqlite"));try{
+        if(mutation==="outbox") changed.exec("DELETE FROM service_effect_s05_outbox");
+        else {
+          const rows=changed.query("SELECT document_id,seq,content FROM document_revisions").all() as {document_id:number;seq:number;content:string}[];
+          const imported=rows.find(row=>row.content.includes("original-user"))!;expect(imported).toBeDefined();
+          changed.query("UPDATE document_revisions SET content=? WHERE document_id=? AND seq=?").run('{"binding":null}',imported.document_id,imported.seq);
+        }
+      }finally{changed.close();}}
+    });
+    try{await expect(qualifyNativeRecoveryUnit(opaqueUnit,environment,tamperedDestination)).rejects.toThrow("Restore changed accepted/history/effect identities");}
+    finally{closeHook.mockRestore();}
+    expect(()=>readFileSync(join(tamperedDestination,"receipt.json"))).toThrow();
+  }
+  expect(await verifyNativeRecoveryUnit(opaqueUnit,environment)).toEqual(opaqueManifest);
   let changedManifest=false;
   const changingEnvironment={...environment,credentialReferenceAvailable(ref:string){if(!changedManifest){changedManifest=true;writeFileSync(manifestPath," "+encoded);}return environment.credentialReferenceAvailable(ref);}};
-  try{expect(()=>verifyNativeRecoveryUnit(output,changingEnvironment)).toThrow("manifest changed during verification");}
+  try{await expect(verifyNativeRecoveryUnit(output,changingEnvironment)).rejects.toThrow("manifest changed during verification");}
   finally{writeFileSync(manifestPath,encoded);}
   const restored = join(base,"restored.sqlite"); copyFileSync(join(output,"database.sqlite"),restored);
   const before = new Database(restored,{readonly:true});
@@ -163,5 +180,5 @@ export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace
   expect(authReads).toBe(0);
   expect(sha(readFileSync(database))).toBe(sourceSha256);
   expect(sha(readFileSync(join(output,"database.sqlite")))).toBe(manifest.database.sha256);
-  expect(verifyNativeRecoveryUnit(output,environment)).toEqual(manifest);
+  expect(await verifyNativeRecoveryUnit(output,environment)).toEqual(manifest);
 }

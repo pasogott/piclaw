@@ -40,7 +40,7 @@ Native approval currently selects Code Review 0.1.8 from the pinned source in th
 Source-executed tooling lives in `runtime/scripts/lib/native-recovery-unit.ts`:
 
 ```ts
-const manifest = captureNativeRecoveryUnit({
+const manifest = await captureNativeRecoveryUnit({
   database: selectedOfflineDatabase,
   answers: selectedOfflineAnswerDirectory,
   workspace: selectedOfflineWorkspace,
@@ -49,10 +49,10 @@ const manifest = captureNativeRecoveryUnit({
   externalPayloads: adapterOwnedImmutableFileProofs,
 });
 const approvedDigest = nativeRecoveryManifestSha256(newPrivateUnitDirectory);
-verifyNativeRecoveryUnit(newPrivateUnitDirectory, environment, approvedDigest);
+await verifyNativeRecoveryUnit(newPrivateUnitDirectory, environment, approvedDigest);
 ```
 
-Capture reuses `createVerifiedSqliteBackup`: committed WAL data, open-file/VFS identity checks, exclusive staging, integrity/ledger verification and no-clobber publication. It reads the resulting snapshot through the existing schema-ownership contract, validates retained Code Review versioning and derives required references from that snapshot. Messages and scheduled definitions already owned by SQLite are not guessed to be external files. Outbox payloads have adapter-specific storage; each needs an explicit immutable `(ref, path, sha256, byteLength, mediaType, redactionClass)` file proof matching its recorded redaction class. Unknown internal source owners fail explicitly.
+Capture reuses `createVerifiedSqliteBackup`: committed WAL data, open-file/VFS identity checks, exclusive staging, integrity/ledger verification and no-clobber publication. It reads the resulting snapshot through the existing schema-ownership contract, validates retained Code Review versioning and derives required references from that snapshot. Messages and scheduled definitions already owned by SQLite are not guessed to be external files. Outbox payloads have adapter-specific storage; each needs an explicit immutable `(ref, path, sha256, byteLength, mediaType, redactionClass)` file proof matching its recorded redaction class. Unknown internal source owners fail explicitly. For attached inputs, publication selects the first model-failed submission or the successful input with the latest public transcript entry. Capture and verification read those public SDK Storage records from an exclusively created disposable copy, never decode private SDK record JSON or assume the primary submission owns the terminal answer. This inspection installs no Harness, scheduler, model, auth or tool registry. Its private parent must be writable; successful scratch copies are removed, failed inspections remain as evidence.
 
 Answer files are UTF-8 and keyed by the reference hash. Missing required input/result/answer files fail even if database integrity is `ok`. Codex image bytes must match the saved hash and length. Opaque outbox reference strings stay inside the private database; the manifest records only their SHA-256 identities.
 
@@ -70,7 +70,7 @@ await qualifyNativeRecoveryUnit(unitDirectory, environment, newQualificationDire
 
 The destination must be new, private and offline. The function verifies the pinned unit, copies its database exclusively and opens the copy through public SDK `SqliteStorage`/`Harness` APIs with credential access denied. Scheduling stays paused; no host factory, dispatcher, resume/progress call or plugin evaluation is installed. It reads each conversation's public context and emits hashes only.
 
-Before/after fingerprints preserve SDK entries/tasks/submissions/record IDs, native bindings, host accepted-source/operation/terminal/outbox state and budget work/reservations. Credential access or execution-state changes fail. Original unit bytes are verified again against the same pinned manifest digest. A successful `receipt.json` records the input database/manifest identity, paused scheduling, zero credential reads, context hashes and execution-identity fingerprint. Failure retains the disposable candidate and creates no success receipt.
+Before/after fingerprints preserve SDK conversations, documents and revisions (including imported original entries, branch mappings, provenance and inheritance), entries/tasks/submissions/record IDs, native bindings, host accepted-source/operation/terminal/outbox state and budget work/reservations. Credential access or execution-state changes fail. Original unit bytes are verified again against the same pinned manifest digest. A successful `receipt.json` records the input database/manifest identity, paused scheduling, zero credential reads, context hashes and execution-identity fingerprint. Failure retains the disposable candidate and creates no success receipt.
 
 Public SDK open can normalise its private candidate; it does not open the original database for writing. This is paused data qualification, not permission to activate a restored service or proof of valid provider authentication. SDK 1.3 cannot reopen format-2 storage produced by SDK 1.4; software rollback requires the matching complete checkpoint.
 
@@ -78,6 +78,6 @@ Public SDK open can normalise its private candidate; it does not open the origin
 
 - `runtime/test/native-recovery-references.test.ts`: reference owners, side input/results, cancelled/private-failure exclusions, nested image binding, traversal/malformed proof and opaque adapter refs.
 - `runtime/test/native-recovery-unit.test.ts`: profile-path refusal before IO/probes/output and file/directory alias/private-mode boundaries.
-- Default factory case `native-recovery-unit`: real native ordinary and side execution prepares a checkpoint; capture/verification then make no further model calls. The unit includes native answers/side caches, saved review state, a real public-API imported legacy tree and image bytes. Disposable SDK reopen preserves imported contexts/provenance and terminal/effect identities. Corrupt/missing payloads, configuration/source/runtime/credential mismatch, schema drift, missing adapter proofs, manifest tampering, wrong approval and sidecars fail. Unknown outbox delivery remains unknown without replay.
+- Default factory case `native-recovery-unit`: real native ordinary, attached-steer and side execution prepares a checkpoint; capture/verification then make no further model calls. The unit includes native answers/side caches, saved review state, a real public-API imported legacy tree and image bytes. Disposable SDK reopen preserves imported contexts/provenance and terminal/effect identities. Native terminal resolution selects the attached SDK submission's payload, whose primary submission has no answer file. Candidate provenance/outbox mutation during close fails without a receipt. Corrupt/missing payloads, configuration/source/runtime/credential mismatch, schema drift, missing adapter proofs, manifest tampering, wrong approval and sidecars fail. Unknown outbox delivery remains unknown without replay.
 
 Only those defining cases and affected type/static checks qualify this change. No production database/configuration/credential lookup, live backup/restore, deployment or restart is implied. Owner-specific retention remains #1702; capture never prunes records or files.

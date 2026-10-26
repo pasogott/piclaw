@@ -10,6 +10,7 @@ export interface NativeRecoveryReference {
   sha256?: string;
   byteLength?: number;
 }
+export interface RecoverySubmissionState { id:number; conversationId:number; requestId?:string; type:string; status:string; entry?:number; reason?:string }
 const side = /^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const hash = /^[0-9a-f]{64}$/;
 function text(value: unknown): asserts value is string {
@@ -24,7 +25,7 @@ function present(db: Database, table: string) {
  * their explicit resolver/file proof must accompany the unit, never a guessed path.
  * Core messages/scheduled definitions remain inside SQLite and are not files.
  */
-export function collectNativeRecoveryReferences(db: Database): readonly NativeRecoveryReference[] {
+export function collectNativeRecoveryReferences(db: Database, submissions: ReadonlyMap<number,RecoverySubmissionState> = new Map()): readonly NativeRecoveryReference[] {
   const refs = new Map<string, NativeRecoveryReference>();
   const add = (input: Omit<NativeRecoveryReference,"redactionClass"> & Partial<Pick<NativeRecoveryReference,"redactionClass">>) => {
     const value: NativeRecoveryReference = { mediaType:"text/plain",redactionClass:"private",...input };
@@ -44,17 +45,37 @@ export function collectNativeRecoveryReferences(db: Database): readonly NativeRe
     }
   }
   if (present(db, "piclaw_durable_bindings_v1")) {
-    const bindings = db.query(`SELECT b.incarnation,b.submission_id,s.source_id,s.kind,o.terminal_disposition,o.terminal_message_row_id
+    const bindings = db.query(`SELECT b.incarnation,b.submission_id,b.operation_id,b.chat_jid,b.conversation_id,b.request_id,s.source_id,s.kind,o.terminal_disposition,o.terminal_message_row_id
       FROM piclaw_durable_bindings_v1 b
       JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid
       JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq
       WHERE o.harness_state='finished' AND (o.terminal_disposition='completed'
         OR (o.terminal_disposition='failed' AND o.terminal_message_row_id IS NOT NULL))`).all() as
-      { incarnation: string; submission_id: number | bigint | null; source_id: string; kind: string; terminal_disposition: string; terminal_message_row_id: number | bigint | null }[];
+      { incarnation: string; submission_id: number | bigint | null; operation_id:string; chat_jid:string; conversation_id:number|bigint; request_id:string; source_id: string; kind: string; terminal_disposition: string; terminal_message_row_id: number | bigint | null }[];
     for (const binding of bindings) {
       text(binding.incarnation);
       if (binding.submission_id === null || BigInt(binding.submission_id) < 1n) throw Error("Missing native answer submission binding");
-      add({ owner: "native-answer", ref: `runtime-answer:${binding.incarnation}:${binding.submission_id}`, location: "answers" });
+      const intents = present(db,"piclaw_durable_intent_bindings_v1") ? db.query(`SELECT submission_id,conversation_id,request_id FROM piclaw_durable_intent_bindings_v1
+        WHERE operation_id=? AND chat_jid=? AND incarnation=? ORDER BY source_seq`).all(binding.operation_id,binding.chat_jid,binding.incarnation) as
+        {submission_id:number|bigint|null;conversation_id:number|bigint;request_id:string}[] : [];
+      let selected=Number(binding.submission_id);
+      if (intents.length) {
+        const states=[binding,...intents].map(input=>{
+          const state=input.submission_id===null?undefined:submissions.get(Number(input.submission_id));
+          if(!state || state.type!=="input" || state.conversationId!==Number(input.conversation_id) || state.requestId!==input.request_id ||
+            (state.status!=="done" && !(state.status==="unanswered" && state.reason==="model_error"))) throw Error("Exact terminal SDK submission proof required");
+          return state;
+        });
+        const failed=states.find(state=>state.status==="unanswered");
+        if ((binding.terminal_disposition==="failed") !== !!failed) throw Error("Terminal SDK disposition mismatch");
+        if(failed) selected=failed.id;
+        else {
+          if(states.some(state=>!Number.isSafeInteger(state.entry)) || new Set(states.map(state=>state.entry)).size!==states.length) throw Error("Ambiguous terminal SDK placement");
+          selected=states.reduce((latest,state)=>state.entry!>latest.entry!?state:latest).id;
+        }
+      }
+      if(!Number.isSafeInteger(selected)||selected<1) throw Error("Invalid terminal submission binding");
+      add({ owner: "native-answer", ref: `runtime-answer:${binding.incarnation}:${selected}`, location: "answers" });
       if (binding.kind === "internal" && binding.terminal_disposition === "completed") {
         if (!side.test(binding.source_id)) throw Error("Unsupported internal recovery result");
         add({ owner: "native-side-result", ref: `side-result:${binding.source_id}`, location: "answers" });

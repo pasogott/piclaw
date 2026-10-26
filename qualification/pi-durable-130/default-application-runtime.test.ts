@@ -666,6 +666,16 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       return captured;
     }));
   }
+  const recoveryBarrier=recoveryPackage ? (()=>{
+    let enter!:()=>void, release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}), held=new Promise<void>(resolve=>{release=resolve;});
+    const original=HostConversationRuntime.prototype.wait;let firstWait=true;
+    const hook=spyOn(HostConversationRuntime.prototype,"wait").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof original>){
+      await original.apply(this,args);
+      if(firstWait){firstWait=false;enter();await held;}
+    });
+    captureSpies.push(hook);return {entered,release,hook};
+  })():undefined;
   if (scenario === "native-mcp-http-deny") {
     await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject before models"); })).rejects.toThrow();
     expect(existsSync(mcpPid)).toBe(false);
@@ -748,6 +758,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if(recoveryPackage) backend.attachChannel!({broadcastEvent(){}});
   if (scenario.startsWith("native-code-review-lifecycle-")) {
     const phase = scenario.slice("native-code-review-lifecycle-".length);
     const objects = () => root.query("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name GLOB 'addon_code_review_*' ORDER BY name").all();
@@ -1673,12 +1684,26 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     return;
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
-  const dispatchOutcome = await dispatch!();
+  let dispatchOutcome: Awaited<ReturnType<NonNullable<typeof dispatch>>>;
+  if(recoveryPackage) {
+    const pending=dispatch!();
+    try {
+      await recoveryBarrier!.entered;
+      const {QueuedFollowupLifecycleService}=await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+      const followups=new QueuedFollowupLifecycleService();
+      const queued=root.transaction(()=>followups.enqueueAcceptedFollowupOnce("recovery-attached-input","web:default","recovery accepted steer",new Date().toISOString(),{source:"user"},bound.getQueuedInputSourceAdmission!("web:default")!)).immediate();
+      expect(queued).not.toBeNull();
+      const steering=bound.getAcceptedQueuedSteering!("web:default")!;expect(steering).toBeDefined();
+      const accepted=await steering.accept(queued!);await accepted.dispatch();
+    } finally {recoveryBarrier!.hook.mockRestore();recoveryBarrier!.release();}
+    dispatchOutcome=await pending;
+  } else dispatchOutcome = await dispatch!();
   if (recoveryPackage) {
     try {
-      expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+      expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(2);
+      expect(root.query("SELECT submission_id FROM piclaw_durable_intent_bindings_v1").all()).toHaveLength(1);
       expect((await pool.runSidePrompt("web:default","recovery side input",{budgetWorkId:"fixture-recovery-side"})).status).toBe("success");
-      expect(calls).toBe(2);
+      expect(calls).toBe(3);
       const service = (await import(join(recoveryPackage,"runtime.ts"))).reviewService();
       const branch = (root.query("SELECT branch_id FROM chat_branches WHERE chat_jid='web:default'").get() as {branch_id:string}).branch_id;
       service.createFromCapture({ownerId:"default",actorId:"default",kind:"operator",workspaceId:"recovery"},
@@ -1687,7 +1712,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
           files:[{oldPath:null,newPath:"saved.ts",oldText:null,newText:"saved recovery source\n",change:"source"}]}, {requestId:"recovery-review"});
       backend.stop(); await backend.close();
       await qualifyNativeRecoveryUnitFixture(root,workspace,getDataDir());
-      expect(calls).toBe(2); expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+      expect(calls).toBe(3); expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
     } finally {
       backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
       for (const spy of [...captureSpies,...sdkSpies]) spy.mockRestore();
