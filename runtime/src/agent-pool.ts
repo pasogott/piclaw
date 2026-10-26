@@ -437,8 +437,10 @@ export class AgentPool {
     this.sessionBinder.setBinder(binder);
   }
 
-  /** Run a prompt against the persistent session for `chatJid`. */
+  /** Legacy compatibility runner. Native callers require admitted dispatch ports. */
   async runAgent(prompt: string, chatJid: string, options: RunAgentOptions = {}): Promise<AgentOutput> {
+    if (this.durableApplication) return { status: "error", result: null,
+      error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" };
     // Acquire before session lookup: the cleanup timer can run after getOrCreate
     // returns but before AgentSession flips isStreaming at prompt start.
     const releaseEvictionProtection = this.sessionManager.acquireEvictionProtection(chatJid);
