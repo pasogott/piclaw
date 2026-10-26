@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -190,6 +190,7 @@ test("runDreamAgentTurn skips gracefully when another live Dream run holds the l
 test("runDreamAgentTurn records recovery summaries when the model pass succeeds after recovery", async () => {
   const config = await import("../src/core/config.js");
   resetDreamDestructiveFixture(config);
+  const db = await import("../src/db.js"); db.initDatabase();
 
   const dream = await importFresh<typeof import("../src/dream.js")>("../src/dream.js");
   const result = await dream.runDreamAgentTurn({
@@ -258,9 +259,62 @@ test("scheduled Dream consumes deferred startup backfill state and clears it aft
   expect(dream.hasOutstandingDreamConsolidation(2)).toBe(false);
 });
 
+test("Dream failed execution: a thrown agent outcome still refreshes notes/index without claiming consolidation", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const startup=await import('../src/agent-memory/startup-state.js');startup.writeDreamStartupMarker('backfill_required',config.WORKSPACE_DIR);
+  const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+  const failure=Error('uncertain accepted agent outcome');let disposed=0;
+  await expect(dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+    applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{disposed++;},
+  } as any})).rejects.toBe(failure);
+  for(const name of ['MEMORY.md','current-state.md','recent-context.md'])expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory',name))).toBe(true);
+  expect(db.getDb().query("SELECT path FROM workspace_files WHERE path='notes/memory/MEMORY.md'").get()).toEqual({path:'notes/memory/MEMORY.md'});
+  expect(startup.dreamStartupBackfillRequired(config.WORKSPACE_DIR)).toBe(true);
+  expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);expect(disposed).toBe(1);
+});
+
+test("Dream failed execution: deterministic refresh failure retains the original agent uncertainty", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const refresh=await import('../src/agent-memory/refresh.js');
+  const failure=Error('uncertain accepted agent outcome'),refreshFailure=Error('fixture refresh failed');
+  const hook=spyOn(refresh,'refreshAgentMemoryFromDailyNotes').mockImplementation(()=>{throw refreshFailure;});
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+      applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{},
+    } as any}).then(()=>undefined,error=>error);
+    expect(caught).toBeInstanceOf(AggregateError);expect(caught.errors).toEqual([failure,refreshFailure]);expect(hook).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
+  }finally{hook.mockRestore();}
+});
+
+test("Dream failed execution: access revocation blocks refresh and preserves the agent failure through cleanup", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const refresh=await import('../src/agent-memory/refresh.js'),access=await import('../src/core/config-access.js');
+  const refreshed=spyOn(refresh,'refreshAgentMemoryFromDailyNotes');let denied:{mockRestore():void}|undefined,disposed=0;
+  const failure=Error('uncertain accepted agent outcome');
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+      applyControlCommand:acceptModelChange,runAgent:async()=>{
+        denied=spyOn(access,'readAccessConfig').mockImplementation(()=>{throw Error('fixture access revoked');});throw failure;
+      },disposeChatSession:async()=>{disposed++;},
+    } as any}).then(()=>undefined,error=>error);
+    const failures=(error:unknown):unknown[]=>error instanceof AggregateError?error.errors.flatMap(failures):[error];
+    expect(caught).toBeInstanceOf(AggregateError);expect(failures(caught)).toContain(failure);
+    expect(refreshed).not.toHaveBeenCalled();expect(disposed).toBe(0);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/MEMORY.md'))).toBe(false);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
+  }finally{denied?.mockRestore();refreshed.mockRestore();}
+});
+
 test("runDreamAgentTurn falls back to deterministic refresh when the model pass errors", async () => {
   const config = await import("../src/core/config.js");
   resetDreamDestructiveFixture(config);
+  const db = await import("../src/db.js"); db.initDatabase();
 
   const dream = await importFresh<typeof import("../src/dream.js")>("../src/dream.js");
   let capturedTimeoutMs: number | undefined;

@@ -12,4 +12,6 @@ The polling caller also refuses native messages explicitly with `Native non-web 
 
 Focused qualification covers the real native pool with independent pending ordinary, model-control and slash-command inputs: all records remain unchanged, no command/dedup/timestamp/runner/provider path runs and legacy factories stay unused. The directly affected non-native processing, poll-cancellation/partial-admission/shutdown and coordinator fixtures still pass.
 
+Dream's deterministic failure refresh is also retained: a thrown agent outcome still refreshes authorised notes and the workspace index, then propagates the original exception without marking consolidation complete or retrying. A refresh/cleanup failure preserves both errors; revoked access blocks further data mutation while the held lock is released. These focused host-flow tests do not establish that an admitted native Dream port exists.
+
 Other focused qualification covers real default-factory/native-pool calls for bound, missing, Dream, add-on-operation and non-web-shaped identities; exact/empty captured lookup cases; untouched database/files and zero option/factory/provider calls; and one existing non-native compatibility run. No deployment, live-state cleanup or historical-data removal is implied.

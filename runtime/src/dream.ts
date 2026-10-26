@@ -550,6 +550,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     ? options.model.trim()
     : getDreamConfig().model || null;
   const dreamStartTime = Date.now();
+  let primaryFailure: { error: unknown } | undefined;
   try {
     const lock = acquireDreamLock();
     if (lock.busyReason) {
@@ -591,17 +592,35 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
         };
       }
     }
-    const out = await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
-      budgetWorkId: `background:${dreamChatJid}`,
-      budgetExecutionKind: "background",
-      timeoutMs: getDreamAgentTimeoutMs(),
-      toolCeilingFilter: isDreamToolAllowed,
-    });
-    checkAccess();
-    const refresh = refreshAgentMemoryFromDailyNotes({ recentDays: days });
-    const postBacklog = inspectDailyNoteSummaryBacklog({ recentDays: days });
-    const workspaceIndexRefreshed = await refreshWorkspaceSearchIndex();
-    checkAccess();
+    const execution = await (async () => {
+      try {
+        const output = await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
+          budgetWorkId: `background:${dreamChatJid}`,
+          budgetExecutionKind: "background",
+          timeoutMs: getDreamAgentTimeoutMs(),
+          toolCeilingFilter: isDreamToolAllowed,
+        });
+        return { ok: true as const, output };
+      } catch (error) { return { ok: false as const, error }; }
+    })();
+    let refresh: RefreshAgentMemoryResult;
+    let postBacklog: ReturnType<typeof inspectDailyNoteSummaryBacklog>;
+    let workspaceIndexRefreshed: boolean;
+    try {
+      checkAccess();
+      refresh = refreshAgentMemoryFromDailyNotes({ recentDays: days });
+      postBacklog = inspectDailyNoteSummaryBacklog({ recentDays: days });
+      workspaceIndexRefreshed = await refreshWorkspaceSearchIndex();
+      checkAccess();
+    } catch (error) {
+      if (!execution.ok) throw new AggregateError([execution.error, error], "Dream agent outcome and deterministic refresh failed");
+      throw error;
+    }
+    // A rejected admission/dispatch may be uncertain. Refresh authorised local
+    // notes, but never convert its exception into a completed consolidation or
+    // an automatic retry with another accepted identity.
+    if (!execution.ok) throw execution.error;
+    const out = execution.output;
     const recoverySummary = formatRecoverySummary(out.recovery);
     recordDreamConsolidationResult({
       successful: out.status !== "error",
@@ -653,6 +672,9 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
       skipped: false,
       result: `${(out.result || `${mode === "auto" ? "AutoDream" : "Dream"} complete.`).trimEnd()}\n${suffix}`,
     };
+  } catch (error) {
+    primaryFailure = { error };
+    throw error;
   } finally {
     try {
       checkAccess();
@@ -666,6 +688,9 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
       if (shouldCleanupDreamChat) {
         await cleanupDreamChat(options.agentPool, dreamChatJid, checkAccess);
       }
+    } catch (error) {
+      if (primaryFailure && error !== primaryFailure.error) throw new AggregateError([primaryFailure.error, error], "Dream outcome and cleanup failed");
+      throw error;
     } finally {
       // Resource release remains necessary on denial; do not reap chat or memory data.
       if (lockFd !== null) releaseDreamLock(lockFd);
