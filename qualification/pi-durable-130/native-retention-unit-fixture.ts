@@ -9,7 +9,7 @@ import { createVerifiedSqliteBackup } from "../../runtime/src/db/backup.js";
 import { storeTokenUsage, type TokenUsageRecord } from "../../runtime/src/db/token-usage.js";
 import { planUsageReportRetention, applyUsageReportRetention } from "../../runtime/src/db/usage-report-retention.js";
 import { nativeToolOutputRetentionHeld } from "../../runtime/src/db/tool-outputs.js";
-import { ensureBudgetWork } from "../../runtime/src/db/budget-limits.js";
+import { ensureBudgetWork, saveBudgetCap } from "../../runtime/src/db/budget-limits.js";
 import { reserveBudgetRequest } from "../../runtime/src/db/budget-request-reservations.js";
 import { createCurrentPiclawScheduledRunStore } from "../../runtime/src/service-effects/current-piclaw/scheduled-run-store.js";
 import { scheduledResultRef } from "../../runtime/src/service-effects/current-piclaw/scheduled-history-projection.js";
@@ -35,6 +35,10 @@ export async function qualifyNativeRetentionUnit(unit:string,environment:Recover
     ensureBudgetWork({id:"retention-held-work",chatJid:"web:default",executionKind:"scheduled",scheduledTaskId:"retention-fixture:3"},database);
     reserveBudgetRequest({id:"retention-held-request",workId:"retention-held-work",chatJid:"web:default",providerId:"fixture",modelId:"fixture",accountRef:"synthetic",amountMicros:1},{now:new Date(old)},database);
     storeTokenUsage({...usage,work_id:"retention-held-work"},database);
+    ensureBudgetWork({id:'retention-long-work',chatJid:'web:default',executionKind:'background'},database);
+    storeTokenUsage({...usage,work_id:'retention-long-work'},database);
+    storeTokenUsage({...usage,run_at:'2001-02-01T00:00:00.000Z'},database);
+    saveBudgetCap({id:'retention-recorded-window',scope:'instance_monthly',metric:'api_usd_micros',amount:100,timezone:'UTC'},database,new Date('2001-02-15T00:00:00.000Z'));
     // Raw cache data has no qualified native reference-retirement inventory.
     // It stays retained even when metadata looks expired and unowned.
     database.query("INSERT INTO tool_outputs(id,created_at,summary) VALUES('retained-history-cache',?,'retained archive dependency')").run(old);
@@ -55,9 +59,11 @@ export async function qualifyNativeRetentionUnit(unit:string,environment:Recover
       effect.requestHash=hashCanonicalRequest(request as unknown as CanonicalJsonValue);return request;
     });for(const request of completions)value(await scheduler.complete(request));
     const preserved=["conversations","entries","tasks","submissions","documents","document_revisions","record_ids","piclaw_durable_bindings_v1","piclaw_durable_intent_bindings_v1",
-      "task_run_logs","host_scheduled_task_definitions","service_effect_s01_sources","service_effect_s01_operations","service_effect_s01_operation_sources","service_effect_s02_commits","service_effect_s05_outbox","budget_work","budget_request_reservations","budget_usage_events","tool_outputs","tool_outputs_fts","media","message_media",
+      "task_run_logs","host_scheduled_task_definitions","service_effect_s01_sources","service_effect_s01_operations","service_effect_s01_operation_sources","service_effect_s02_commits","service_effect_s05_outbox","budget_work","budget_caps","budget_cap_revisions","budget_cap_windows","budget_request_reservations","budget_usage_events","tool_outputs","tool_outputs_fts","media","message_media",
       ...(database.query("SELECT name FROM sqlite_schema WHERE type='table' AND name GLOB 'addon_code_review_*'").all() as {name:string}[]).map(row=>row.name)];
     const identity=fingerprintSqliteTables(database,preserved);
+    const legacy=await scheduler.cleanupTerminal({settledBefore:cutoff,limit:100});expect(legacy.ok).toBe(false);expect(!legacy.ok&&legacy.error._tag).toBe('invalid_transition');
+    expect(fingerprintSqliteTables(database,preserved)).toBe(identity);
     expect(nativeToolOutputRetentionHeld(database)).toBe(true);
     createVerifiedSqliteBackup(database,path,beforePath);before=measureRetentionStorage(beforePath);
     let cursor=0,removed=0;
@@ -65,7 +71,8 @@ export async function qualifyNativeRetentionUnit(unit:string,environment:Recover
       const persisted=JSON.parse(JSON.stringify(plan)),result=applyUsageReportRetention(database,persisted);removed+=result.removed.length;
       expect(applyUsageReportRetention(database,persisted).removed).toEqual([]);if(plan.next===null)break;cursor=plan.next;
     }while(true);
-    expect(removed).toBe(5);expect(database.query("SELECT work_id FROM token_usage WHERE run_at=?").all(old)).toEqual([{work_id:"retention-held-work"}]);
+    expect(removed).toBe(5);expect(database.query("SELECT work_id FROM token_usage WHERE run_at=? ORDER BY id").all(old)).toEqual([{work_id:"retention-held-work"},{work_id:'retention-long-work'}]);
+    expect(database.query("SELECT run_at FROM token_usage WHERE work_id IS NULL").all()).toEqual([{run_at:'2001-02-01T00:00:00.000Z'}]);
     let position=value(await scheduler.planRetention({settledBefore:cutoff,limit:1}));
     let retired=0;
     while(true){const result=value(await scheduler.applyRetention(position));retired+=result.removed;expect(value(await scheduler.applyRetention(JSON.parse(JSON.stringify(position))))).toEqual(result);

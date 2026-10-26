@@ -638,12 +638,17 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
     const key = `cleanupTerminal:${request.settledBefore}:${request.limit}`;
     const requestHash = canonicalRequestHash(request);
     return this.database.transaction(() => {
+      assertProcessAdmission();this.assertRetentionSchema();
       const replay = this.replay(key, requestHash, "cleanupTerminal", null);
       if (replay !== undefined) {
         const result = decodeCleanupResult(replay);
         if (!result) throw new CorruptState();
         return Result.ok(result);
       }
+      // Exact existing decisions still replay above. Fresh native retention must
+      // use the explicit dry-run plan; this older selection API has no approval
+      // snapshot or advancing restart cursor and cannot bypass that owner.
+      if(this.database.query("SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='piclaw_durable_bindings_v1'").get())throw new AbortMutation(errorOf("invalid_transition"));
       // Retain canonical rebuild/replay authority while an explicitly linked
       // host payload survives, or the current paused head still references its
       // successor decision. Legacy unlinked rows are never guessed into it.
@@ -651,6 +656,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
         ? `AND NOT EXISTS (SELECT 1 FROM main.task_run_logs h WHERE h.occurrence_id=r.run_id OR (h.task_id=r.task_id AND r.result_ref='task_run_log:' || h.id))` : "";
       const rows = this.database.query(
         `SELECT r.* FROM ${RUNS} r WHERE r.state IN ('completed','abandoned') AND r.settled_at<? ${protectedHistory}
+          AND NOT EXISTS (SELECT 1 FROM main.${LINKS} l JOIN main.service_effect_s05_outbox o ON o.outbox_id=l.outbox_id
+            WHERE l.run_id=r.run_id AND (o.state IN ('pending','started','unknown') OR o.certainty='unknown' OR o.retry_at IS NOT NULL))
           AND NOT EXISTS (SELECT 1 FROM ${TASKS} t WHERE t.task_id=r.task_id AND t.current_revision=r.task_revision
             AND t.status='paused' AND t.next_run_at=r.scheduled_for)
           ORDER BY r.settled_at,r.run_id LIMIT ?`,

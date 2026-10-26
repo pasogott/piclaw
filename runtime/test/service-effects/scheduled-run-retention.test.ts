@@ -58,6 +58,17 @@ test('scheduled retention: pending and unknown delivery retain complete correlat
   const held=snapshot();expect(value(await store.planRetention({settledBefore:cutoff,limit:1})).rows).toEqual([]);expect(snapshot()).toEqual(held);
   expect(value(await store.get(request!.runId))?.outboxIds).toEqual([request!.outboxIntents[0]!.outboxId]);
 });
+test('scheduled retention: legacy cleanup cannot bypass native plans or pending effect holds',async()=>{
+  await seed(1,true);const held=snapshot();
+  expect(value(await store.cleanupTerminal({settledBefore:cutoff,limit:1})).removed).toBe(0);
+  expect(database.query('SELECT count(*) AS n FROM service_effect_s07_outbox_links').get()).toEqual({n:1});
+  // Only the legacy cleanup receipt may be new; the run and its correlation survive.
+  expect(snapshot().slice(0,8)).toEqual(held.slice(0,8));
+  database.exec('CREATE TABLE piclaw_durable_bindings_v1(id INTEGER PRIMARY KEY)');
+  const before=snapshot();expect(value(await store.cleanupTerminal({settledBefore:cutoff,limit:1})).removed).toBe(0);expect(snapshot()).toEqual(before); // Exact historic ACK remains valid.
+  const result=await store.cleanupTerminal({settledBefore:'2026-08-18T00:00:00.000Z',limit:1});
+  expect(result.ok).toBe(false);expect(!result.ok&&result.error._tag).toBe('invalid_transition');expect(snapshot()).toEqual(before);
+});
 for(const statement of ['tombstone_insert','retention_delete','decision_insert'] as const)test(`scheduled retention: ${statement} failure rolls back the exact page and receipt`,async()=>{
   await seed(2);const plan=value(await store.planRetention({settledBefore:cutoff,limit:2})),before=snapshot();fail=statement;
   expect((await store.applyRetention(plan)).ok).toBe(false);expect(snapshot()).toEqual(before);expect(value(await store.applyRetention(plan)).removed).toBe(2);

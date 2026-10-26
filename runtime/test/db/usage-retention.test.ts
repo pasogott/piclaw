@@ -6,7 +6,8 @@ import { planUsageReportRetention, applyUsageReportRetention } from "../../src/d
 import { createTempWorkspace, setEnv } from "../helpers.js";
 import { initDatabase, closeDatabase, getDb } from "../../src/db/connection.js";
 import { storeTokenUsage, pruneOldTokenUsage, type TokenUsageRecord } from "../../src/db/token-usage.js";
-import { ensureBudgetWork } from "../../src/db/budget-limits.js";
+import { readBudgetUsageTotal } from "../../src/budget/usage-total.js";
+import { ensureBudgetWork, saveBudgetCap } from "../../src/db/budget-limits.js";
 import { reserveBudgetRequest } from "../../src/db/budget-request-reservations.js";
 
 let workspace: ReturnType<typeof createTempWorkspace>, restore:()=>void;
@@ -33,11 +34,20 @@ test("usage retention: dry-run, exact-page ACK replay and persisted cursor survi
     expect(snapshot()).toEqual(rows); // The source restore is untouched.
   }finally{copy.close();}
 });
-test("usage retention: new uncertainty invalidates an approved page before any deletion",()=>{
-  ensureBudgetWork({id:"late-hold",chatJid:"web:retention",executionKind:"background"});
-  storeTokenUsage(usage());storeTokenUsage(usage({work_id:"late-hold"}));
+test("usage retention: sole legacy spend evidence survives work lifetime and recorded calendar windows",()=>{
+  const database=getDb();ensureBudgetWork({id:'long-lived-work',chatJid:'web:retention',executionKind:'background'});
+  storeTokenUsage(usage({work_id:'long-lived-work',api_equivalent_cost_known:true,api_equivalent_cost_microusd:7}));
+  storeTokenUsage(usage({run_at:'2000-02-01T00:00:00.000Z',api_equivalent_cost_known:true,api_equivalent_cost_microusd:11}));
+  saveBudgetCap({id:'old-calendar',scope:'instance_monthly',metric:'api_usd_micros',amount:100,timezone:'UTC'},database,new Date('2000-02-15T00:00:00.000Z'));
+  const work=readBudgetUsageTotal({workIds:['long-lived-work']},database),window=readBudgetUsageTotal({startsAt:'2000-02-01T00:00:00.000Z',endsAt:'2000-03-01T00:00:00.000Z'},database);
+  expect(planUsageReportRetention(database,{before}).rows).toEqual([]);expect(pruneOldTokenUsage()).toBe(0);
+  expect(readBudgetUsageTotal({workIds:['long-lived-work']},database)).toEqual(work);
+  expect(readBudgetUsageTotal({startsAt:'2000-02-01T00:00:00.000Z',endsAt:'2000-03-01T00:00:00.000Z'},database)).toEqual(window);
+});
+test("usage retention: newly recorded accounting window invalidates an approved page before deletion",()=>{
+  storeTokenUsage(usage());storeTokenUsage(usage({run_at:'2000-02-01T00:00:00.000Z'}));
   const plan=planUsageReportRetention(getDb(),{before,limit:2});expect(plan.rows).toHaveLength(2);
-  reserveBudgetRequest({id:"late-request",workId:"late-hold",chatJid:"web:retention",providerId:"fixture",modelId:"fixture",accountRef:"synthetic",amountMicros:1});
+  saveBudgetCap({id:'late-window',scope:'instance_daily',metric:'api_usd_micros',amount:100,timezone:'UTC'},getDb(),new Date('2000-02-01T00:00:00.000Z'));
   const rows=snapshot();expect(()=>applyUsageReportRetention(getDb(),plan)).toThrow("became referenced");expect(snapshot()).toEqual(rows);
 });
 test("usage retention: changed report, mid-page fault and final revocation preserve the whole page",()=>{

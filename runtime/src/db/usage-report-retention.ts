@@ -7,8 +7,8 @@ export interface UsageRetentionPlan {
   rows:readonly {id:number;sha256:string;serializedBytes:number}[];
   next:number|null;
 }
-const eligible = `length(t.run_at)=24 AND strftime('%Y-%m-%dT%H:%M:%fZ',t.run_at)=t.run_at AND t.run_at < ? AND t.usage_event_id IS NULL AND t.invocation_id IS NULL AND ${unlinkedUsageReportPredicate("t")}
-  AND NOT EXISTS (SELECT 1 FROM main.budget_request_reservations r WHERE r.work_id=t.work_id AND r.state IN ('reserved','dispatched','unresolved'))`;
+const eligible = `length(t.run_at)=24 AND strftime('%Y-%m-%dT%H:%M:%fZ',t.run_at)=t.run_at AND t.run_at < ? AND t.usage_event_id IS NULL AND t.invocation_id IS NULL AND t.work_id IS NULL AND ${unlinkedUsageReportPredicate("t")}
+  AND NOT EXISTS (SELECT 1 FROM main.budget_cap_windows w WHERE t.run_at>=w.starts_at AND t.run_at<w.ends_at)`;
 function fields(value:unknown,keys:readonly string[]):boolean {
   return !!value&&typeof value==="object"&&!Array.isArray(value)&&JSON.stringify(Reflect.ownKeys(value).sort())===JSON.stringify([...keys].sort())&&keys.every(key=>"value" in Object.getOwnPropertyDescriptor(value,key)!);
 }
