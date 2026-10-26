@@ -99,6 +99,10 @@ class AbortMutation extends Error {
   constructor(readonly error: ScheduledRunStoreError) { super(error._tag); }
 }
 class CorruptState extends Error {}
+function retentionFields(value:unknown,required:readonly string[],optional:readonly string[]=[]):boolean {
+  if(!value||typeof value!=="object"||Array.isArray(value))return false;
+  const keys=Reflect.ownKeys(value);return required.every(key=>Object.hasOwn(value,key))&&keys.every(key=>typeof key==="string"&&[...required,...optional].includes(key)&&"value" in Object.getOwnPropertyDescriptor(value,key)!);
+}
 
 function errorOf(
   tag: ScheduledRunStoreErrorTag,
@@ -243,8 +247,10 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
   }
 
   async planRetention(input:{settledBefore:string;limit:number;after?:ScheduledRetentionCursor|null}):Promise<ResultValue<ScheduledRetentionPlan,ScheduledRunStoreError>> {
-    const request=normaliseCleanup({settledBefore:input.settledBefore,limit:input.limit}),after=input.after??null;
-    if(!request||after&&(!canonicalInstant(after.settledAt)||!validScheduledRunId(after.runId)||after.settledAt>=request.settledBefore))return Result.err(errorOf("invalid_request"));
+    if(!retentionFields(input,["settledBefore","limit"],["after"]))return Result.err(errorOf("invalid_request"));
+    const request=normaliseCleanup({settledBefore:input.settledBefore,limit:input.limit}),rawAfter=input.after??null;
+    if(!request||rawAfter&&(!retentionFields(rawAfter,["settledAt","runId"])||!canonicalInstant(rawAfter.settledAt)||!validScheduledRunId(rawAfter.runId)||rawAfter.settledAt>=request.settledBefore))return Result.err(errorOf("invalid_request"));
+    const after=rawAfter?Object.freeze({...rawAfter}):null;
     try{return Result.ok(this.database.transaction(()=>{
       this.assertRetentionSchema();
       const page=this.database.query(`SELECT * FROM main.${RUNS} WHERE state IN ('completed','abandoned') AND settled_at<?
@@ -263,14 +269,16 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
 
   async applyRetention(input:ScheduledRetentionPlan):Promise<ResultValue<CleanupScheduledRunsResult,ScheduledRunStoreError>> {
     let plan:ScheduledRetentionPlan;try{plan=structuredClone(input);}catch{return Result.err(errorOf("invalid_request"));}
-    const cursor=(value:ScheduledRetentionCursor|null)=>value===null||!!value&&!!canonicalInstant(value.settledAt)&&validScheduledRunId(value.runId)&&value.settledAt<plan.settledBefore;
+    const cursor=(value:ScheduledRetentionCursor|null)=>value===null||retentionFields(value,["settledAt","runId"])&&!!canonicalInstant(value.settledAt)&&validScheduledRunId(value.runId)&&value.settledAt<plan.settledBefore;
     const compare=(a:ScheduledRetentionCursor,b:ScheduledRetentionCursor)=>a.settledAt<b.settledAt?-1:a.settledAt>b.settledAt?1:a.runId<b.runId?-1:a.runId>b.runId?1:0;
-    if(!plan||plan.version!==1||plan.owner!=="scheduled-run-history"||!canonicalInstant(plan.settledBefore)||!Number.isSafeInteger(plan.examined)||plan.examined<0||plan.examined>100||
+    if(!retentionFields(plan,["version","owner","settledBefore","after","through","examined","rows","nextCursor"])||plan.version!==1||plan.owner!=="scheduled-run-history"||!canonicalInstant(plan.settledBefore)||!Number.isSafeInteger(plan.examined)||plan.examined<0||plan.examined>100||
       !Array.isArray(plan.rows)||plan.rows.length>plan.examined||!cursor(plan.after)||!cursor(plan.through)||!cursor(plan.nextCursor)||
+      (plan.examined===0?(plan.after===null?plan.through!==null:!plan.through||compare(plan.through,plan.after)!==0):!plan.through||plan.after!==null&&compare(plan.through,plan.after)<=0)||
       plan.nextCursor!==null&&(!plan.through||compare(plan.nextCursor,plan.through)!==0))return Result.err(errorOf("invalid_request"));
     let previous=plan.after;
-    for(const row of plan.rows){const position={settledAt:row.settledAt,runId:row.runId};
-      if(!cursor(position)||!validHash(row.sha256)||!Number.isSafeInteger(row.serializedBytes)||row.serializedBytes<1||previous&&compare(position,previous)<=0||!plan.through||compare(position,plan.through)>0)return Result.err(errorOf("invalid_request"));previous=position;}
+    for(const row of plan.rows){if(!retentionFields(row,["runId","settledAt","sha256","serializedBytes"]))return Result.err(errorOf("invalid_request"));const position={settledAt:row.settledAt,runId:row.runId};
+      if(!cursor(position)||typeof row.sha256!=="string"||row.sha256.length!==64||!validHash(row.sha256)||!Number.isSafeInteger(row.serializedBytes)||row.serializedBytes<1||previous&&compare(position,previous)<=0||!plan.through||compare(position,plan.through)>0)return Result.err(errorOf("invalid_request"));previous=position;}
+    if(plan.rows.length===0)return Result.ok(Object.freeze({removed:0,runIds:Object.freeze([])})); // No effect and no receipt growth for held/empty pages.
     const requestHash=canonicalRequestHash(plan),key=`retention-v1:${requestHash}`;
     this.trace("cleanupTerminal",key,null,null,"call",null);
     return this.mutate("cleanupTerminal",key,null,null,()=>this.database.transaction(()=>{
@@ -293,7 +301,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
     if(this.database.query(`SELECT 1 FROM sqlite_temp_schema WHERE name LIKE 'service_effect_s07_%' OR name IN ('task_run_logs','budget_work','budget_request_reservations','service_effect_s05_outbox')`).get())throw new CorruptState();
   }
   private retentionEligible(row:RunRow):boolean {
-    if(!['completed','abandoned'].includes(row.state)||row.operation_id!==null)return false; // Native accepted-source evidence has no retirement policy.
+    if(!['completed','abandoned'].includes(row.state)||row.operation_id!==null||row.result_ref!==null)return false; // Retain native accepted sources and opaque external result dependencies.
+    if(this.readSnapshot(row.task_id,row.task_revision).executionRepeatability!=="repeatable")return false;
     if(this.database.query(`SELECT 1 FROM main.${TASKS} WHERE task_id=? AND current_revision=? AND status='paused' AND next_run_at=?`).get(row.task_id,row.task_revision,row.scheduled_for))return false;
     if(hasScheduledHistoryProjection(this.database)&&this.database.query("SELECT 1 FROM main.task_run_logs WHERE occurrence_id=? OR (task_id=? AND ?='task_run_log:'||id)").get(row.run_id,row.task_id,row.result_ref))return false;
     if(this.database.query(`SELECT 1 FROM main.${LINKS} l JOIN main.service_effect_s05_outbox o ON o.outbox_id=l.outbox_id WHERE l.run_id=? AND

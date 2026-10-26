@@ -22,7 +22,7 @@ const task=(id:string):ScheduledTaskAuthorityInput=>({taskId:id,chatJid:'web:ret
 function completion(lease:ScheduledRunLease,withOutbox=false):CompleteScheduledRunRequest{
   const outbox={effect:{idempotencyKey:'deliver:'+lease.record.runId,requestHash:'',operationId:null,sourceSeq:null,provenanceRef:'fixture:retention',redactionClass:'private' as const},outboxId:'deliver:'+lease.record.runId,kind:'channel_delivery' as const,payloadRef:'payload:delivery',destinationRef:'destination:web',availableAt:done,enqueuedAt:done,repeatability:'reconciliation_required' as const};
   outbox.effect.requestHash=hashCanonicalRequest(outbox as unknown as CanonicalJsonValue);
-  const request:CompleteScheduledRunRequest={effect:{idempotencyKey:'complete:'+lease.record.runId,requestHash:'',operationId:null,sourceSeq:null,provenanceRef:'fixture:retention',redactionClass:'private'},runId:lease.record.runId,workerId:lease.record.workerId,expectedAttempt:lease.record.attempt,expectedTaskRevision:lease.record.taskRevision,leaseToken:lease.leaseToken,now:done,status:'success',durationMs:10,resultRef:'result:retention',errorCode:null,completedAt:done,outboxIntents:withOutbox?[outbox]:[]};
+  const request:CompleteScheduledRunRequest={effect:{idempotencyKey:'complete:'+lease.record.runId,requestHash:'',operationId:null,sourceSeq:null,provenanceRef:'fixture:retention',redactionClass:'private'},runId:lease.record.runId,workerId:lease.record.workerId,expectedAttempt:lease.record.attempt,expectedTaskRevision:lease.record.taskRevision,leaseToken:lease.leaseToken,now:done,status:'error',durationMs:10,resultRef:null,errorCode:'fixture_error',completedAt:done,outboxIntents:withOutbox?[outbox]:[]};
   request.effect.requestHash=hashCanonicalRequest(request as unknown as CanonicalJsonValue);return request;
 }
 async function seed(count:number,withOutbox=false){const authority=createScheduledTaskAuthority(database);for(let i=0;i<count;i++)authority.create(task('task:retention:'+i));
@@ -38,8 +38,20 @@ test('scheduled retention: dry-run, lost ACK, reopen and cursor preserve tombsto
   const next=value(await store.planRetention({settledBefore:cutoff,limit:1,after:plan.nextCursor}));expect(next.rows[0]!.runId).not.toBe(plan.rows[0]!.runId);expect(value(await store.applyRetention(next)).removed).toBe(1);
   expect(value(await store.applyRetention(persisted))).toEqual(replay);expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
 });
+test('scheduled retention: caller mutation cannot change an admitted retirement page',async()=>{
+  await seed(2);const plan=value(await store.planRetention({settledBefore:cutoff,limit:1})),input=JSON.parse(JSON.stringify(plan));
+  const pending=store.applyRetention(input);input.rows=[];input.settledBefore='2999-01-01T00:00:00.000Z';
+  expect(value(await pending).runIds).toEqual([plan.rows[0]!.runId]);expect(value(await store.applyRetention(plan)).removed).toBe(1);
+});
+test('scheduled retention: opaque result references remain owned and cannot be compacted',async()=>{
+  createScheduledTaskAuthority(database).create(task('opaque-task'));
+  const lease=value(await store.claimDue({now:instant,limit:1,workerId:'worker:opaque',leaseTokenPrefix:'opaque',leaseDurationMs:60000,reclaimAuthorities:[]}))[0]!;
+  const base=completion(lease),effect={...base.effect,requestHash:''};const request:CompleteScheduledRunRequest={...base,effect,status:'success',resultRef:'opaque:external-result',errorCode:null};
+  effect.requestHash=hashCanonicalRequest(request as unknown as CanonicalJsonValue);value(await store.complete(request));const before=snapshot();
+  expect(value(await store.planRetention({settledBefore:cutoff,limit:1})).rows).toEqual([]);expect(snapshot()).toEqual(before);
+});
 test('scheduled retention: pending and unknown delivery retain complete correlation evidence',async()=>{
-  const [request]=await seed(1,true);const before=snapshot();expect(value(await store.planRetention({settledBefore:cutoff,limit:1})).rows).toEqual([]);expect(snapshot()).toEqual(before);
+  const [request]=await seed(1,true);const before=snapshot();const empty=value(await store.planRetention({settledBefore:cutoff,limit:1}));expect(empty.rows).toEqual([]);expect(value(await store.applyRetention(empty))).toEqual({removed:0,runIds:[]});expect(snapshot()).toEqual(before);
   const outbox=value(createCurrentPiclawServiceOutboxStore(database,{hitFault(){return false;},recordTrace(){}}));
   const claim=value(await outbox.claimNext({kinds:['channel_delivery'],workerId:'worker:delivery',leaseToken:'delivery-lease',now:done,leaseExpiresAt:'2026-08-16T01:01:10.000Z'}));if(!claim.lease)throw Error('Missing delivery lease');
   value(await outbox.markUnknown({outboxId:request!.outboxIntents[0]!.outboxId,workerId:'worker:delivery',expectedAttempt:claim.lease.record.attempt,leaseToken:'delivery-lease',errorTag:'lost_ack',certainty:'unknown',observedAt:'2026-08-16T01:00:11.000Z'}));

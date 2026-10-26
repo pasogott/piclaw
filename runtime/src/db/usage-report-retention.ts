@@ -7,8 +7,11 @@ export interface UsageRetentionPlan {
   rows:readonly {id:number;sha256:string;serializedBytes:number}[];
   next:number|null;
 }
-const eligible = `length(t.run_at)=24 AND strftime('%Y-%m-%dT%H:%M:%fZ',t.run_at)=t.run_at AND t.run_at < ? AND ${unlinkedUsageReportPredicate("t")}
+const eligible = `length(t.run_at)=24 AND strftime('%Y-%m-%dT%H:%M:%fZ',t.run_at)=t.run_at AND t.run_at < ? AND t.usage_event_id IS NULL AND t.invocation_id IS NULL AND ${unlinkedUsageReportPredicate("t")}
   AND NOT EXISTS (SELECT 1 FROM main.budget_request_reservations r WHERE r.work_id=t.work_id AND r.state IN ('reserved','dispatched','unresolved'))`;
+function fields(value:unknown,keys:readonly string[]):boolean {
+  return !!value&&typeof value==="object"&&!Array.isArray(value)&&JSON.stringify(Reflect.ownKeys(value).sort())===JSON.stringify([...keys].sort())&&keys.every(key=>"value" in Object.getOwnPropertyDescriptor(value,key)!);
+}
 const positive=(n:unknown):n is number=>typeof n==="number"&&Number.isSafeInteger(n)&&n>0;
 function cutoff(value:string){if(typeof value!=="string"||!Number.isFinite(Date.parse(value))||new Date(value).toISOString()!==value)throw Error("Invalid usage retention cutoff");}
 function encoded(row:object){return JSON.stringify(row,(_key,value)=>{
@@ -39,10 +42,10 @@ export function planUsageReportRetention(database:Database,input:{before:string;
  * reservation, work, native history or other owner's table is ever mutated. */
 export function applyUsageReportRetention(database:Database,input:UsageRetentionPlan,validate:()=>void=()=>{}) {
   const plan=structuredClone(input);
-  if(!plan||plan.version!==1||plan.owner!=="legacy-usage-reports"||!Number.isSafeInteger(plan.after)||plan.after<0||!Number.isSafeInteger(plan.through)||plan.through<plan.after||!Number.isSafeInteger(plan.examined)||plan.examined<0||plan.examined>1000||(plan.examined===0?plan.through!==plan.after:plan.through<=plan.after)||!Array.isArray(plan.rows)||plan.rows.length>plan.examined)throw Error("Invalid usage retention plan");
+  if(!fields(plan,["version","owner","before","after","through","examined","rows","next"])||plan.version!==1||plan.owner!=="legacy-usage-reports"||!Number.isSafeInteger(plan.after)||plan.after<0||!Number.isSafeInteger(plan.through)||plan.through<plan.after||!Number.isSafeInteger(plan.examined)||plan.examined<0||plan.examined>1000||(plan.examined===0?plan.through!==plan.after:plan.through<=plan.after)||!Array.isArray(plan.rows)||plan.rows.length>plan.examined)throw Error("Invalid usage retention plan");
   cutoff(plan.before);let previous=plan.after;
   for(const row of plan.rows){
-    if(!positive(row.id)||row.id<=previous||row.id>plan.through||typeof row.sha256!=="string"||row.sha256.length!==64||/[^a-f0-9]/.test(row.sha256)||!positive(row.serializedBytes))throw Error("Invalid usage retention row proof");
+    if(!fields(row,["id","sha256","serializedBytes"])||!positive(row.id)||row.id<=previous||row.id>plan.through||typeof row.sha256!=="string"||row.sha256.length!==64||/[^a-f0-9]/.test(row.sha256)||!positive(row.serializedBytes))throw Error("Invalid usage retention row proof");
     previous=row.id;
   }
   if(plan.next!==null&&(plan.examined===0||plan.next!==plan.through))throw Error("Invalid usage retention cursor");

@@ -19,6 +19,16 @@ test('native cache retention: owner presence holds raw files, metadata, FTS and 
   const timer=spyOn(globalThis,'setInterval');try{startToolOutputCleanup();expect(timer).not.toHaveBeenCalled();}finally{timer.mockRestore();}
   expect(snapshot()).toEqual(rows);expect(existsSync(path)).toBe(true);
 });
+test('native cache retention: fresh startup preserves files before the native owner/import preflight exists',async()=>{
+  const path=seed();
+  const child=Bun.spawn([process.execPath,'--no-env-file','-e',`
+    import {initializeRuntimeEnvironment} from ${JSON.stringify(new URL('../../src/runtime/startup.ts',import.meta.url).pathname)};
+    initializeRuntimeEnvironment({loadTimestamps(){},loadChats(){}});
+    const fs=await import('node:fs');console.log('CACHE_STARTUP:'+JSON.stringify({retained:fs.existsSync(${JSON.stringify(path)})}));process.exit(0);
+  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PICLAW_DISABLE_BACKGROUND_WORKSPACE_INDEX:'1',PI_OFFLINE:'1'},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  const [status,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+  expect(status,stderr).toBe(0);const line=stdout.split('\n').find(line=>line.includes('CACHE_STARTUP:'));expect(line).toBeDefined();expect(JSON.parse(line!.slice(line!.indexOf('CACHE_STARTUP:')+'CACHE_STARTUP:'.length))).toEqual({retained:true});expect(existsSync(path)).toBe(true);
+});
 test('native cache retention: unavailable registration inventory never authorises orphan file deletion',()=>{
   const path=seed(),db=getDb(),prepare=db.prepare;
   db.prepare=((sql:string,...args:unknown[])=>{if(sql.startsWith('SELECT path FROM tool_outputs'))throw Error('inventory unavailable');return Reflect.apply(prepare,db,[sql,...args]);}) as typeof db.prepare;

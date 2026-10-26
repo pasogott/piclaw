@@ -69,6 +69,24 @@ test("usage retention: examined pages advance past protected reports with an ato
   expect(pruneOldTokenUsage()).toBe(1);expect(database.query("SELECT value FROM router_state WHERE key='retention:legacy-usage-reports:v1'").get()).toBeNull();
   expect(database.query("SELECT * FROM budget_usage_events ORDER BY usage_event_id").all()).toEqual(beforeEvents);
 });
+test("usage retention: refused cursor publication rolls back deletion and malformed cursors preserve data",()=>{
+  seed(1001);const database=getDb(),rows=snapshot();
+  database.exec("CREATE TEMP TRIGGER ignore_retention_cursor BEFORE INSERT ON router_state WHEN NEW.key='retention:legacy-usage-reports:v1' BEGIN SELECT RAISE(IGNORE); END");
+  try{expect(()=>pruneOldTokenUsage()).toThrow('cursor write refused');expect(snapshot()).toEqual(rows);}finally{database.exec('DROP TRIGGER ignore_retention_cursor');}
+  for(const state of ['null','not-json',JSON.stringify({version:1,retentionDays:90,before:'2999-01-01T00:00:00.000Z',after:1})]){
+    database.query("INSERT OR REPLACE INTO router_state(key,value) VALUES('retention:legacy-usage-reports:v1',?)").run(state);
+    expect(()=>pruneOldTokenUsage()).toThrow();expect(snapshot()).toEqual(rows);
+  }
+});
+test("usage retention: missing event or request records do not turn named evidence into anonymous cache",()=>{
+  storeTokenUsage(usage());storeTokenUsage(usage({invocation_id:'missing-request'}));
+  getDb().exec("UPDATE token_usage SET usage_event_id='missing-event' WHERE invocation_id IS NULL");
+  const rows=snapshot(),plan=planUsageReportRetention(getDb(),{before});expect(plan.rows).toEqual([]);expect(applyUsageReportRetention(getDb(),plan).removed).toEqual([]);expect(snapshot()).toEqual(rows);
+});
+test("usage retention: malformed report dates remain retained evidence",()=>{
+  storeTokenUsage(usage({run_at:'0000-bad'}));storeTokenUsage(usage());const plan=planUsageReportRetention(getDb(),{before,limit:2});expect(plan.examined).toBe(2);expect(plan.rows).toHaveLength(1);
+  expect(applyUsageReportRetention(getDb(),plan).removed).toHaveLength(1);expect(getDb().query('SELECT run_at FROM token_usage').all()).toEqual([{run_at:'0000-bad'}]);
+});
 test("usage retention: startup compatibility cleanup is bounded to one thousand reports",()=>{
   seed(1001);
   expect(pruneOldTokenUsage()).toBe(1000);

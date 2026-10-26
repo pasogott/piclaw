@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { assertOfflineRecoveryPath, fingerprintRecoveryFile } from "./native-recovery-unit.js";
 import { assertSchemaInventory, readSchemaInventory, type SchemaContract } from "./schema-ownership.js";
 
@@ -21,7 +21,10 @@ function storageClass(table:string):string {
  * observations and do not predict file-size reclamation after deletion. */
 export function measureRetentionStorage(path:string) {
   const source=assertOfflineRecoveryPath(path),before=fingerprintRecoveryFile(source);
-  for(const suffix of ["-wal","-shm","-journal"])if(existsSync(source+suffix))throw Error("Sealed retention measurement snapshot required");
+  for(const suffix of ["-wal","-shm","-journal"]){
+    try{lstatSync(source+suffix);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")continue;throw error;}
+    throw Error("Sealed retention measurement snapshot required");
+  }
   const database=new Database(source,{readonly:true,strict:true});
   try{
     database.exec("PRAGMA query_only=ON;BEGIN");
