@@ -251,3 +251,19 @@ test("CLI requires explicit input and exact approval and produces metadata-only 
   expect(result.migration).toMatchObject({ owner: historicalAccountMigration.owner, id: historicalAccountMigration.id });
   expect(cli("apply", directory, plan.sha256).exitCode).toBe(1);
 });
+
+test("failed rowid probes refuse snapshots instead of silently reducing preservation proof", () => {
+  const path = source(), plan = copies(path), h = handles();
+  try {
+    const before = snapshotHistoricalDatabase(h.candidate), prepare = h.candidate.prepare.bind(h.candidate);
+    const failure = spyOn(h.candidate, "prepare").mockImplementation(sql => {
+      if (/^SELECT t\."(?:_rowid_|rowid|oid)"/.test(sql)) throw Error("injected rowid probe failure");
+      return prepare(sql);
+    });
+    try {
+      expect(() => snapshotHistoricalDatabase(h.candidate)).toThrow("injected rowid probe failure");
+      expect(() => applyHistoricalAccounts(h.candidate, h.archive, plan.sha256)).toThrow("Historical logical snapshot could not complete");
+    } finally { failure.mockRestore(); }
+    expect(snapshotHistoricalDatabase(h.candidate)).toBe(before);
+  } finally { h.close(); }
+});
