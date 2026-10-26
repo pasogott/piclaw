@@ -123,13 +123,20 @@ export function createNativeTurnView(database: Database, channel: NativeTurnView
       status(currentTool);
     }
     if (currentTool) lastTool = { ...currentTool, active_tools: activeTools, active_tool_count: activeTools.length };
-    if (activeTools.length && lastTool) status(lastTool);
+    const retry = live.generation?.retry;
+    if (retry) {
+      const at = typeof retry.at === "number" && Number.isFinite(retry.at) && Math.abs(retry.at) <= 8.64e15 ? new Date(retry.at).toISOString() : undefined;
+      const attempt = Number.isSafeInteger(live.generation.attempt) && live.generation.attempt > 0 ? live.generation.attempt : undefined;
+      // Use the existing intent/countdown panel, preserving the last tool's
+      // Output data. Never forward the SDK's free-form provider error here.
+      status({ ...lastTool, type: "intent", title: "Retrying model request" + (attempt ? " (retry " + attempt + ")" : ""), phase: "retry",
+        ...(at ? { retry_at: at } : {}), active_tools: activeTools, active_tool_count: activeTools.length });
+    } else if (activeTools.length && lastTool) status(lastTool);
     else if (!activeTools.length && live.generation) {
       // Retain the last tool and its output while the model resumes. A phase
       // update must not erase the Output pane or a fast tool's feedback.
       status(lastTool ? { ...lastTool, active_tools: [], active_tool_count: 0, last_activity: true, phase: partialDraft ? "drafting" : "thinking" }
-        : { type: "thinking", title: partialDraft ? "Writing response..." : "Thinking...", phase: partialDraft ? "drafting" : "thinking", active_tools: [], active_tool_count: 0,
-          ...(live.generation.retry ? { title: "Retrying", retry_at: live.generation.retry.at } : {}) });
+        : { type: "thinking", title: partialDraft ? "Writing response..." : "Thinking...", phase: partialDraft ? "drafting" : "thinking", active_tools: [], active_tool_count: 0 });
     } else if (currentTool && lastTool) status(lastTool);
   };
 }
