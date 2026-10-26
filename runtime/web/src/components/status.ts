@@ -1048,7 +1048,7 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
     };
 
     return html`
-        <div class="agent-status-panel">
+        <div class=${`agent-status-panel${showCorePanels ? ' agent-status-panel-core' : ''}`}>
             ${showCorePanels && intent && renderIntentPanel(intent, intentColor)}
             ${showExtensionPanels && Array.isArray(extensionPanels) && extensionPanels.map((panel) => renderExtensionPanel(panel))}
             ${showCorePanels && status?.type === 'intent' && renderIntentPanel(status, statusIntentColor, statusIntentElapsedLabel)}
