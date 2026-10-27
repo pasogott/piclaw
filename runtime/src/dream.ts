@@ -19,6 +19,7 @@ import { getTaskById, createTask, getDb, updateTask } from "./db.js";
 import { deleteThinkingContentByChatJid, deleteThinkingContentByChatJidPattern } from "./db/thinking-cleanup.js";
 import { refreshWorkspaceIndex } from "./workspace-search.js";
 import { launchWorkspaceIndexProcess, waitForWorkspaceIndexProcess } from "./workspace-index-process.js";
+import { withWorkspaceIndexAuthority } from './core/workspace-index-access.js';
 import { markNoteIndexDirty } from "./note-retrieval/coordinator.js";
 import { computeNextRun } from "./task-scheduler-utils.js";
 import { sanitiseJid } from "./agent-pool/session-paths.js";
@@ -444,16 +445,20 @@ function getDreamAgentTimeoutMs(): number {
   return getDreamConfig().agentTimeoutMs;
 }
 
-async function refreshWorkspaceSearchIndex(): Promise<boolean> {
+async function refreshWorkspaceSearchIndex(checkCurrent?:()=>void): Promise<boolean> {
   try {
-    await refreshWorkspaceIndex({ scope: "all" });
+    return await withWorkspaceIndexAuthority(checkCurrent??(()=>{}),async()=>{
+    checkCurrent?.();await refreshWorkspaceIndex({ scope: "all" });
+    checkCurrent?.();
     // Re-check Dream authority through the established index boundary before
     // touching new note-index metadata or launching the private writer.
     markNoteIndexDirty();
     launchWorkspaceIndexProcess({ scope: "notes" });
-    await waitForWorkspaceIndexProcess();
+    await waitForWorkspaceIndexProcess();checkCurrent?.();
     return true;
+    });
   } catch (error) {
+    checkCurrent?.();
     debugSuppressedError(log, "failed to refresh workspace search index after Dream", error);
     return false;
   }
@@ -510,10 +515,12 @@ async function createDreamBackup(chatJid: string, mode: "manual" | "auto", days:
   return backupPath;
 }
 
-export async function runDreamAgentTurn(options: { chatJid: string; days?: number; mode?: "manual" | "auto"; model?: string | null; agentPool: AgentPool }): Promise<DreamAgentTurnResult> {
+export async function runDreamAgentTurn(options: { chatJid: string; days?: number; mode?: "manual" | "auto"; model?: string | null; agentPool: AgentPool; nativeAuthority?:{invocationId:string;assertCurrent():void} }): Promise<DreamAgentTurnResult> {
+  const inherited=options.nativeAuthority&&Object.freeze({invocationId:options.nativeAuthority.invocationId,assertCurrent:options.nativeAuthority.assertCurrent.bind(options.nativeAuthority)});
+  inherited?.assertCurrent();
   const access = createDreamAccessGuard();
   let lockLease: DreamLockLease | null = null;
-  const checkAccess = () => { access(); if (lockLease) assertDreamLockCurrent(lockLease); };
+  const checkAccess = () => { access(); inherited?.assertCurrent(); if (lockLease) assertDreamLockCurrent(lockLease); };
   const chatJid = options.chatJid;
   const mode = options.mode === "auto" ? "auto" : "manual";
   const days = Number.isFinite(options.days) && Number(options.days) > 0
@@ -583,7 +590,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
       if (modelError) {
         const refresh = refreshAgentMemoryFromDailyNotes({ recentDays: days });
         const postBacklog = inspectDailyNoteSummaryBacklog({ recentDays: days });
-        const workspaceIndexRefreshed = await refreshWorkspaceSearchIndex();
+        const workspaceIndexRefreshed = await refreshWorkspaceSearchIndex(checkAccess);
         checkAccess();
         return {
           mode,
@@ -605,7 +612,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     }
     const execution = await (async () => {
       try {
-        const output = native?await options.agentPool.dispatchDreamOperation({invocationId:crypto.randomUUID(),chatJid,mode,days,model:requestedDreamModel,timeoutMs:getDreamAgentTimeoutMs(),acceptedAt:new Date().toISOString(),assertCurrent:checkAccess}):await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
+        const output = native?await options.agentPool.dispatchDreamOperation({invocationId:inherited?.invocationId??crypto.randomUUID(),chatJid,mode,days,model:requestedDreamModel,timeoutMs:getDreamAgentTimeoutMs(),acceptedAt:new Date().toISOString(),assertCurrent:checkAccess}):await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
           budgetWorkId: `background:${dreamChatJid}`,
           budgetExecutionKind: "background",
           timeoutMs: getDreamAgentTimeoutMs(),
@@ -621,7 +628,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
       checkAccess();
       refresh = refreshAgentMemoryFromDailyNotes({ recentDays: days });
       postBacklog = inspectDailyNoteSummaryBacklog({ recentDays: days });
-      workspaceIndexRefreshed = await refreshWorkspaceSearchIndex();
+      workspaceIndexRefreshed = await refreshWorkspaceSearchIndex(checkAccess);
       checkAccess();
     } catch (error) {
       if (!execution.ok) throw new AggregateError([execution.error, error], "Dream agent outcome and deterministic refresh failed");
