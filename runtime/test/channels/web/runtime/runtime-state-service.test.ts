@@ -67,7 +67,6 @@ describe("web runtime state service", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({ "web:pending": "t1" }),
       getKnownChatJids: () => ["web:pending"],
       getDeferredQueuedFollowups: () => [],

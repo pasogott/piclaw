@@ -159,7 +159,6 @@ export interface WebRecoveryStore {
   quarantinePendingManualCompactCommands?(chatJid: string, options: { createdAt: string; reason: string; backoffUntil?: string | null }): ManualCompactQuarantineRecord | null;
   quarantineStalePreflightRun?(preflight: PreflightRun, options: { createdAt: string; reason: string; backoffUntil?: string | null }): StalePreflightRecoveryRecord | null;
   clearInflightMarker(chatJid: string): void;
-  rollbackInflightRun?(chatJid: string, prevTs: string): void;
   getAllChatCursors(): Record<string, string>;
   getKnownChatJids(): string[];
   getDeferredQueuedFollowups(chatJid: string): DeferredQueuedFollowupRecord[];

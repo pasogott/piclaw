@@ -56,7 +56,6 @@ describe("web recovery helpers", () => {
       getAgentReplyStateAfter: () => "none",
       clearChatPreflight: (chatJid) => { clearedPreflight.push(chatJid); },
       clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -92,7 +91,6 @@ describe("web recovery helpers", () => {
       getChatCompactionBackoff: () => ({ failureCount: 1 }),
       setChatCompactionBackoff: (chatJid, backoff) => { backoffs.push({ chatJid, ...backoff }); },
       clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -147,7 +145,6 @@ describe("web recovery helpers", () => {
       },
       clearChatCompactionActive: () => { throw new Error("should be handled by quarantinePendingManualCompactCommands"); },
       clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -189,7 +186,6 @@ describe("web recovery helpers", () => {
       getChatCompactionBackoff: () => ({ chatJid: "web:loop", failureCount: 2, lastFailedAt: "2026-01-01T00:00:00Z", backoffUntil: "2026-01-01T00:00:00Z", lastErrorMessage: null }),
       setChatCompactionBackoff: (chatJid, backoff) => { backoffs.push({ chatJid, failureCount: backoff.failureCount, backoffUntil: backoff.backoffUntil }); },
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -229,7 +225,6 @@ describe("web recovery helpers", () => {
       getChatCompactionBackoff: () => null,
       setChatCompactionBackoff: (_chatJid, backoff) => { backoffs.push({ chatJid: _chatJid, failureCount: backoff.failureCount, backoffUntil: backoff.backoffUntil, lastErrorMessage: backoff.lastErrorMessage }); },
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -275,7 +270,6 @@ describe("web recovery helpers", () => {
         };
       },
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -301,7 +295,6 @@ describe("web recovery helpers", () => {
     ];
 
     const cleared: string[] = [];
-    const rolledBack: Array<{ chatJid: string; prevTs: string }> = [];
     const enqueued: Array<{ key: string; laneKey?: string; task: () => Promise<void> }> = [];
     const processed: Array<{ chatJid: string; agentId: string }> = [];
     const replyChecks: Array<{ chatJid: string; afterTs: string }> = [];
@@ -330,9 +323,6 @@ describe("web recovery helpers", () => {
       clearInflightMarker: (chatJid) => {
         cleared.push(chatJid);
       },
-      rollbackInflightRun: (chatJid, prevTs) => {
-        rolledBack.push({ chatJid, prevTs });
-      },
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -347,7 +337,6 @@ describe("web recovery helpers", () => {
       { chatJid: "web:3", afterTs: "2026-01-01T00:04:30Z" },
     ]);
     expect(cleared).toEqual(["web:1", "web:2", "web:3"]);
-    expect(rolledBack).toEqual([]);
     expect(enqueued.map(({ key, laneKey }) => ({ key, laneKey }))).toEqual([]);
   });
 
@@ -373,7 +362,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -394,7 +382,6 @@ describe("web recovery helpers", () => {
     ];
 
     const cleared: string[] = [];
-    const rolledBack: Array<{ chatJid: string; prevTs: string }> = [];
     const enqueued: string[] = [];
 
     const ctx: WebRecoveryContext = {
@@ -410,7 +397,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      rollbackInflightRun: (chatJid, prevTs) => { rolledBack.push({ chatJid, prevTs }); },
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -420,7 +406,6 @@ describe("web recovery helpers", () => {
     recoverInflightRuns(ctx, store);
 
     expect(cleared).toEqual(["web:stale"]);
-    expect(rolledBack).toEqual([]);
     expect(enqueued).toEqual([]);
   });
 
@@ -441,7 +426,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -468,7 +452,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => { throw new Error("should not clear"); },
-      rollbackInflightRun: () => { throw new Error("should not roll back"); },
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -496,7 +479,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -531,7 +513,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -563,7 +544,6 @@ describe("web recovery helpers", () => {
       },
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({}),
       getKnownChatJids: () => [],
       getDeferredQueuedFollowups: () => [],
@@ -594,7 +574,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({ "web:1": "t1", "web:2": "t2" }),
       getKnownChatJids: () => ["web:1", "web:2"],
       getDeferredQueuedFollowups: () => [],
@@ -626,7 +605,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({ "web:known": "t1" }),
       getKnownChatJids: () => ["web:known", "web:new"],
       getDeferredQueuedFollowups: () => [],
@@ -660,7 +638,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({
         "web:default": "t-root",
         "web:default:branch:research": "t-branch",
@@ -699,7 +676,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({ "web:queue-only": "" }),
       getKnownChatJids: () => ["web:queue-only"],
       getDeferredQueuedFollowups: () => [{ rowId: -1, queuedContent: "queued after restart", threadId: null, queuedAt: "2026-01-01T00:00:00.000Z" }],
@@ -736,7 +712,6 @@ describe("web recovery helpers", () => {
       transaction: (run) => run(),
       getAgentReplyStateAfter: () => "none",
       clearInflightMarker: () => {},
-      rollbackInflightRun: () => {},
       getAllChatCursors: () => ({ "web:1": "t0" }),
       getKnownChatJids: () => ["web:1"],
       getDeferredQueuedFollowups: () => [],
