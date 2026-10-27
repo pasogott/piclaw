@@ -1833,7 +1833,14 @@ async function processAuthorisedChat(
     }
     setChatCursor(chatJid, currentMessage.timestamp);
     nativeStatus("done");
-    channel.resumeChat(chatJid);
+    try {
+      channel.resumeChat(chatJid);
+    } catch (error) {
+      debugSuppressedError(log, "Native resume hook failed after accepted dispatch settlement.", error, {
+        operation: "process_chat.native_resume_failed",
+        chatJid,
+      });
+    }
     return;
   }
 

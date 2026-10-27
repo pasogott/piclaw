@@ -1164,3 +1164,84 @@ test("native status publication failures do not block settled dispatch or trigge
     rmSync(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test("native resume hook failure after settled dispatch does not block cursor advance or trigger legacy lifecycle modules", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "native-process-chat-resume-failure-post-settle-"));
+  const script = `
+    import { plugin } from "bun";
+    const source = ${JSON.stringify(source)};
+    const attempts = [];
+    plugin({ name: "legacy-process-chat-runtime-fence", setup(build) {
+      build.onLoad({ filter: /\\/channels\\/web\\/runtime\\/process-chat-(preflight|streaming|finalization)-runtime\\.(ts|js)$/ }, args => {
+        if (!args.path.startsWith(source + "/")) return;
+        attempts.push(args.path);
+        throw new Error("LEGACY_PROCESS_CHAT_FENCE:" + args.path);
+      });
+    }});
+
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
+    const chatJid = "web:native-resume-failure-post-settle";
+    const messageTs = "2026-01-01T00:00:01.000Z";
+    initDatabase();
+    storeChatMetadata(chatJid, messageTs, "boundary-user");
+    storeMessage({ id: "msg-native-resume-failure-post-settle", chat_jid: chatJid, sender: "boundary-user", sender_name: "Boundary User", content: "hello", timestamp: messageTs, is_from_me: false });
+
+    let dispatchCalls = 0;
+    let statusCalls = 0;
+    let broadcastCalls = 0;
+    let resumeCalls = 0;
+    const dispatchAcceptedInput = () => async () => {
+      dispatchCalls += 1;
+      return "settled";
+    };
+    dispatchAcceptedInput.waitForPending = async () => "settled";
+
+    const channel = {
+      dispatchAcceptedInput,
+      updateAgentStatus() { statusCalls += 1; },
+      broadcastEvent() { broadcastCalls += 1; },
+      resumeChat() {
+        resumeCalls += 1;
+        throw new Error("synthetic resume failure");
+      },
+    };
+
+    await processChat(channel, chatJid, "default");
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, statusCalls, broadcastCalls, resumeCalls }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        PICLAW_WORKSPACE: resolve(root, "workspace"),
+        PICLAW_STORE: resolve(root, "store"),
+        PICLAW_DATA: resolve(root, "data"),
+        PI_CODING_AGENT_DIR: resolve(root, "agent"),
+        PICLAW_DB_IN_MEMORY: "1",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
+    const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+    expect(result.attempts).toEqual([]);
+    expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
+    expect(result.dispatchCalls).toBe(1);
+    expect(result.statusCalls).toBe(2);
+    expect(result.broadcastCalls).toBe(2);
+    expect(result.resumeCalls).toBe(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
