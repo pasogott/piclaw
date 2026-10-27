@@ -338,6 +338,9 @@ export class AgentRuntimeFacade {
     };
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) => {
+      if (typeof chat !== "string" || !chat.trim()) {
+        throw new Error("Durable compatibility chat key must be non-empty");
+      }
       if (!port || typeof port !== "object") {
         throw new Error("Durable compatibility binding must be an object");
       }

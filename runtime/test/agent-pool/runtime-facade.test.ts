@@ -130,6 +130,24 @@ test("durable compatibility readContextUsage must be callable", () => {
   })).toThrow("Durable compatibility readContextUsage must be callable");
 });
 
+test("durable compatibility chat key must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility chat key must be non-empty");
+});
+
 test("durable compatibility binding must be an object", () => {
   const pool = new Map<string, { runtime: any; lastUsed: number }>();
   expect(() => new AgentRuntimeFacade({
