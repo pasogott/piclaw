@@ -18,9 +18,7 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 test("automatic-recovery production imports are restricted to the retirement boundary", () => {
-  const expected = [
-    "agent-pool/run-agent-recovery-phase.ts",
-  ].sort();
+  const expected: string[] = [];
 
   const importers = walk(sourceRoot)
     .filter((file) => readFileSync(file, "utf8").includes("automatic-recovery.js"))

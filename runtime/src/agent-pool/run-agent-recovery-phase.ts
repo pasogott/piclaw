@@ -8,7 +8,7 @@
 
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
-import { decideAutomaticRecovery } from "./automatic-recovery.js";
+import { decideAutomaticRecovery } from "./recovery-decision.js";
 import { classifyOpaqueAgentFailure } from "./recovery-classification.js";
 import type {
   RecoveryAttemptSnapshot,
