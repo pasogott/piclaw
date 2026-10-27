@@ -130,6 +130,44 @@ test("durable pruneChatBranch archives metadata without legacy session construct
   }
 });
 
+test("native restore invalid binding contract retains metadata atomicity without legacy construction", async () => {
+  initDatabase();
+  const chat = "web:native-restore-invalid-contract";
+  storeChatMetadata(chat, "2026-10-25T00:00:00.000Z");
+  getDb().query("UPDATE chat_branches SET archived_at=? WHERE chat_jid=?").run("2026-10-25T00:01:00.000Z", chat);
+  const archived = getChatBranchByChatJid(chat)!;
+  let factoryReads = 0;
+  const options = {
+    ...createAgentPoolModelOptions(),
+    getDurableSession: (id: string) => id !== chat ? undefined : {
+      sessionId: "same-native-session",
+      branchId: archived.branch_id,
+      assertCurrent: "invalid-assertion-port" as unknown as () => void,
+    },
+    get createSession(): never { factoryReads++; throw Error("legacy factory accessed"); },
+  };
+  const legacyRestore = spyOn(AgentBranchManager.prototype, "restoreChatBranch").mockImplementation(() => { throw Error("legacy restore entered"); });
+  const legacyCreate = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("JSONL forbidden"); });
+  let pool: AgentPool | undefined;
+  try {
+    pool = new AgentPool(options);
+    const databaseBefore = getDb().serialize();
+    const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
+    const filesBefore = snapshot();
+    await expect(pool.restoreChatBranch(chat, { agentName: "must-rollback" })).rejects.toThrow("Exact native restore binding invalid");
+    expect(getDb().serialize()).toEqual(databaseBefore);
+    expect(getChatBranchByChatJid(chat)).toEqual(archived);
+    expect(factoryReads).toBe(0);
+    expect(legacyRestore).not.toHaveBeenCalled();
+    expect(legacyCreate).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(filesBefore);
+  } finally {
+    await pool?.shutdown();
+    legacyRestore.mockRestore();
+    legacyCreate.mockRestore();
+  }
+});
+
 for (const binding of ["missing", "foreign", "stale", "current"] as const) {
   test(`native restore ${binding} binding retains metadata atomicity without legacy construction`, async () => {
     initDatabase();

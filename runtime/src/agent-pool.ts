@@ -815,6 +815,9 @@ export class AgentPool {
           ...(options.agentName !== undefined ? { agent_name: options.agentName } : {}) });
         const position = this.durableSessionLookup?.(restored.chat_jid);
         if (!position || position.branchId !== restored.branch_id) throw Error("Exact native restore binding unavailable");
+        if (position.assertCurrent !== undefined && typeof position.assertCurrent !== "function") {
+          throw Error("Exact native restore binding invalid");
+        }
         position.assertCurrent?.();
         return restored;
       }).immediate();
