@@ -998,7 +998,7 @@ test("native accepted dispatch synchronous throw is treated as pending without l
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-sync-throw-dispatch";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1026,7 +1026,10 @@ test("native accepted dispatch synchronous throw is treated as pending without l
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, executionMarkers }));
   `;
 
   try {
@@ -1058,6 +1061,7 @@ test("native accepted dispatch synchronous throw is treated as pending without l
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.resumed).toBe(0);
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1077,7 +1081,7 @@ test("native pending observer synchronous throw is treated as unresolved pending
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-sync-throw-pending-observer";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1105,7 +1109,10 @@ test("native pending observer synchronous throw is treated as unresolved pending
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, executionMarkers }));
   `;
 
   try {
@@ -1137,6 +1144,7 @@ test("native pending observer synchronous throw is treated as unresolved pending
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.resumed).toBe(0);
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
