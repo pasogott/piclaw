@@ -72,7 +72,11 @@ export function modelFailureDetail(failure: ModelFailure): string {
 /** Only our exact, bounded format is eligible for a public explanation. */
 export function parseModelFailure(detail: unknown): ModelFailure | undefined {
   if (typeof detail !== "string") return;
-  const match = detail.match(/^Host model request failed \[phase=(\w+); category=(\w+)(?:; http=([45](?:\d\d|:\d:\d)))?(?:; evidence=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|hex:(?:[0-9a-f]{2}:){15}[0-9a-f]{2}))?(?:; retry=(connection error|service unavailable|insufficient_quota))?(?:; context=(maximum context length exceeded))?\]$/);
+  // Pinned SDK blocking compaction wraps its bounded host model error twice.
+  // Accept that exact envelope once; never search arbitrary provider text.
+  const compactionPrefix='Compaction failed: Summarization failed: ';
+  const body=detail.startsWith(compactionPrefix)?detail.slice(compactionPrefix.length):detail;
+  const match = body.match(/^Host model request failed \[phase=(\w+); category=(\w+)(?:; http=([45](?:\d\d|:\d:\d)))?(?:; evidence=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|hex:(?:[0-9a-f]{2}:){15}[0-9a-f]{2}))?(?:; retry=(connection error|service unavailable|insufficient_quota))?(?:; context=(maximum context length exceeded))?\]$/);
   if (!match || !phases.includes(match[1] as ModelFailurePhase) || !categories.includes(match[2] as ModelFailure["category"])) return;
   if (match[5] && (match[5] === "insufficient_quota" ? match[2] !== "quota" && match[2] !== 'budget' : match[5] === "connection error" ? match[2] !== "transport" : match[2] !== "unavailable")) return;
   if (match[6] && match[2] !== "context_limit") return;

@@ -57,6 +57,7 @@ export async function reserveHostRequest(options: {
   database: Database; operationId: string; chatJid: string; authPath: string;
   model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate" | "scheduled" | "side_prompt" | "background"; scheduledTaskId?: string;
   backgroundPolicy?:NativeBackgroundPolicy;
+  usageSource?:'compaction';
   maintenanceWorkId?: string; signal: AbortSignal; assertCurrent(): void;
 }) {
   const { database, model, signal, assertCurrent } = options;
@@ -103,7 +104,7 @@ export async function reserveHostRequest(options: {
     assertCurrent();assertBackground(); signal.throwIfAborted();
     if (readStoredProviderUsageAccountRef(model.provider, options.authPath) !== accountRef) throw Error("Native request account changed");
   };
-  const accounting = modelRequestAccounting({ authorise: current, documentedFree: false, usageSource: options.maintenanceWorkId ? "compaction" : "assistant" }, database);
+  const accounting = modelRequestAccounting({ authorise: current, documentedFree: false, usageSource: options.usageSource ?? (options.maintenanceWorkId ? "compaction" : "assistant") }, database);
   const binding = { id, workId, chatJid: options.chatJid, providerId: model.provider, modelId: model.id, accountRef, amountMicros: amount.amountMicros };
   let dispatchStarted = false;
   let settled = false;

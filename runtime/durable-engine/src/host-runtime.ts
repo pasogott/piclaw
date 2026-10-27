@@ -1934,6 +1934,37 @@ export class HostConversationRuntime {
       throw error;
     });
   }
+  /** Join the private context's SDK-owned compaction work before releasing its
+   * accepted source/lease. Observation detaches on close; SDK close still owns
+   * the real tasks and provider cleanup. No new scheduler progress is granted. */
+  joinBackgroundCompactions(input:AcceptedInput){
+    const copy=inputSnapshot(input),context=withAbortSignal(this.observations.signal,this.context);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact background compaction join required');
+      const joined=new Set<number>();
+      for(;;){
+        const tasks=await this.harness.commit(async tx=>{
+          const found:import('@earendil-works/pi-durable').TaskRecord<unknown,unknown,CompactionResult>[]=[];let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+          do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.compaction'},100,cursor);
+            for(const task of page.items)if(!joined.has(task.id))found.push(task as typeof found[number]);cursor=page.next;
+          }while(cursor!==undefined);return found;
+        },context);this.fence();if(!tasks.length)return;
+        for(const candidate of tasks){
+          const reason=(candidate.input as {reason?:string}).reason;
+          if(!['threshold','overflow'].includes(reason??''))throw Error('Unqualified private compaction task');
+          const task=candidate.state.status==='terminal'?candidate:await this.harness.waitForTask(candidate.id,context);this.fence();
+          if(task.state.status!=='terminal')throw Error('Private compaction task remains live');
+          if(task.state.outcome.status==='completed'&&task.state.outcome.result.submissionId!==undefined){
+            const submission=await this.harness.submission(task.state.outcome.result.submissionId,context);this.fence();
+            const status=await submission?.wait(context);this.fence();
+            if(!status||status.type!=='write'||status.conversationId!==copy.conversationId||!['done','unanswered'].includes(status.status))throw Error('Private compaction write remains uncertain');
+          }
+          joined.add(candidate.id);
+        }
+      }
+    });
+  }
   /** Only an exact private ownerless/unforked context may be aborted wholesale.
    * Cancellation is owner cleanup and does not require a current spend grant. */
   abortBackground(input:AcceptedInput,cause:'background_cancelled'|'background_timeout'='background_cancelled'):Promise<boolean>{
@@ -1943,14 +1974,15 @@ export class HostConversationRuntime {
       if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||copy.requestId!==copy.sourceId||copy.payloadRef!==copy.sourceId||
         o.operationConversationFor?.(copy)!==copy.conversationId||o.conversationFor(copy.chatJid,copy.branchId)!==copy.conversationId||!o.cancelOperationSource)throw Error('Exact private background abort required');
       const state=await this.readState(copy);this.fence();
-      if(state.operation.terminal||state.status?.status==='done')return false;
+      if(state.operation.terminal)return false;
       const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
       if(!record||record.parent||record.owner)throw Error('Exact private background abort required');
-      if(!state.operation.cancellation)o.cancelOperationSource(copy,state.operation.version,undefined,cause);
-      this.fence();await this.progress(copy);
+      const completed=state.status?.status==='done';
+      if(!completed&&!state.operation.cancellation)o.cancelOperationSource(copy,state.operation.version,undefined,cause);
+      this.fence();await this.progress(completed?undefined:copy);
       const conversation=await this.harness.conversation(copy.conversationId,this.context);this.fence();
       if(!conversation)throw Error('Missing private background conversation');
-      await conversation.abort(this.context);this.fence();return true;
+      await conversation.abort(this.context,{background:true});this.fence();return !completed;
     });
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */

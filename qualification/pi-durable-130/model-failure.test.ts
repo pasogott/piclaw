@@ -19,6 +19,16 @@ test('host budget failure: exact owner denial survives bounded receipts and neve
   expect(classifyModelFailure('admission',Object.assign(Error('unrelated'),{code:'budget_denied'})).category).toBe('unknown');
   expect(classifyModelFailure('admission',new Proxy({},{getPrototypeOf(){throw Error('untrusted prototype');}}))).toEqual({phase:'admission',category:'unknown'});
 });
+test('host compaction failure: exact SDK wrapper preserves bounded host evidence without accepting arbitrary nesting',()=>{
+  const failure={phase:'accounting' as const,category:'budget' as const,evidenceId:'b7e94df0-a012-40da-b950-29b1c1b0999b'};
+  const detail=modelFailureDetail(failure),prefix='Compaction failed: Summarization failed: ';
+  expect(parseModelFailure(prefix+detail)).toEqual(failure);
+  expect(modelFailureNotice(prefix+detail,7)).toContain('budget policy');
+  expect(modelFailureNotice(prefix+detail,7)).toContain(failure.evidenceId);
+  expect(isRetryableAssistantError({stopReason:'error',errorMessage:prefix+detail} as any)).toBe(false);
+  for(const forged of [prefix+prefix+detail,'Compaction failed: '+detail,'Summarization failed: '+detail,prefix+detail+' trailing',prefix+secret,secret+prefix+detail])expect(parseModelFailure(forged)).toBeUndefined();
+  expect(classifyModelFailure('provider',Error(prefix+detail)).category).not.toBe('budget');
+});
 test('host budget aggregate evidence: bounded cleanup errors and unreadable arrays preserve the primary cause',async()=>{
   const {mkdtempSync,readFileSync,rmSync}=await import('node:fs'),{join}=await import('node:path'),{tmpdir}=await import('node:os');
   const {retainModelFailureEvidence}=await import('../../runtime/durable-engine/src/host-model-failure-evidence.js');

@@ -80,7 +80,7 @@ import { createHostGoalPlanReader } from "./host-goal-plan.js";
 import { registerAddonConfigApi } from "../../src/channels/web/handlers/addon-config-api.js";
 import { createHostGoalConfig } from "./host-goal-config.js";
 import { createHostGoalCommand } from "./host-goal-command.js";
-import type { HostConversationRuntime } from "./host-runtime.js";
+import type { HostConversationRuntime,HostInputBinding } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
 import { registerRootExtensionKvStore } from "../../src/db/register-extension-kv.js";
 import { withExtensionKvAuthority, requireExtensionKvAuthority } from "../../src/extension-kv-registry.js";
@@ -426,7 +426,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       : createHostImapTool(native as unknown as ImapNativeExports, options);
   });
   let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
-  const maintenanceRequests = new WeakMap<AbortSignal, { chatJid: string; workId: string; assertCurrent(): void }>();
+  const maintenanceRequests = new WeakMap<AbortSignal, { chatJid: string; workId: string; assertCurrent(): void; background?:{input:HostInputBinding;policy:NativeBackgroundPayload['policy']} }>();
   const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
   const backgroundRequests=new WeakMap<AbortSignal,{accounted:boolean;assertCurrent():void}>();
   const codexNative = {} as HostCodexToolGroupAddon & NativeCodexFactories & Record<string, any>;
@@ -814,9 +814,17 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         const identity = runtime().maintenanceRequestIdentity(scope);
         maintenance = { ...identity, assertCurrent: () => runtime().assertMaintenanceRequest(scope) };
       } else {
-        const target = bundle.sessionTargets.list().find(target => target.conversationId === scope.conversationId);
-        if (!target) throw Error("Unbound automatic compaction conversation");
-        maintenance = await runtime().captureAutomaticCompaction(scope, { incarnation: target.domain, ...target });
+        const privateInput=await bundle.backgroundCompactionInput(scope.conversationId);
+        if(privateInput){
+          const policy=bundle.backgroundPolicyFor(privateInput);if(!policy)throw Error('Private compaction policy unavailable');
+          const captured=await runtime().captureAutomaticCompaction(scope,privateInput);
+          await runtime().qualifyBackgroundRequest([privateInput],policy);
+          maintenance={...captured,background:{input:privateInput,policy},assertCurrent(){captured.assertCurrent();runtime().assertCapturedSourceCurrent([privateInput]);}};
+        }else{
+          const target = bundle.sessionTargets.list().find(target => target.conversationId === scope.conversationId);
+          if (!target) throw Error("Unbound automatic compaction conversation");
+          maintenance = await runtime().captureAutomaticCompaction(scope, { incarnation: target.domain, ...target });
+        }
       }
       maintenanceRequests.set(scope.signal, maintenance);
       maintenance.assertCurrent();
@@ -845,6 +853,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         const identity = maintenanceRequests.get(scope.signal);
         if (!identity) throw Error("Compaction request source capture unavailable");
         identity.assertCurrent();
+        if(identity.background){
+          const {input,policy}=identity.background;assertNativeBackgroundModel(policy,model);
+          const reservation=await reserveHostRequest({database:root,operationId:input.operationId,chatJid:input.chatJid,authPath:join(getPiclawAgentDir(),'auth.json'),model:model as any,maxTokens:options?.maxTokens,
+            executionKind:'background',backgroundPolicy:policy,usageSource:'compaction',signal,assertCurrent(){assert();identity.assertCurrent();}});
+          backgroundRequests.set(signal,{accounted:reservation!==undefined,assertCurrent:identity.assertCurrent});return reservation;
+        }
         return reserveHostRequest({ database: root, operationId: identity.workId, maintenanceWorkId: identity.workId,
           chatJid: identity.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
           maxTokens: options?.maxTokens, executionKind: "side_prompt", signal,

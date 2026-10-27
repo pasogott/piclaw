@@ -36,7 +36,7 @@ import { hashScheduledLeaseToken } from "../../src/service-effects/current-picla
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
 import { QueuedFollowupLifecycleService } from "../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import type { QueuedFollowupItem } from "../../src/queued-followups.js";
-import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
+import type { AcceptedInput, HostInputBinding, RuntimeOptions } from "./host-runtime.js";
 import type { ConversationId,Tx } from "@earendil-works/pi-durable";
 import { nativeBackgroundIdentity,readNativeBackgroundPayload,type NativeBackgroundPayload,type NativeBackgroundPolicy } from "../../src/agent-pool/background-operation-contract.js";
 import { backgroundPolicyProvenance,type NativeBackgroundContext,type NativeBackgroundInputHistory } from "./host-background-context.js";
@@ -579,6 +579,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if(state.operation.terminal?.disposition!=='completed'||!state.answer)return{status:'error',result:null,error:deadlineExpired?'Native background deadline expired':state.operation.cancellation?'Native background cancelled':'Native background failed',failureCategory:deadlineExpired?'timeout':state.operation.cancellation?'aborted':category==='budget'?'provider_budget':'provider'};
       return{status:'success',result:state.answer.text,usage:state.answer.message.usage};
     }
+    async function backgroundCompactionInput(conversationId:number):Promise<HostInputBinding|undefined>{
+      assertLive();const scope=[...privateIndex.values()].find(binding=>binding.conversationId===conversationId);if(!scope)return;
+      const current=root.query(`SELECT s.source_id FROM service_effect_s01_chats c JOIN service_effect_s01_operations o ON o.operation_id=c.active_operation_id AND o.chat_jid=c.chat_jid
+        JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+        WHERE c.chat_jid=? AND o.phase='executing' AND o.cancellation_source_id IS NULL AND s.state='claimed'`).get(scope.chatJid) as {source_id:string}|null;
+      if(!current)throw Error('Private compaction requires an active admitted input');
+      const input=acceptedBackgroundInput(current.source_id);if(!input||input.conversationId!==conversationId)throw Error('Private compaction binding unavailable');
+      const bound=await bindings.get(input);assertLive();if(!bound)throw Error('Private compaction source proof missing');bindings.assertSourceCurrent!(bound);return bound;
+    }
     async function reconcileAddonOperation(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>{
       assertLive();if(!background)throw Error('Native add-on recovery unavailable');
       const check=()=>{assertLive();if(expectedInputSequence!==undefined&&readAddonOperationInputSequence(operationId,root)!==expectedInputSequence)throw Error('Native add-on recovery input epoch changed');};check();
@@ -633,6 +642,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           markAddonOperationInputCommitted(operationId,payload.policy.origin.kind==='addon'?payload.policy.origin.inputSequence:undefined);ready=true;timedOut ||= Date.now()>=Date.parse(payload.policy.expiresAt);if(signal.aborted||timedOut)cancel();
           if(cancelling)await cancelling;else await runtime.wait(input,submission,shutdown.signal);
           if(cancelling)await cancelling;
+          await runtime.joinBackgroundCompactions(input);assertLive();
           if(!await runtime.settle(input))throw Error('Background settlement remains pending');
           const settled=await runtime.reconcile(input);assertLive();
           backgroundExecutions.delete(sourceId);return backgroundResultFor(settled,timedOut);
@@ -1061,7 +1071,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return hostFollowups.enqueueAcceptedFollowupOnce(input.sourceId, input.chatJid, input.text, input.queuedAt,
           { source: "goal.continuation" }, admission, onlyIfIdle);
       },
-      prepareAddonOperation,backgroundPolicyFor,dispatchAddonOperation,reconcileAddonOperation,
+      prepareAddonOperation,backgroundPolicyFor,backgroundCompactionInput,dispatchAddonOperation,reconcileAddonOperation,
       sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,prepareAddonOperation,dispatchAddonOperation,reconcileAddonOperation,
         dispatchHostCommand: config.dispatchHostCommand ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound command chat"); return config.dispatchHostCommand!(chat, text); } : undefined }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
@@ -1093,6 +1103,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       assertProcessControlIdle(): void;
       prepareAddonOperation(operationId:string,signal?:AbortSignal):Promise<AcceptedInput>;
       backgroundPolicyFor(input:AcceptedInput):NativeBackgroundPolicy|undefined;
+      backgroundCompactionInput(conversationId:number):Promise<HostInputBinding|undefined>;
       dispatchAddonOperation(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>;
       reconcileAddonOperation(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>;
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
