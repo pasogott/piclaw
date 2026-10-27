@@ -99,3 +99,68 @@ for (const mode of ["bound", "empty"] as const) {
     }
   }, 30000);
 }
+
+test("legacy service-factory path reaches legacy construction fence immediately", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "legacy-service-factory-boundary-"));
+
+  const script = `
+    import { plugin } from "bun";
+    const source = ${JSON.stringify(source)};
+    const attempts = [];
+    plugin({ name: "legacy-service-factory-fence", setup(build) {
+      build.onLoad({ filter: /\\/agent-pool\\/(session-manager|session-binder|tool-factory|turn-coordinator)\\.(ts|js)$/ }, args => {
+        if (!args.path.startsWith(source + "/")) return;
+        attempts.push(args.path);
+        throw new Error("LEGACY_SERVICE_FACTORY_FENCE:" + args.path);
+      });
+    }});
+
+    const { SettingsManager, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+    const { createAgentPoolModelOptions } = await import(${JSON.stringify(fixture)});
+    const { createAgentPoolServices } = await import(source + "/agent-pool/service-factory.ts");
+    const model = createAgentPoolModelOptions();
+
+    // Legacy mode: no durable callback provided.
+    createAgentPoolServices({
+      pool: new Map(),
+      activeForkBaseLeafByChat: new Map(),
+      authStorage: model.credentialStore,
+      modelRuntime: model.modelRuntime,
+      modelRegistry: new ModelRegistry(model.modelRuntime),
+      settingsManager: SettingsManager.inMemory(),
+      workspaceDir: process.env.PICLAW_WORKSPACE,
+    });
+
+    console.log(JSON.stringify({ attempts }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        PICLAW_WORKSPACE: resolve(root, "workspace"),
+        PICLAW_STORE: resolve(root, "store"),
+        PICLAW_DATA: resolve(root, "data"),
+        PI_CODING_AGENT_DIR: resolve(root, "agent"),
+        PICLAW_DB_IN_MEMORY: "1",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("LEGACY_SERVICE_FACTORY_FENCE:");
+    expect(stderr).toMatch(/\/agent-pool\/(session-manager|session-binder|tool-factory|turn-coordinator)\./);
+    expect(stdout.trim()).toBe("");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
