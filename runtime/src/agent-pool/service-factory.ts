@@ -2,7 +2,7 @@
  * agent-pool/service-factory.ts – Constructor wiring for AgentPool helper services.
  */
 
-import type { ExtensionFactory, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, ExtensionFactory, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { getAttachmentRegistry } from "./attachments.js";
 import { getSshConfig } from "../db.js";
@@ -10,17 +10,17 @@ import { readAccessConfig } from '../core/config-access.js';
 import { createChatSshCoreExtension, resolveSshCoreConfigFromChatConfig } from "../extensions/ssh-core.js";
 import { AgentBranchManager } from "./branch-manager.js";
 import { AgentRuntimeFacade } from "./runtime-facade.js";
-import { AgentSessionBinder } from "./session-binder.js";
-import { AgentSessionManager, type PoolEntry } from "./session-manager.js";
-import { AgentToolFactory } from "./tool-factory.js";
-import { AgentTurnCoordinator } from "./turn-coordinator.js";
-import { installSessionUsageRecorder } from "./usage.js";
+import type { AgentSessionBinder } from "./session-binder.js";
+import type { AgentSessionManager, PoolEntry } from "./session-manager.js";
+import type { AgentToolFactory, AgentBashOperations } from "./tool-factory.js";
+import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentPoolOptions } from "./contracts.js";
-import type { AgentBashOperations } from "./tool-factory.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
 import { McpCodemodeController } from "./mcp-codemode-runtime.js";
+import { createRequire } from "node:module";
 
 const DURABLE_LEGACY_MESSAGE = "Durable application does not construct legacy sessions";
+const require = createRequire(import.meta.url);
 
 /** Shared logger callbacks used across extracted AgentPool services. */
 export interface AgentPoolLogHooks {
@@ -99,7 +99,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   const sessionBinder: SessionBinderService = durable ? {
     setBinder: () => undefined,
     bindSession: async () => undefined,
-  } : new AgentSessionBinder({
+  } : new (require("./session-binder.js") as { AgentSessionBinder: new (...args: any[]) => SessionBinderService }).AgentSessionBinder({
     pool: options.pool,
     onError: options.onError,
   });
@@ -107,7 +107,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   const toolFactory: ToolFactoryService = durable ? {
     createDefaultTools: unavailable,
     createCustomToolOverrides: () => [],
-  } : new AgentToolFactory({
+  } : new (require("./tool-factory.js") as { AgentToolFactory: new (...args: any[]) => ToolFactoryService }).AgentToolFactory({
     workspaceDir: options.workspaceDir,
     bashOperations: options.bashOperations,
   });
@@ -116,9 +116,9 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     createTracker: unavailable,
     subscribe: unavailable,
     startPromptTimeout: unavailable,
-  } : new AgentTurnCoordinator({
-    takeAttachments: (chatJid) => attachments.take(chatJid),
-    touchSession: (chatJid) => {
+  } : new (require("./turn-coordinator.js") as { AgentTurnCoordinator: new (...args: any[]) => TurnCoordinatorService }).AgentTurnCoordinator({
+    takeAttachments: (chatJid: string) => attachments.take(chatJid),
+    touchSession: (chatJid: string) => {
       const entry = options.pool.get(chatJid);
       if (entry) entry.lastUsed = Date.now();
     },
@@ -172,7 +172,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     }),
     evictIdle: () => undefined,
     shutdown: async () => undefined,
-  } : new AgentSessionManager({
+  } : new (require("./session-manager.js") as { AgentSessionManager: new (...args: any[]) => SessionManagerService }).AgentSessionManager({
     getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
@@ -181,13 +181,14 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     mainSessionMaxSize: options.mainSessionMaxSize,
     createSession: options.createSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),
-    createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
-    getSessionExtensionFactories: (chatJid) => resolveSessionExtensionFactories(chatJid),
-    bindSession: async (runtime, chatJid) => {
-      installSessionUsageRecorder(runtime.session, chatJid, options.onWarn);
+    createCustomToolOverrides: (chatJid: string) => toolFactory.createCustomToolOverrides(chatJid),
+    getSessionExtensionFactories: (chatJid: string) => resolveSessionExtensionFactories(chatJid),
+    bindSession: async (runtime: AgentSessionRuntime, chatJid: string) => {
+      (require("./usage.js") as { installSessionUsageRecorder: (session: unknown, chatJid: string, onWarn?: AgentPoolLogHooks["onWarn"]) => void })
+        .installSessionUsageRecorder(runtime.session, chatJid, options.onWarn);
       await sessionBinder.bindSession(runtime, chatJid);
     },
-    ensureBranchRegistration: (chatJid, session) => {
+    ensureBranchRegistration: (chatJid: string, session?: AgentSession | null) => {
       branchManager.ensureBranchRegistration(chatJid, session);
     },
     onInfo: options.onInfo,
