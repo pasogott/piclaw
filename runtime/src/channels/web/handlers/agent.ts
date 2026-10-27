@@ -1778,6 +1778,9 @@ async function processAuthorisedChat(
   const acceptedDispatch = acceptedDispatchRaw as (() => Promise<"settled" | "pending">) | undefined;
   if (acceptedDispatch) {
     const { setChatCursor } = await import("../../../db/chat-cursors.js");
+    if (channel.updateAgentStatus !== undefined && typeof channel.updateAgentStatus !== "function") {
+      throw new Error("Native status updater must be callable");
+    }
     const startedAt = new Date().toISOString();
     const nativeStatus = (type: "intent" | "done") => {
       const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,

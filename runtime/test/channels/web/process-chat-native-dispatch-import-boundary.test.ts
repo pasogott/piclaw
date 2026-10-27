@@ -682,3 +682,83 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
     rmSync(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test("native status updater must be callable before accepted dispatch execution", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "native-process-chat-noncallable-status-updater-"));
+  const script = `
+    import { plugin } from "bun";
+    const source = ${JSON.stringify(source)};
+    const attempts = [];
+    plugin({ name: "legacy-process-chat-runtime-fence", setup(build) {
+      build.onLoad({ filter: /\\/channels\\/web\\/runtime\\/process-chat-(preflight|streaming|finalization)-runtime\\.(ts|js)$/ }, args => {
+        if (!args.path.startsWith(source + "/")) return;
+        attempts.push(args.path);
+        throw new Error("LEGACY_PROCESS_CHAT_FENCE:" + args.path);
+      });
+    }});
+
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
+    const chatJid = "web:native-noncallable-status-updater";
+    const messageTs = "2026-01-01T00:00:01.000Z";
+    initDatabase();
+    storeChatMetadata(chatJid, messageTs, "boundary-user");
+    storeMessage({ id: "msg-native-noncallable-status-updater", chat_jid: chatJid, sender: "boundary-user", sender_name: "Boundary User", content: "hello", timestamp: messageTs, is_from_me: false });
+
+    let failure = "";
+    let dispatchCalls = 0;
+    const dispatchAcceptedInput = () => async () => { dispatchCalls += 1; return "settled"; };
+    dispatchAcceptedInput.waitForPending = async () => "settled";
+    const channel = {
+      dispatchAcceptedInput,
+      updateAgentStatus: "invalid-status-updater",
+      resumeChat() {},
+      broadcastEvent() {},
+    };
+
+    try {
+      await processChat(channel, chatJid, "default");
+      throw new Error("Expected non-callable status updater rejection");
+    } catch (error) {
+      failure = String(error);
+    }
+
+    if (!failure.includes("Native status updater must be callable")) {
+      throw new Error("Unexpected non-callable status updater failure: " + failure);
+    }
+
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        PICLAW_WORKSPACE: resolve(root, "workspace"),
+        PICLAW_STORE: resolve(root, "store"),
+        PICLAW_DATA: resolve(root, "data"),
+        PI_CODING_AGENT_DIR: resolve(root, "agent"),
+        PICLAW_DB_IN_MEMORY: "1",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
+
+    const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+    expect(result.attempts).toEqual([]);
+    expect(result.cursor).toBe("");
+    expect(result.dispatchCalls).toBe(0);
+    expect(String(result.failure)).toContain("Native status updater must be callable");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
