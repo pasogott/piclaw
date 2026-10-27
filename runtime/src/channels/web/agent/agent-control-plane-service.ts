@@ -9,13 +9,8 @@
 
 import type { AgentPool } from "../../../agent-pool.js";
 import {
-  clearInflightMarker,
   getDeferredQueuedFollowups,
   exportArchivedBranchDownloadData,
-  getInflightMessageId,
-  getInflightRuns,
-  getMessageThreadRootIdById,
-  getPreflightRuns,
   type InteractionRow,
 } from "../../../db.js";
 import { createLogger } from "../../../utils/logger.js";
@@ -120,8 +115,6 @@ export interface WebAgentControlPlaneServiceOptions {
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void> | void;
   getAgentStatus?: (chatJid: string) => Record<string, unknown> | null;
   updateAgentStatus?: (chatJid: string, status: Record<string, unknown>) => void;
-  getInflightMessageId?: typeof getInflightMessageId;
-  getMessageThreadRootIdById?: typeof getMessageThreadRootIdById;
   getAutoresearchWidgetPayload?: (chatJid: string) => unknown;
   stopAutoresearchFromWeb?: (input: { chat_jid: string; generate_report: boolean }) => Promise<unknown>;
   dismissAutoresearchWidget?: (chatJid: string) => boolean;
@@ -391,15 +384,12 @@ export class WebAgentControlPlaneService {
     const activeChats = typeof this.options.agentPool.listActiveChats === "function"
       ? this.options.agentPool.listActiveChats()
       : [];
-    const inflightRuns = getInflightRuns();
-    const preflightRuns = getPreflightRuns();
+    const knownChats = this.options.agentPool.listKnownChats?.() ?? activeChats;
     const progressByChat = new Map(getTrackedPhasesSnapshot().map((entry) => [entry.chatJid, entry]));
     const chatJids = new Set<string>();
-    for (const chat of activeChats as Array<{ chat_jid?: unknown }>) {
+    for (const chat of knownChats as Array<{ chat_jid?: unknown }>) {
       if (typeof chat.chat_jid === "string") chatJids.add(chat.chat_jid);
     }
-    for (const run of inflightRuns) chatJids.add(run.chatJid);
-    for (const run of preflightRuns) chatJids.add(run.chatJid);
     if (requestedChatJid) chatJids.add(requestedChatJid);
 
     const runs = [...chatJids]
@@ -407,24 +397,22 @@ export class WebAgentControlPlaneService {
       .map((chatJid) => {
         const active = (activeChats as unknown as Array<Record<string, unknown>>).find((chat) => chat.chat_jid === chatJid) ?? null;
         const status = this.options.getAgentStatus?.(chatJid) ?? null;
-        const inflight = inflightRuns.find((run) => run.chatJid === chatJid) ?? null;
-        const preflight = preflightRuns.find((run) => run.chatJid === chatJid) ?? null;
         const progress = progressByChat.get(chatJid) ?? null;
         const queued = this.options.queuedFollowupLifecycle.listQueuedStateItems(chatJid);
         return {
           chat_jid: chatJid,
           active,
-          is_active: Boolean((active as { is_active?: unknown } | null)?.is_active || status || progress),
+          is_active: Boolean(status && status.type !== "done" && status.type !== "error"),
           status,
-          inflight,
-          preflight,
+          inflight: null, // Historical response keys; never execution authority.
+          preflight: null,
           progress,
           queue_count: queued.length,
           stalled_work: buildStalledWorkDiagnostic(progress),
         };
       });
 
-    return this.options.json({ runs, inflight: inflightRuns, preflight: preflightRuns }, 200);
+    return this.options.json({ runs, inflight: [], preflight: [] }, 200);
   }
 
   async handleAgentRunAbort(req: Request): Promise<Response> {
@@ -478,26 +466,25 @@ export class WebAgentControlPlaneService {
     const payload = parsed.payload as { chat_jid?: string };
     const chatJid = this.resolveRequiredChatJid(payload.chat_jid);
     if (!chatJid) return this.options.json({ error: "Missing chat_jid" }, 400);
-    const hadInflight = getInflightRuns().some((run) => run.chatJid === chatJid);
-    const hadPreflight = getPreflightRuns().some((run) => run.chatJid === chatJid);
-    const hadStatus = Boolean(this.options.getAgentStatus?.(chatJid));
-    clearInflightMarker(chatJid);
+    const status = this.options.getAgentStatus?.(chatJid) ?? null;
+    if (status && status.type !== "done" && status.type !== "error") {
+      return this.options.json({ error: "Active native work cannot be cleared as stale; use abort." }, 409);
+    }
+    const hadStatus = Boolean(status);
     if (hadStatus) {
       this.options.updateAgentStatus?.(chatJid, { type: "done", title: "Idle", source: "operator_clear_stale" });
     }
-    log.warn("Operator cleared stale run markers", {
+    log.info("Operator cleared terminal display status", {
       operation: "operator_run.clear_stale",
       chatJid,
-      hadInflight,
-      hadPreflight,
       hadStatus,
     });
     return this.options.json({
       status: "ok",
       chat_jid: chatJid,
-      cleared: hadInflight || hadPreflight || hadStatus,
-      had_inflight: hadInflight,
-      had_preflight: hadPreflight,
+      cleared: hadStatus,
+      had_inflight: false,
+      had_preflight: false,
       had_status: hadStatus,
     }, 200);
   }

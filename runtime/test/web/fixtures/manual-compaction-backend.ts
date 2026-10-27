@@ -10,8 +10,7 @@ export function manualCompactionBackend() {
   let active = false;
   let aborts = 0;
   let messageId = 456;
-  const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) },
-    { getInflightRuns: () => [], getPreflightRuns: () => [] });
+  const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
   const channel: any = {
     agentPool: {
       isStreaming: () => false, isActive: () => active,

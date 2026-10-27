@@ -41,10 +41,6 @@ type RuntimeFollowupRuntimeState = Pick<
   | "getAgentStatus"
   | "getThreadRootId"
   | "resumeChat"
-  | "skipFailedOnModelSwitch"
-  | "retryFailedOnModelSwitch"
-  | "recoverInflightRuns"
-  | "recoverStaleInflightRun"
   | "resumePendingChats"
   | "loadState"
   | "saveState"
@@ -190,22 +186,6 @@ export class WebChannelRuntimeFollowupFacadeService {
 
   resumeChat(chatJid: string, threadRootId?: number | null): void {
     this.deps.getRuntimeState().resumeChat(chatJid, threadRootId);
-  }
-
-  skipFailedOnModelSwitch(chatJid: string): boolean {
-    return this.deps.getRuntimeState().skipFailedOnModelSwitch(chatJid);
-  }
-
-  retryFailedOnModelSwitch(chatJid: string): boolean {
-    return this.deps.getRuntimeState().retryFailedOnModelSwitch(chatJid);
-  }
-
-  recoverInflightRuns(): void {
-    this.deps.getRuntimeState().recoverInflightRuns();
-  }
-
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean {
-    return this.deps.getRuntimeState().recoverStaleInflightRun(chatJid, options);
   }
 
   resumePendingChats(chatJid?: string): void {

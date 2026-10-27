@@ -20,7 +20,7 @@ describe("web agent status store", () => {
       }),
     };
 
-    const store = new AgentStatusStore(state, { getInflightRuns: () => [] });
+    const store = new AgentStatusStore(state);
     store.load();
 
     expect(calls).toEqual([
@@ -46,7 +46,7 @@ describe("web agent status store", () => {
       getAgentStatuses: () => ({}),
     };
 
-    const store = new AgentStatusStore(state, { getInflightRuns: () => [] });
+    const store = new AgentStatusStore(state);
 
     store.update("web:1", { type: "intent", title: "Thinking" });
     expect(store.get("web:1")).toMatchObject({ type: "intent", title: "Thinking" });
@@ -69,7 +69,7 @@ describe("web agent status store", () => {
     // Leave a real observation window: a 1 ms timer can expire between update()
     // and the first assertion on a busy hosted runner, testing scheduler timing
     // rather than the store's terminal-status contract.
-    const store = new AgentStatusStore(state, { getInflightRuns: () => [] }, 50);
+    const store = new AgentStatusStore(state, 50);
 
     store.update("web:terminal", { type: "error", title: "Rotation failed" });
     expect(store.get("web:terminal")).toMatchObject({ type: "error", title: "Rotation failed" });
@@ -87,7 +87,7 @@ describe("web agent status store", () => {
       setAgentStatus: () => {},
       getAgentStatuses: () => ({}),
     };
-    const store = new AgentStatusStore(state, { getInflightRuns: () => [] }, 5);
+    const store = new AgentStatusStore(state, 5);
 
     store.update("web:replacement", { type: "done", title: "First run completed" });
     store.update("web:replacement", { type: "intent", title: "Second run started" });
@@ -95,70 +95,6 @@ describe("web agent status store", () => {
 
     expect(store.get("web:replacement")).toMatchObject({ type: "intent", title: "Second run started" });
     expect((store as any).terminalStatusTimers.size).toBe(0);
-  });
-
-  test("get derives a fresh recovery status from durable inflight state after restart", () => {
-    const calls: string[] = [];
-    const state = {
-      load: () => {
-        calls.push("load");
-      },
-      save: () => {
-        calls.push("save");
-      },
-      setAgentStatus: (chatJid: string, status: Record<string, unknown> | null) => {
-        calls.push(`set:${chatJid}:${status ? "status" : "null"}`);
-      },
-      getAgentStatuses: () => ({
-        "web:compact": {
-          type: "intent",
-          intent_key: "compaction",
-          title: "Compacting context",
-          started_at: "2026-03-14T14:00:00.000Z",
-          runtime_generation: "old-runtime",
-        },
-      }),
-    };
-
-    const store = new AgentStatusStore(state, {
-      getInflightRuns: () => [{ chatJid: "web:compact", startedAt: "2026-03-14T14:00:00.000Z" }],
-    });
-    store.load();
-
-    expect(calls).toEqual([
-      "load",
-      "set:web:compact:null",
-      "save",
-    ]);
-    expect(store.get("web:compact")).toMatchObject({
-      type: "intent",
-      intent_key: "recovery",
-      title: "Recovering interrupted response",
-      started_at: "2026-03-14T14:00:00.000Z",
-      source: "startup_recovery",
-    });
-  });
-
-  test("get derives a preflight recovery status when only a pre-prompt marker survived restart", () => {
-    const state = {
-      load: () => {},
-      save: () => {},
-      setAgentStatus: () => {},
-      getAgentStatuses: () => ({}),
-    };
-
-    const store = new AgentStatusStore(state, {
-      getPreflightRuns: () => [{ chatJid: "web:prep", startedAt: "2026-03-14T15:00:00.000Z" }],
-      getInflightRuns: () => [],
-    });
-
-    expect(store.get("web:prep")).toMatchObject({
-      type: "intent",
-      intent_key: "recovery",
-      title: "Recovering interrupted pre-prompt work",
-      started_at: "2026-03-14T15:00:00.000Z",
-      source: "startup_recovery",
-    });
   });
 
   test("clearPersistedStatuses removes legacy router_state entries and clears in-memory state", () => {
@@ -184,7 +120,7 @@ describe("web agent status store", () => {
       getAgentStatuses: () => Object.fromEntries(persistedMap.entries()),
     };
 
-    const store = new AgentStatusStore(state, { getInflightRuns: () => [] });
+    const store = new AgentStatusStore(state);
     store.clearPersistedStatuses();
 
     expect(cleared.sort()).toEqual(["web:1", "web:2"]);

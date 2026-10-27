@@ -39,15 +39,7 @@ import { createAgentProfileBuilder } from "../agent/agent-utils.js";
 import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./general-settings.js";
 import { resolveAvatarUrl } from "../media/avatar-service.js";
 
-import {
-  MODEL_COMMAND_TYPES,
-  executeDeferredControlCommand,
-  isDeferredControlCommand,
-  materializeDeferredFollowups,
-  resolveAndBroadcastModelStateForCommand,
-  resumeFailedRunAfterModelSwitch,
-  selectProcessChatMessage,
-} from "../runtime/process-chat-control-runtime.js";
+import { MODEL_COMMAND_TYPES, executeDeferredControlCommand, isDeferredControlCommand, materializeDeferredFollowups, resolveAndBroadcastModelStateForCommand, selectProcessChatMessage } from "../runtime/process-chat-control-runtime.js";
 import { resolveThreadId } from "../runtime/threading.js";
 
 import { createUuid } from "../../../utils/ids.js";
@@ -676,9 +668,6 @@ async function handleAgentMessageInScope(
     let modelState: { model: string | null; thinkingLevel: string | null; thinkingLevelLabel: string | null; supportsThinking: boolean | undefined } | null = null;
     if (result.status === "success") {
       modelState = await resolveAndBroadcastModelStateForCommand(channel, chatJid, result);
-      if (command.type === "model" || command.type === "thinking" || command.type === "cycle_model" || command.type === "cycle_thinking") {
-        resumeFailedRunAfterModelSwitch(channel, chatJid, command);
-      }
     }
 
     // Bare /model (list) or bare /thinking (query) — write output to the timeline
@@ -1089,12 +1078,6 @@ async function handleAgentMessageInScope(
         chat_jid: rollupTargetChatJid,
         title: "",
       });
-    }
-
-    if (result.status === "success" && (command.type === "model" || command.type === "cycle_model")) {
-      if (channel.retryFailedOnModelSwitch(chatJid)) {
-        channel.resumeChat(chatJid);
-      }
     }
 
     emitCommandStatus({

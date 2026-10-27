@@ -97,7 +97,6 @@ export interface WebAdaptiveCardSidePromptServiceOptions extends JsonResponder {
   interactionBroadcaster: InteractionBroadcasterLike;
   sendMessage(chatJid: string, text: string, options?: SendMessageOptions): Promise<void>;
   broadcastEvent(eventType: string, data: unknown): void;
-  skipFailedOnModelSwitch(chatJid: string): void;
   forwardAgentMessage(req: Request, pathname: string, chatJid: string, agentId: string): Promise<Response>;
 }
 
@@ -107,7 +106,6 @@ export interface WebAdaptiveCardSidePromptChannelLike extends JsonResponder {
   interactionBroadcaster?: InteractionBroadcasterLike;
   sendMessage?: (chatJid: string, text: string, options?: SendMessageOptions) => Promise<void>;
   broadcastEvent?: (eventType: string, data: unknown) => void;
-  skipFailedOnModelSwitch?: (chatJid: string) => void;
 }
 
 function failMissingDependency(name: string): never {
@@ -166,9 +164,6 @@ export function createWebAdaptiveCardSidePromptService(
       : async () => failMissingDependency("sendMessage"),
     broadcastEvent: typeof channel.broadcastEvent === "function"
       ? (eventType, data) => channel.broadcastEvent?.(eventType, data)
-      : () => {},
-    skipFailedOnModelSwitch: typeof channel.skipFailedOnModelSwitch === "function"
-      ? (chatJid) => channel.skipFailedOnModelSwitch?.(chatJid)
       : () => {},
     forwardAgentMessage: async (req, pathname, chatJid, agentId) =>
       handleAgentMessageRequest(channel as unknown as WebChannelLike, req, pathname, chatJid, agentId),
@@ -382,7 +377,6 @@ export class WebAdaptiveCardSidePromptService {
           thinking_level: thinkingLevel ?? null,
           supports_thinking: supportsThinking,
         });
-        this.options.skipFailedOnModelSwitch(chatJid);
       }
 
       return this.options.json({
@@ -406,7 +400,6 @@ export class WebAdaptiveCardSidePromptService {
           { action_type: normalized.actionType, title: normalized.actionTitle || "Continue", data: { intent: "recovery-continue" }, submitted_at: submittedAt },
         ),
       );
-      this.options.skipFailedOnModelSwitch(chatJid);
 
       const continueReq = new Request(`http://internal/agent/${this.options.defaultAgentId}/message`, {
         method: "POST",
@@ -436,7 +429,6 @@ export class WebAdaptiveCardSidePromptService {
           { action_type: normalized.actionType, title: normalized.actionTitle || "Retry cleanly", data: { intent: "recovery-retry-clean" }, submitted_at: submittedAt },
         ),
       );
-      this.options.skipFailedOnModelSwitch(chatJid);
 
       const retryReq = new Request(`http://internal/agent/${this.options.defaultAgentId}/message`, {
         method: "POST",

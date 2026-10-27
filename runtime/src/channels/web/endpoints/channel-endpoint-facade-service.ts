@@ -204,7 +204,7 @@ export class WebChannelEndpointFacadeService {
         const chatJid = typeof chat.chat_jid === "string" ? chat.chat_jid.trim() : "";
         if (!chatJid || chat.archived_at) return [];
         const snapshot = buildAgentStatusSnapshot(chatJid, context,
-          { includeDiagnostics: false, includeExtensionWorking: false, recoverStaleInflight: false });
+          { includeDiagnostics: false, includeExtensionWorking: false, });
         const data = snapshot.data as Record<string, unknown> | null;
         const active = snapshot.status === "active";
         const compacting = active && data?.type === "compaction";

@@ -382,9 +382,6 @@ export {};
       updateAgentStatus: (chatJid, status) => {
         events.push({ kind: "status", chatJid, status });
       },
-      recoverInflightRuns: () => {
-        events.push({ kind: "recover" });
-      },
       resumePendingChats: () => {
         events.push({ kind: "resume" });
       },
@@ -394,20 +391,19 @@ export {};
       resumePending = resume;
     });
 
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(4);
     expect(events[0]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
         type: "intent",
         intent_key: "startup",
-        phase: "recovering_inflight",
+        phase: "recovering_native",
         turn_id: STARTUP_STATUS_TURN_ID,
       },
     });
-    expect(events[1]).toEqual({ kind: "recover" });
-    expect(events[2]).toEqual({ kind: "handoff" });
-    expect(events[3]).toMatchObject({
+    expect(events[1]).toEqual({ kind: "handoff" });
+    expect(events[2]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
@@ -417,7 +413,7 @@ export {};
         turn_id: STARTUP_STATUS_TURN_ID,
       },
     });
-    expect(events[4]).toMatchObject({
+    expect(events[3]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
@@ -428,10 +424,10 @@ export {};
       },
     });
 
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(4);
     expect(resumePending).toBeFunction();
     (resumePending as () => void)();
-    expect(events[5]).toEqual({ kind: "resume" });
+    expect(events[4]).toEqual({ kind: "resume" });
   });
 
   test("queueStartupSessionWarmup is disabled by default", () => {

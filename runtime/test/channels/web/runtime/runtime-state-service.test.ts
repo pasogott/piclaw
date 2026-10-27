@@ -4,7 +4,7 @@ import {
   type WebChannelRuntimeStateCallbacks,
 } from "../../../../src/channels/web/runtime/runtime-state-service.js";
 import type { ChatRunControlStore } from "../../../../src/channels/web/runtime/chat-run-control.js";
-import type { WebRecoveryStore } from "../../../../src/channels/web/runtime/recovery.js";
+import type { WebPendingResumeStore } from "../../../../src/channels/web/runtime/recovery.js";
 
 describe("web runtime state service", () => {
   test("resumeChat wires queue/process callbacks through the resume context", async () => {
@@ -62,11 +62,7 @@ describe("web runtime state service", () => {
       },
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:replay", prevTs: "t0", messageId: "m1", startedAt: "2026-03-27T20:00:00.000Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({ "web:pending": "t1" }),
       getKnownChatJids: () => ["web:pending"],
       getDeferredQueuedFollowups: () => [],
@@ -99,8 +95,6 @@ describe("web runtime state service", () => {
     }, {
       state,
     });
-
-    service.recoverInflightRuns(store);
     assistantName = "Pi live";
     service.resumePendingChats(undefined, store);
 
@@ -218,11 +212,7 @@ describe("web runtime state service", () => {
     expect(service.isPanelExpanded("turn-1", "thought")).toBe(true);
     expect(service.getBuffer("turn-1", "thought")).toEqual({ text: "line one", totalLines: 1 });
     expect(service.getBuffer("turn-1", "draft")).toEqual({ text: "draft one", totalLines: 2 });
-    expect(state.getDraftRecovery("web:1")).toEqual(expect.objectContaining({
-      turnId: "turn-1",
-      text: "draft one",
-      totalLines: 2,
-    }));
+    expect(state.getDraftRecovery("web:1")).toBeNull();
     expect(calls).toEqual([
       "status.load",
       "state.save",
@@ -231,45 +221,8 @@ describe("web runtime state service", () => {
       "panel.set:turn-1:thought:true",
       "buffer.update:turn-1:thought:1",
       "buffer.update:turn-1:draft:2",
-      "draft.set:web:1:turn-1",
-      "state.save",
       "pending.consume:web:1",
     ]);
-  });
-
-  test("chat-run control delegation preserves thread-root lookup and failed-run skip behavior", () => {
-    const setCalls: Array<{ chatJid: string; ts: string }> = [];
-    const clearCalls: string[] = [];
-    const store: ChatRunControlStore = {
-      getThreadRootId: (chatJid, messageId) => (chatJid === "web:1" && messageId === "m1" ? 42 : null),
-      getFailedRun: () => ({ failedTs: "2026-03-27T20:10:00.000Z" }),
-      getChatCursor: () => "2026-03-27T20:00:00.000Z",
-      setChatCursor: (chatJid, ts) => {
-        setCalls.push({ chatJid, ts });
-      },
-      clearFailedRun: (chatJid) => {
-        clearCalls.push(chatJid);
-      },
-    };
-
-    const service = new WebChannelRuntimeStateService(
-      {
-        getAssistantName: () => "Pi",
-        getChatCursor: () => "cursor",
-        enqueue: async () => {},
-        processChat: async () => {},
-      },
-      {
-        defaultAgentId: "default",
-        stateKey: "state-key",
-      }
-    );
-
-    expect(service.getThreadRootId("web:1", "m1", store)).toBe(42);
-    service.skipFailedOnModelSwitch("web:1", store);
-
-    expect(setCalls).toEqual([{ chatJid: "web:1", ts: "2026-03-27T20:10:00.000Z" }]);
-    expect(clearCalls).toEqual(["web:1"]);
   });
 });
 

@@ -2,18 +2,12 @@
  * channels/web/agent-status-store.ts – in-memory + persisted web agent status state.
  */
 
-import { getInflightRuns, getPreflightRuns, type InflightRun, type PreflightRun } from "../../../db.js";
 
 interface AgentStatusStateStore {
   load(): void;
   save(): void;
   setAgentStatus(chatJid: string, status: Record<string, unknown> | null): void;
   getAgentStatuses(): Record<string, Record<string, unknown>>;
-}
-
-interface AgentStatusInflightStore {
-  getPreflightRuns?: () => Array<Pick<PreflightRun, "chatJid" | "startedAt">>;
-  getInflightRuns(): Array<Pick<InflightRun, "chatJid" | "startedAt">>;
 }
 
 const STATUS_RUNTIME_GENERATION = [
@@ -36,25 +30,6 @@ function hasCurrentRuntimeGeneration(status: Record<string, unknown> | null | un
   return status[STATUS_RUNTIME_GENERATION_KEY] === STATUS_RUNTIME_GENERATION;
 }
 
-function buildRestartRecoveryStatus(
-  pending: Pick<InflightRun, "startedAt"> | Pick<PreflightRun, "startedAt">,
-  phase: "preflight" | "inflight",
-): Record<string, unknown> {
-  return {
-    type: "intent",
-    kind: "info",
-    intent_key: "recovery",
-    source: "startup_recovery",
-    title: phase === "preflight" ? "Recovering interrupted pre-prompt work" : "Recovering interrupted response",
-    detail: phase === "preflight"
-      ? "Clearing a persisted preflight marker before the prompt started."
-      : "Reconstructing runtime state from the persisted inflight marker.",
-    blocking: true,
-    started_at: pending.startedAt,
-    [STATUS_RUNTIME_GENERATION_KEY]: STATUS_RUNTIME_GENERATION,
-  };
-}
-
 /** In-memory + persisted lifecycle store for active web agent statuses. */
 export class AgentStatusStore {
   private activeAgentStatuses = new Map<string, Record<string, unknown>>();
@@ -63,7 +38,6 @@ export class AgentStatusStore {
 
   constructor(
     private readonly state: AgentStatusStateStore,
-    private readonly inflightStore: AgentStatusInflightStore = { getPreflightRuns, getInflightRuns },
     private readonly terminalStatusTtlMs = 15_000,
   ) {}
 
@@ -93,10 +67,8 @@ export class AgentStatusStore {
   load(): void {
     this.state.load();
 
-    // Persisted agentStatuses are only trustworthy when they were written by
-    // the current process generation. After a restart, the durable truth comes
-    // from chat_cursors inflight markers, and get() synthesizes a fresh
-    // recovery status from that durable state when needed.
+    // Only current-process hints can be restored. Native tasks and accepted
+    // sources own execution; historical cursor markers cannot create activity.
     const restored = this.state.getAgentStatuses();
     const nextStatuses = new Map<string, Record<string, unknown>>();
     let mutated = false;
@@ -143,12 +115,7 @@ export class AgentStatusStore {
       this.clearTerminalStatusTimer(chatJid);
     }
 
-    const inflight = this.inflightStore.getInflightRuns().find((entry) => entry.chatJid === chatJid);
-    if (inflight) return buildRestartRecoveryStatus(inflight, "inflight");
-
-    const preflight = this.inflightStore.getPreflightRuns?.().find((entry) => entry.chatJid === chatJid);
-    if (!preflight) return null;
-    return buildRestartRecoveryStatus(preflight, "preflight");
+    return null;
   }
 
   clearPersistedStatuses(): void {

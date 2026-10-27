@@ -110,9 +110,6 @@ export interface WebChannelLike
   getBuffer(turnId: string, panel: "thought" | "draft"): WebAgentBufferEntry | undefined;
   getThreadRootId(chatJid: string, messageId: string): number | null;
   saveState(): void;
-  skipFailedOnModelSwitch(chatJid: string): boolean;
-  retryFailedOnModelSwitch(chatJid: string): boolean;
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean;
 
   setPanelExpanded(turnId: string, panel: "thought" | "draft", expanded: boolean): void;
   isPanelExpanded(turnId: string, panel: "thought" | "draft"): boolean;

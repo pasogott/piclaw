@@ -7,5 +7,8 @@ const recoveryPath = resolve(import.meta.dir, "../../../src/channels/web/runtime
 test("web recovery runtime does not reference legacy rollback helpers", () => {
   const source = readFileSync(recoveryPath, "utf8");
   expect(source).not.toContain("rollbackInflightRun");
-  expect(source).toContain("clearInflightMarker");
+  expect(source).not.toContain("clearInflightMarker");
+  expect(source).not.toContain("getInflightRuns");
+  expect(source).not.toContain("getPreflightRuns");
+  expect(source).toContain("resumePendingChats");
 });

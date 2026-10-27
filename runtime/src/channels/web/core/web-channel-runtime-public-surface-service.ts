@@ -32,10 +32,6 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "replaceQueuedFollowupPlaceholder"
   | "getThreadRootId"
   | "resumeChat"
-  | "skipFailedOnModelSwitch"
-  | "retryFailedOnModelSwitch"
-  | "recoverInflightRuns"
-  | "recoverStaleInflightRun"
   | "resumePendingChats"
   | "loadState"
   | "saveState"
@@ -487,22 +483,6 @@ export class WebChannelRuntimePublicSurfaceService {
 
   resumeChat(chatJid: string, threadRootId?: number | null): void {
     this.channel.runtimeFollowupFacade.resumeChat(chatJid, threadRootId);
-  }
-
-  skipFailedOnModelSwitch(chatJid: string): boolean {
-    return this.channel.runtimeFollowupFacade.skipFailedOnModelSwitch(chatJid);
-  }
-
-  retryFailedOnModelSwitch(chatJid: string): boolean {
-    return this.channel.runtimeFollowupFacade.retryFailedOnModelSwitch(chatJid);
-  }
-
-  recoverInflightRuns(): void {
-    this.channel.runtimeFollowupFacade.recoverInflightRuns();
-  }
-
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean {
-    return this.channel.runtimeFollowupFacade.recoverStaleInflightRun(chatJid, options);
   }
 
   resumePendingChats(chatJid?: string): void {
