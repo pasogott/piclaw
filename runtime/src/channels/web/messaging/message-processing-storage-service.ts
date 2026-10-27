@@ -7,7 +7,7 @@
  */
 
 import type { InteractionRow } from "../../../db.js";
-import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
+import { isSlashCommandInvocation } from "../../../agent-control/agent-control-parser.js";
 import { processChat as processAgentChat } from "../handlers/agent.js";
 import type { LinkPreviewChannel } from "../media/link-previews.js";
 import {

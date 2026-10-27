@@ -28,10 +28,9 @@ test("single physical database: accepted primary + attached intent, terminal ide
     const bindings = new Map([[f.chatJid, adapter.sessionPosition(f.chatJid, "main", "preserved-session-id")]]);
     const app = new AgentRuntimeFacade({
       pool: new Map(), durableSessions: bindings,
-      getOrCreateRuntime: async () => { throw new Error("legacy runtime factory forbidden"); },
       modelRegistry: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRegistry"],
       modelRuntime: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRuntime"],
-      authPath: "unused", clearAttachments() {}, async refreshRuntime() {},
+      authPath: "unused",
     });
     bindings.clear(); // Caller cannot unbind an accepted durable chat into legacy.
     return app;
@@ -66,7 +65,7 @@ test("single physical database: accepted primary + attached intent, terminal ide
     expect(persistedModel).toBe("qualification/synthetic");
     const beforePosition = await app.saveSessionPosition(f.chatJid);
     await expect(app.restoreSessionPosition(f.chatJid, beforePosition)).rejects.toThrow("Durable history navigation unavailable");
-    await expect(app.applySlashCommand(f.chatJid, "/compact")).rejects.toThrow("Durable application does not construct legacy sessions");
+    expect("applySlashCommand" in app).toBe(false);
     const sid = await adapter.submitIntent(captured);
     expect(await adapter.submitIntent(captured)).toBe(sid);
     expect(await f.runtime!.submit(primary)).toBe(primaryId);

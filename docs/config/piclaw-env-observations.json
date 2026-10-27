@@ -51,22 +51,22 @@
   },
   "current": {
     "production": {
-      "referencedNames": 172,
+      "referencedNames": 170,
       "directReaderNames": 7,
-      "directReaderOccurrences": 14,
+      "directReaderOccurrences": 13,
       "helperReaderNames": 10,
       "helperReaderOccurrences": 10,
       "semanticReaderNames": 17,
-      "semanticReaderOccurrences": 24
+      "semanticReaderOccurrences": 23
     },
     "runtimeSrc": {
-      "referencedNames": 171,
+      "referencedNames": 169,
       "directReaderNames": 7,
-      "directReaderOccurrences": 14,
+      "directReaderOccurrences": 13,
       "helperReaderNames": 10,
       "helperReaderOccurrences": 10,
       "semanticReaderNames": 17,
-      "semanticReaderOccurrences": 24
+      "semanticReaderOccurrences": 23
     },
     "extensions": {
       "referencedNames": 1,
@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 64
     },
     "docsDeploy": {
-      "referencedNames": 155,
+      "referencedNames": 153,
       "directReaderNames": 18,
       "directReaderOccurrences": 42,
       "helperReaderNames": 0,
@@ -1348,17 +1348,15 @@
         },
         "production": {
           "referenced": true,
-          "directReaders": 7,
+          "directReaders": 6,
           "helperReaders": 0,
-          "semanticReaders": 7,
+          "semanticReaders": 6,
           "files": [
-            "runtime/src/agent-pool/compaction.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"
           ],
           "readerFiles": [
-            "runtime/src/agent-pool/compaction.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"
@@ -1366,17 +1364,15 @@
         },
         "runtimeSrc": {
           "referenced": true,
-          "directReaders": 7,
+          "directReaders": 6,
           "helperReaders": 0,
-          "semanticReaders": 7,
+          "semanticReaders": 6,
           "files": [
-            "runtime/src/agent-pool/compaction.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"
           ],
           "readerFiles": [
-            "runtime/src/agent-pool/compaction.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"
@@ -4588,77 +4584,6 @@
           "files": [
             "runtime/src/core/config-runtime.ts",
             "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_SESSION_IDLE_COMPACTION_MAX_WAIT_MS",
-      "scopes": {
-        "docsDeploy": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "docs/architecture.md",
-            "docs/configuration.md"
-          ],
-          "readerFiles": []
-        },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/agent-pool/prompt-utils.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/agent-pool/prompt-utils.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_SESSION_IDLE_MAX_WAIT_MS",
-      "scopes": {
-        "docsDeploy": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "docs/configuration.md"
-          ],
-          "readerFiles": []
-        },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/agent-pool/prompt-utils.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/agent-pool/prompt-utils.ts"
           ],
           "readerFiles": []
         }

@@ -39,9 +39,8 @@ test("public manual compact: real model summary, idle admission, observer detach
     putAnswer: unused, sessionId: "original-session", lane: "compact", generation: 1, now: () => new Date(0).toISOString() };
   const app = () => {
     const adapter = createDurableConversationAdapter({ incarnation: "compact", manifest: [binding], runtime });
-    return new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, adapter.sessionPosition(binding.chatJid, "main", "original-session")]]),
-      getOrCreateRuntime: unused, modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
-      authPath: "unused", clearAttachments() {}, refreshRuntime: unused });
+    return new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, adapter.sessionPosition(binding.chatJid, "main", "original-session")]]), modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
+      authPath: "unused",});
   };
   const command = { type: "compact" as const, raw: "/compact" };
   try {
@@ -172,9 +171,8 @@ for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) 
   const closeSpy = spyOn(ownedHarness, "close");
   const adapter = createDurableConversationAdapter({ incarnation: binding.incarnation, manifest: [binding], runtime });
   const position = adapter.sessionPosition(binding.chatJid, binding.branchId, "original");
-  const facade = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, position]]),
-    getOrCreateRuntime: unused, modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
-    authPath: "unused", clearAttachments() {}, refreshRuntime: unused,
+  const facade = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, position]]), modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
+    authPath: "unused",
     acquireCommandProtection() { protections++; return () => { protections--; }; } });
   const hold = barrier(), entered = barrier(), readFailed = barrier();
   f.host.modelHold = hold; f.host.onModelEnter = () => entered.release();

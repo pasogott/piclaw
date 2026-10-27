@@ -133,8 +133,7 @@ test("one DB imported fork tree through actual facade, original provenance and n
       existingConversationIds: manifest.map(b => b.conversationId as ConversationId), authorizeScheduling() { throw Error("read only"); }, putAnswer() { throw Error("read only"); }, sessionId: "original-host-session", lane: "tree", generation: 1, now: () => new Date(0).toISOString(),
     }, context);
     const adapter = createDurableConversationAdapter({ incarnation: "tree", manifest, runtime });
-    const app = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[branch.chatJid, adapter.sessionPosition(branch.chatJid, branch.branchId, "original-host-session")]]),
-      getOrCreateRuntime: async () => { throw Error("legacy forbidden"); }, modelRegistry: {} as any, modelRuntime: {} as any, authPath: "unused", clearAttachments() {}, async refreshRuntime() {} });
+    const app = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[branch.chatJid, adapter.sessionPosition(branch.chatJid, branch.branchId, "original-host-session")]]), modelRegistry: {} as any, modelRuntime: {} as any, authPath: "unused",});
     const tree = await app.getSessionTreeForChat(branch.chatJid);
     expect(tree.nodes.filter(n => n.parentId === null)).toHaveLength(1);
     expect(tree.nodes.find(n => n.detail === "shared")?.childCount).toBe(1);
