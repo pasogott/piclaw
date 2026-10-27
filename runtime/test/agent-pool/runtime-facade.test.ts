@@ -88,6 +88,24 @@ test("durable runtime lookup must be callable", () => {
   })).toThrow("Durable runtime lookup must be callable");
 });
 
+test("durable compatibility readPosition must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid", {
+      sessionId: "invalid-binding",
+      branchId: "main",
+      readPosition: "invalid-position-reader",
+    } as unknown as { sessionId: string; branchId: string; readPosition: () => Promise<string | null> }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility readPosition must be callable");
+});
+
 test("native host-only controls and state never construct a legacy session", async () => {
   let legacy = 0, acquired = 0, released = 0;
   const port = { sessionId: "native-host", branchId: "main", readPosition: async () => "7",

@@ -325,14 +325,39 @@ export class AgentRuntimeFacade {
       throw new Error("Durable runtime lookup must be callable");
     }
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
+    const bindCompatibilityMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+    ): ((...args: any[]) => any) | undefined => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) return undefined;
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable compatibility ${String(method)} must be callable`);
+      }
+      return candidate.bind(port) as (...args: any[]) => any;
+    };
     // Capture routing before any session factory is entered. Never fall back on port failure.
-    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port),
-        readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port),
-        setModel: port.setModel?.bind(port), reset: port.reset?.bind(port), abort: port.abort?.bind(port),
-        compact: port.compact?.bind(port), reconcileMaintenance: port.reconcileMaintenance?.bind(port),
-        readTree: port.readTree?.bind(port), readMetadata: port.readMetadata?.bind(port), readReport: port.readReport?.bind(port),
-        assertCurrent: port.assertCurrent?.bind(port), runOwnedControl: port.runOwnedControl?.bind(port) })]));
+    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) => {
+      const readPosition = bindCompatibilityMethod(port, "readPosition");
+      if (!readPosition) throw new Error("Durable compatibility readPosition must be callable");
+      return [chat, Object.freeze({
+        ...port,
+        readPosition,
+        readModel: bindCompatibilityMethod(port, "readModel"),
+        readThinkingLevel: bindCompatibilityMethod(port, "readThinkingLevel"),
+        setThinkingLevel: bindCompatibilityMethod(port, "setThinkingLevel"),
+        setModel: bindCompatibilityMethod(port, "setModel"),
+        reset: bindCompatibilityMethod(port, "reset"),
+        abort: bindCompatibilityMethod(port, "abort"),
+        compact: bindCompatibilityMethod(port, "compact"),
+        reconcileMaintenance: bindCompatibilityMethod(port, "reconcileMaintenance"),
+        readTree: bindCompatibilityMethod(port, "readTree"),
+        readMetadata: bindCompatibilityMethod(port, "readMetadata"),
+        readReport: bindCompatibilityMethod(port, "readReport"),
+        assertCurrent: bindCompatibilityMethod(port, "assertCurrent"),
+        runOwnedControl: bindCompatibilityMethod(port, "runOwnedControl"),
+      })] as const;
+    }));
     this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
