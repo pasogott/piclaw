@@ -102,6 +102,13 @@ for (const entry of ["index.ts", "runtime.ts", "runtime/bootstrap.ts", "agent-po
     expect(graph.has(resolve(source, "agent-pool/session.ts"))).toBe(false);
     expect(graph.has(resolve(source, "agent-pool/session-factory.ts"))).toBe(false);
     expect(graph.has(resolve(source, "agent-pool/session-affinity-compat.ts"))).toBe(false);
+    if (entry === "agent-pool.ts") {
+      expect(graph.has(resolve(source, "agent-pool/run-agent-orchestrator.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-budget.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-finalization.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-recovery-phase.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/operation-session-profile.ts"))).toBe(false);
+    }
     // The real pool remains in the application graph: this must not pass by dropping startup wiring.
     if (entry !== "index.ts") expect(graph.has(resolve(source, "agent-pool/service-factory.ts"))).toBe(true);
   });
