@@ -30,7 +30,7 @@ for (const mode of ["durable", "legacy"] as const) {
   test(`fresh-process ${mode} AgentPool construction enforces the local load boundary`, async () => {
     const root = mkdtempSync(resolve(tmpdir(), "durable-import-boundary-"));
     const fence=mode==='durable'
-      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
+      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-finalization|run-agent-recovery-phase|operation-session-profile|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
       : /\/agent-pool\/(?:session|session-factory)\.(?:ts|js)$/;
     const script = `
       import { plugin } from "bun";
@@ -55,6 +55,10 @@ for (const mode of ["durable", "legacy"] as const) {
         if (mode === "durable") {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected durable rejection"); }
           catch (error) { if (!String(error).includes("Durable application does not construct legacy sessions")) throw error; }
+          const runResult = await pool.runAgent("must not load legacy orchestration", "web:load-boundary");
+          if (runResult.status !== "error" || runResult.error !== "Native execution requires an admitted operation") {
+            throw new Error("Unexpected durable runAgent result: " + JSON.stringify(runResult));
+          }
           if (attempts.length) throw new Error("Durable lookup evaluated a forbidden local module");
         } else {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected load fence rejection"); }
