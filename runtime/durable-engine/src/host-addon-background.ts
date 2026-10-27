@@ -1,14 +1,15 @@
 import type Database from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { readAddonOperation,readAddonOperationInputSequence } from "../../src/db/addon-operations.js";
+import { readAddonOperation,readAddonOperationInputSequence,readAddonOperationInputEpoch,ADDON_OPERATION_RESUME_TEXT } from "../../src/db/addon-operations.js";
 import { getBudgetWork } from "../../src/db/budget-limits.js";
 import { authorizeAddonOperation } from "../../src/addons/operation-host.js";
 import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import { evaluateBudget } from '../../src/budget/evaluator.js';
+import type { NativeBackgroundInputHistory } from './host-background-context.js';
 import { OPERATION_SYSTEM_PROMPT } from "../../src/agent-pool/operation-session-profile.js";
 import {
   createNativeBackgroundPayload,readNativeBackgroundPayload,assertNativeBackgroundDeadline,assertNativeBackgroundRetry,
-  nativeBackgroundSourceId,type NativeBackgroundOrigin,type NativeBackgroundPayload,
+  nativeBackgroundSourceId,nativeBackgroundContextKey,type NativeBackgroundOrigin,type NativeBackgroundPayload,
 } from "../../src/agent-pool/background-operation-contract.js";
 
 export function addonBackgroundOrigin(root:Database,id:string):Extract<NativeBackgroundOrigin,{kind:'addon'}>{
@@ -50,20 +51,32 @@ export function assertAddonBackgroundToolBudget(root:Database,policy:NativeBackg
   if(decision.action==='pause'||decision.action==='stop')throw new BudgetRequestError('budget_denied');
 }
 export function prepareAddonBackgroundPayload(root:Database,id:string,model:NativeBackgroundPayload['policy']['model'],
-  existing:NativeBackgroundPayload|undefined,toolAvailable:(name:string)=>boolean):NativeBackgroundPayload{
+  existing:NativeBackgroundPayload|undefined,toolAvailable:(name:string)=>boolean,history?:NativeBackgroundInputHistory):NativeBackgroundPayload{
   const origin=addonBackgroundOrigin(root,id),record=readAddonOperation(id,root)!;
   for(const name of record.grant.allowedTools)if(!toolAvailable(name))throw Error(`Native operation tool unavailable: ${name}`);
   const prior=existing&&readNativeBackgroundPayload(existing);
   if(prior&&prior.policy.sourceId!==nativeBackgroundSourceId(origin))throw Error('Native add-on input epoch changed');
-  // A mutable legacy committed-input marker cannot reconstruct missing original
-  // bytes. Explicit continuations require an existing private-context proof.
-  if(!prior&&createHash('sha256').update(JSON.stringify([record.target,record.text])).digest('hex')!==record.inputHash)
-    throw Error('Original add-on input payload unavailable');
+  const epoch=readAddonOperationInputEpoch(id,root);if(!epoch||epoch.sequence!==origin.inputSequence)throw Error('Native add-on input epoch unavailable');
+  const previous=history?.previous.map(readNativeBackgroundPayload)??[],base=previous.at(-1);
+  for(const old of previous)if(old.policy.origin.kind!=='addon'||nativeBackgroundContextKey(old.policy.origin)!==nativeBackgroundContextKey(origin)||old.policy.origin.inputSequence>=origin.inputSequence)throw Error('Native add-on context history changed');
+  let prompt=prior?.prompt??record.text;
+  if(!prior){
+    if(epoch.kind==='continuation'){
+      if(!base||!history?.acceptedSources.length)throw Error('Native continuation requires committed private history');
+    }else if(epoch.kind==='resume'&&base){
+      const previousSource=nativeBackgroundSourceId({...origin,inputSequence:epoch.previousSequence!});
+      if(history!.acceptedSources.includes(previousSource))prompt=ADDON_OPERATION_RESUME_TEXT;
+      else{
+        const staged=previous.find(payload=>payload.policy.sourceId===previousSource);
+        if(staged&&staged.prompt!==record.text)throw Error('Unsubmitted add-on input bytes changed');
+      }
+    }else if(createHash('sha256').update(JSON.stringify([record.target,record.text])).digest('hex')!==record.inputHash)throw Error('Original add-on input payload unavailable');
+  }
   const acceptedAt=prior?.policy.acceptedAt??record.updatedAt; // Persisted working transition owns the original timeout.
   const payload=createNativeBackgroundPayload({origin,workId:record.workId,parentWorkId:record.grant.parentWorkId,model:prior?.policy.model??model,
     allowedTools:record.grant.allowedTools,maxToolCalls:record.grant.maxToolCalls,acceptedAt,
     expiresAt:prior?.policy.expiresAt??new Date(Date.parse(acceptedAt)+record.grant.timeoutMs).toISOString(),
-    prompt:prior?.prompt??record.text,instructions:OPERATION_SYSTEM_PROMPT});
+    prompt,instructions:OPERATION_SYSTEM_PROMPT});
   if(prior)assertNativeBackgroundRetry(prior.policy,payload.policy);
   assertAddonBackgroundCurrent(root,payload,true);return payload;
 }

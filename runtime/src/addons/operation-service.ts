@@ -9,6 +9,7 @@ import {
   operationSnapshot,
   readAddonOperation,
   readAddonOperationEvents,
+  readAddonOperationInputSequence,
   transitionAddonOperation,
 } from "../db/addon-operations.js";
 import {
@@ -408,10 +409,11 @@ export class AddonOperationService {
     id: string,
     controller: AbortController,
   ): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined,inputSequence:number|undefined;
     try {
       const record = readAddonOperation(id);
       if (!record || record.status !== "queued" || this.closed) return;
+      inputSequence=readAddonOperationInputSequence(id)??undefined;if(inputSequence===undefined)throw Error('Operation input identity unavailable');
       singleUser();
       const principal = {
         addonId: record.addonId,
@@ -431,6 +433,7 @@ export class AddonOperationService {
           admission.decision,
           null,
           "admission_changed",
+          inputSequence,
         );
         return;
       }
@@ -442,10 +445,11 @@ export class AddonOperationService {
           "rejected",
           null,
           "grant_changed",
+          inputSequence,
         );
         return;
       }
-      const working = transitionAddonOperation(id, ["queued"], "working");
+      const working = transitionAddonOperation(id, ["queued"], "working",null,null,inputSequence);
       if (!working) return;
       timer = setTimeout(
         () => controller.abort(new Error("operation_timeout")),
@@ -453,6 +457,7 @@ export class AddonOperationService {
       );
       const input: OperationExecution = {
         operationId: id,
+        inputSequence,
         chatJid: record.chatJid,
         workId: record.workId,
         text: record.text,
@@ -468,6 +473,7 @@ export class AddonOperationService {
         result.status,
         result.output ?? null,
         result.reason ?? null,
+        inputSequence,
       );
     } catch {
       // Provider/adapter exception details are not safe public output.
@@ -477,6 +483,7 @@ export class AddonOperationService {
         "failed",
         null,
         "execution_failed",
+        inputSequence,
       );
     } finally {
       if (timer) clearTimeout(timer);

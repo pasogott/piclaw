@@ -63,6 +63,8 @@ export interface OperationEvent {
 }
 export interface OperationExecution {
   operationId: string;
+  /** Owner-captured epoch; a constraint, never caller spending authority. */
+  inputSequence?:number;
   chatJid: string;
   workId: string;
   text: string;

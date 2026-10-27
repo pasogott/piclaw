@@ -304,6 +304,15 @@ export class HostConversationRuntime {
       return binding;
     });
   }
+  /** Existing private context publication never appends another conversation
+   * identity to the scheduling/recovery domain. */
+  prepareBackgroundInput(id:ConversationId,update:(tx:import('@earendil-works/pi-durable').Tx)=>Promise<void>,check:()=>void){
+    this.options.assertAdmission?.();
+    return this.observe(async()=>{
+      this.fence();check();if(!this.options.existingConversationIds.includes(id))throw Error('Existing background context is not registered');
+      await this.harness.commit(async tx=>{this.fence();check();await update(tx);this.fence();check();},this.context);this.fence();check();
+    });
+  }
   /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
   allocateScheduledFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }): Promise<ConversationId> {
     return this.allocateIsolatedFork(parentId, allocated, model);

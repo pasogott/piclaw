@@ -9,7 +9,7 @@ import type { OperationHost,OperationPrincipal,OperationAdmission } from "./oper
 /** Injectable AgentPool surface keeps operation tests provider-free. */
 export interface OperationAgentPool {
   isDurableRuntime?():boolean;
-  dispatchAddonOperation?(operationId:string,signal:AbortSignal):Promise<AgentOutput>;
+  dispatchAddonOperation?(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>;
   runAgent(
     prompt: string,
     chatJid: string,
@@ -73,7 +73,7 @@ export function createOperationHost(
     async execute(input) {
       const native=pool.isDurableRuntime?.()===true;
       if(native&&!pool.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
-      const output = native ? await pool.dispatchAddonOperation!(input.operationId,input.signal) : await pool.runAgent(input.text, input.chatJid, {
+      const output = native ? await pool.dispatchAddonOperation!(input.operationId,input.signal,input.inputSequence) : await pool.runAgent(input.text, input.chatJid, {
         turnId: input.operationId,
         budgetWorkId: input.workId,
         budgetParentWorkId: input.grant.parentWorkId,

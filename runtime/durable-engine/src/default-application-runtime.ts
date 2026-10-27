@@ -1181,10 +1181,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
         background:{contexts:backgroundContexts,payloads:backgroundPayloads,
           sourceIdForAddon:id=>nativeBackgroundSourceId(addonBackgroundOrigin(root,id)),
-          prepareAddon(id,existing){
-            const choice=existing?{provider:existing.policy.model.provider,id:existing.policy.model.modelId}:ref;check(choice,lifetime.signal,true);
+          prepareAddon(id,existing,history){
+            const baseline=existing??history?.previous.at(-1);
+            const choice=baseline?{provider:baseline.policy.model.provider,id:baseline.policy.model.modelId}:ref;check(choice,lifetime.signal,true);
             const physical=host.modelRuntime.getPhysicalModel(choice.provider,choice.id)!;
-            const payload=prepareAddonBackgroundPayload(root,id,{provider:physical.provider,modelId:physical.id,api:physical.api},existing,name=>defaultToolNames.includes(name as typeof defaultToolNames[number])&&tools.some(tool=>tool.name===name));
+            if(baseline)assertNativeBackgroundModel(baseline.policy,physical);
+            const payload=prepareAddonBackgroundPayload(root,id,{provider:physical.provider,modelId:physical.id,api:physical.api},existing,name=>defaultToolNames.includes(name as typeof defaultToolNames[number])&&tools.some(tool=>tool.name===name),history);
             check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);return payload;
           },
           assertCurrent(payload){check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);assertAddonBackgroundCurrent(root,payload);
@@ -1205,9 +1207,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
             if(readBackgroundPayloadText(payload.policy.sourceId)!==encoded)throw Error('Background payload publication changed');
             const directory=openSync(payloadDir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}
           },
-          publish: (tx,payload)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!,backgroundExtension],()=>{
+          publish: (tx,payload,history)=>publishNativeBackgroundContext(tx,mapping.domain,payload,tools.filter(tool=>payload.policy.allowedTools.includes(tool.name)),[registry.snapshot().extension('app.host-builtins')!,backgroundExtension],()=>{
             check({provider:payload.policy.model.provider,id:payload.policy.model.modelId},lifetime.signal,true);assertAddonBackgroundCurrent(root,payload);
-          }),
+          },history),
         },
         assertAdmission: input => processControls!.assertAdmission(input),
         assertInputAdmission(chat) { assertAdmission(); ensureLiveWatch(chat); },

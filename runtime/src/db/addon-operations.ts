@@ -51,19 +51,29 @@ export function readAddonOperation(id: string, database:Database=getDb()): Opera
     database.query("SELECT * FROM addon_operations WHERE id=?").get(id),
   );
 }
-/** The latest queued owner event identifies an explicitly accepted execution
- * turn (new input or owner resume). Working/cancel status and mutable committed
- * markers cannot mint a new epoch. This is never permission to resend old text. */
-export function readAddonOperationInputSequence(id:string,database:Database=getDb()):number|null {
+export const ADDON_OPERATION_RESUME_TEXT='Continue the current operation from the input already in this session. Do not repeat completed actions.';
+export type AddonOperationInputEpoch=Readonly<{sequence:number;kind:'initial'|'resume'|'continuation';previousSequence:number|null}>;
+/** Persisted owner transitions, not mutable text/status, identify one accepted
+ * input and distinguish explicit new data from a resume of committed history. */
+export function readAddonOperationInputEpoch(id:string,database:Database=getDb()):AddonOperationInputEpoch|null{
   const record=readAddonOperation(id,database);if(!record)return null;
-  for(const row of database.query('SELECT sequence,snapshot_json FROM addon_operation_events WHERE operation_id=? ORDER BY sequence DESC LIMIT 128').all(id) as {sequence:number;snapshot_json:string}[]){
-    const snapshot=JSON.parse(row.snapshot_json) as OperationSnapshot;
-    if(snapshot.status!=='queued')continue;
-    if(!Number.isSafeInteger(row.sequence)||row.sequence<1||snapshot.id!==record.id||snapshot.sequence!==row.sequence||snapshot.workId!==record.workId||snapshot.target!==record.target)
-      throw Error('Invalid add-on input identity event');
-    return row.sequence;
-  }
-  return null;
+  const events=(database.query('SELECT sequence,snapshot_json FROM addon_operation_events WHERE operation_id=? ORDER BY sequence DESC LIMIT 128').all(id) as {sequence:number;snapshot_json:string}[])
+    .map(row=>({sequence:row.sequence,snapshot:JSON.parse(row.snapshot_json) as OperationSnapshot}));
+  const valid=(event:typeof events[number])=>{
+    const {snapshot,sequence}=event;
+    if(!Number.isSafeInteger(sequence)||sequence<1||snapshot.id!==record.id||snapshot.sequence!==sequence||snapshot.workId!==record.workId||snapshot.target!==record.target)throw Error('Invalid add-on input identity event');
+    return event;
+  };
+  const index=events.findIndex(event=>event.snapshot.status==='queued');if(index<0)return null;
+  const current=valid(events[index]!);if(current.sequence===1)return Object.freeze({sequence:1,kind:'initial',previousSequence:null});
+  const predecessor=events[index+1],previous=events.slice(index+1).find(event=>event.snapshot.status==='queued');
+  if(!predecessor||!previous||valid(predecessor).sequence!==current.sequence-1)throw Error('Previous add-on input epoch unavailable');valid(previous);
+  const status=predecessor.snapshot.status;
+  if(!['input_required','budget_blocked','approval_required'].includes(status))throw Error('Unsupported add-on input transition');
+  return Object.freeze({sequence:current.sequence,kind:status==='input_required'?'continuation':'resume',previousSequence:previous.sequence});
+}
+export function readAddonOperationInputSequence(id:string,database:Database=getDb()):number|null{
+  return readAddonOperationInputEpoch(id,database)?.sequence??null;
 }
 export function admitAddonOperation(record: OperationRecord): {
   created: boolean;
@@ -135,6 +145,7 @@ export function transitionAddonOperation(
   status: OperationStatus,
   output: string | null = null,
   reason: string | null = null,
+  expectedInputSequence?:number,
 ): OperationRecord | null {
   const db = getDb();
   return db
@@ -143,7 +154,7 @@ export function transitionAddonOperation(
       if (
         !previous ||
         TERMINAL_OPERATION_STATUSES.has(previous.status) ||
-        !from.includes(previous.status)
+        !from.includes(previous.status)||expectedInputSequence!==undefined&&readAddonOperationInputSequence(id,db)!==expectedInputSequence
       )
         return null;
       const next: OperationRecord = {
@@ -293,13 +304,10 @@ export function appendOperationInput(
 }
 
 /** Resume without resubmitting input already present in the SDK session history. */
-export function markAddonOperationInputCommitted(id: string): void {
-  getDb()
-    .query(
-      "UPDATE addon_operations SET text=? WHERE id=? AND status IN ('working','cancel_requested')",
-    )
-    .run(
-      "Continue the current operation from the input already in this session. Do not repeat completed actions.",
-      id,
-    );
+export function markAddonOperationInputCommitted(id:string,expectedInputSequence?:number):void{
+  const db=getDb();db.transaction(()=>{
+    if(expectedInputSequence!==undefined&&readAddonOperationInputSequence(id,db)!==expectedInputSequence)throw Error('Add-on committed input epoch changed');
+    const changed=db.query("UPDATE addon_operations SET text=? WHERE id=? AND status IN ('working','cancel_requested')").run(ADDON_OPERATION_RESUME_TEXT,id).changes;
+    if(expectedInputSequence!==undefined&&changed!==1)throw Error('Add-on input owner changed before commit acknowledgement');
+  }).immediate();
 }

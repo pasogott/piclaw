@@ -16,7 +16,7 @@ import {
 import { withExternalAddonRegistrationContext } from "../../src/addons/external-routes.js";
 import { createTempWorkspace, type TempWorkspace } from "../helpers.js";
 import type { RunAgentOptions } from "../../src/agent-pool/contracts.js";
-import {readAddonOperation,readAddonOperationInputSequence} from '../../src/db/addon-operations.js';
+import {readAddonOperation,readAddonOperationInputSequence,readAddonOperationInputEpoch,admitAddonOperation,transitionAddonOperation,appendOperationInput,markAddonOperationInputCommitted,ADDON_OPERATION_RESUME_TEXT} from '../../src/db/addon-operations.js';
 
 let ws: TempWorkspace;
 let config: OperationsConfig;
@@ -172,6 +172,17 @@ test('native input identity uses queued events rather than mutable status/input 
   }finally{service.shutdown();await service.waitForIdle();}
 });
 
+test('native input epoch: stale acknowledgements and completions cannot overwrite a later owner input',()=>{
+  const id='owner-epoch-guard',at=new Date().toISOString(),{revision,target,allowedTools,timeoutMs,maxToolCalls,parentWorkId}=config.grants[0];
+  admitAddonOperation({id,addonId:principal.addonId,principalId:principal.principalId,idempotencyKey:'epoch-guard',inputHash:'a'.repeat(64),text:'first',target,grant:{revision,target,allowedTools,timeoutMs,maxToolCalls,parentWorkId},chatJid:'operation:'+id,workId:'operation:'+id,status:'queued',sequence:1,createdAt:at,updatedAt:at,output:null,reason:null});
+  transitionAddonOperation(id,['queued'],'working');markAddonOperationInputCommitted(id,1);transitionAddonOperation(id,['working'],'input_required');appendOperationInput(id,'new input');transitionAddonOperation(id,['queued'],'working');
+  expect(readAddonOperationInputEpoch(id)).toEqual({sequence:4,kind:'continuation',previousSequence:1});const before=readAddonOperation(id);
+  expect(()=>markAddonOperationInputCommitted(id,1)).toThrow('epoch changed');
+  expect(transitionAddonOperation(id,['working'],'failed',null,'stale_completion',1)).toBeNull();expect(readAddonOperation(id)).toEqual(before);
+  markAddonOperationInputCommitted(id,4);expect(readAddonOperation(id)!.text).toBe(ADDON_OPERATION_RESUME_TEXT);
+  expect(transitionAddonOperation(id,['working'],'input_required',null,null,4)?.status).toBe('input_required');
+});
+
 test('native request grant: revalidates operator approval and enabled state instead of borrowing read permission',()=>{
   config.grants[0].approvalRequired=true;
   expect(authorizeAddonOperation(principal,'echo','request',()=>config)).toEqual({decision:'approval_required'});
@@ -184,8 +195,8 @@ test('native request grant: revalidates operator approval and enabled state inst
 test('native operation host forwards only the persisted owner ID and signal without legacy fallback',async()=>{
   let legacy=0;const calls:unknown[][]=[],signal=new AbortController().signal;
   const host=createOperationHost({isDurableRuntime:()=>true,dispatchAddonOperation:async(...args)=>{calls.push(args);return{status:'success',result:'native result'};},runAgent:async()=>{legacy++;throw Error('Legacy must remain unreachable');}},()=>config);
-  expect(await host.execute({operationId:'accepted-native',chatJid:'operation:accepted-native',workId:'operation:accepted-native',text:'untrusted input is not dispatch authority',principal,grant:config.grants[0],signal})).toEqual({status:'completed',output:'native result'});
-  expect(calls).toEqual([['accepted-native',signal]]);expect(legacy).toBe(0);
+  expect(await host.execute({operationId:'accepted-native',inputSequence:7,chatJid:'operation:accepted-native',workId:'operation:accepted-native',text:'untrusted input is not dispatch authority',principal,grant:config.grants[0],signal})).toEqual({status:'completed',output:'native result'});
+  expect(calls).toEqual([['accepted-native',signal,7]]);expect(legacy).toBe(0);
 });
 test('native operation host refuses a missing dispatcher without falling back to runAgent',async()=>{
   let legacy=0;const host=createOperationHost({isDurableRuntime:()=>true,runAgent:async()=>{legacy++;return{status:'success',result:'must not run'};}},()=>config);

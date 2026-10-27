@@ -323,9 +323,9 @@ export class AgentPool {
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly addonAdmission?: AgentPoolOptions["prepareAddonOperation"];
   private readonly addonDispatch?: AgentPoolOptions["dispatchAddonOperation"];
-  dispatchAddonOperation(operationId:string,signal:AbortSignal):Promise<AgentOutput>{
+  dispatchAddonOperation(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>{
     if(!this.durableApplication||!this.addonDispatch)throw Error('Native add-on execution unavailable');
-    return this.addonDispatch(operationId,signal);
+    return this.addonDispatch(operationId,signal,expectedInputSequence);
   }
   prepareAddonOperation(operationId:string,signal?:AbortSignal){
     if(!this.durableApplication||!this.addonAdmission)throw Error("Native add-on operation admission unavailable");
