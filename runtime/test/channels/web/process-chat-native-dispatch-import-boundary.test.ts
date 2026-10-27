@@ -215,7 +215,7 @@ test("native accepted dispatch throw path fails before legacy lifecycle when pen
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-throw-no-observer";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -252,7 +252,10 @@ test("native accepted dispatch throw path fails before legacy lifecycle when pen
       throw new Error("Unexpected dispatch-throw failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -282,6 +285,7 @@ test("native accepted dispatch throw path fails before legacy lifecycle when pen
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch requires host pending observation");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -385,7 +389,7 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-dispatch";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -421,7 +425,10 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
       throw new Error("Unexpected non-callable dispatch failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -451,6 +458,7 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
