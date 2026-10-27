@@ -101,6 +101,35 @@ for (const empty of [false, true]) {
   });
 }
 
+test("durable pruneChatBranch archives metadata without legacy session construction", async () => {
+  initDatabase();
+  const chat = "web:native-prune-durable";
+  storeChatMetadata(chat, "2026-10-25T00:00:00.000Z");
+  const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
+  const filesBefore = snapshot();
+  let factoryReads = 0;
+  const options = {
+    ...createAgentPoolModelOptions(),
+    getDurableSession: () => undefined,
+    get createSession(): never { factoryReads++; throw Error("legacy factory accessed"); },
+  };
+  const legacyCreate = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("JSONL forbidden"); });
+  let pool: AgentPool | undefined;
+  try {
+    pool = new AgentPool(options);
+    const archived = await pool.pruneChatBranch(chat);
+    expect(archived.chat_jid).toBe(chat);
+    expect(archived.archived_at).toBeTruthy();
+    expect(getChatBranchByChatJid(chat)?.archived_at).toBeTruthy();
+    expect(factoryReads).toBe(0);
+    expect(legacyCreate).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(filesBefore);
+  } finally {
+    await pool?.shutdown();
+    legacyCreate.mockRestore();
+  }
+});
+
 for (const binding of ["missing", "foreign", "stale", "current"] as const) {
   test(`native restore ${binding} binding retains metadata atomicity without legacy construction`, async () => {
     initDatabase();
