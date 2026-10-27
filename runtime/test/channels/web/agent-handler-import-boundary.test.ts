@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const agentHandlerPath = resolve(import.meta.dir, "../../../src/channels/web/handlers/agent.ts");
@@ -10,7 +10,7 @@ const legacyLifecycleModules = [
   "../runtime/process-chat-finalization-runtime.js",
 ] as const;
 
-test("agent handler does not statically import legacy processChat lifecycle modules", () => {
+test("agent handler has no legacy processChat lifecycle module or import", () => {
   const source = readFileSync(agentHandlerPath, "utf8").replace(/^#![^\n]*\n/, "");
   const imports = new Bun.Transpiler({ loader: "ts" }).scanImports(source);
 
@@ -23,6 +23,7 @@ test("agent handler does not statically import legacy processChat lifecycle modu
     const dynamicImport = imports.find(
       (entry) => entry.kind === "dynamic-import" && entry.path === modulePath,
     );
-    expect(dynamicImport).toBeDefined();
+    expect(dynamicImport).toBeUndefined();
+    expect(existsSync(resolve(agentHandlerPath, "..", modulePath.replace(/\.js$/, ".ts")))).toBe(false);
   }
 });

@@ -24,6 +24,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { createRequire } from "node:module";
+import { hasNativeRouting, requireLegacyRoutingMutation } from "./db/native-routing-policy.js";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -836,7 +837,10 @@ export class AgentPool {
   async permanentPurgeChatBranch(
     chatJid: string,
   ): Promise<{ branch: ChatBranchRecord; removedSessionArtifacts: string[] }> {
-    if (this.durableApplication) throw new Error("Durable branch purge unavailable");
+    if (this.durableApplication) {
+      requireLegacyRoutingMutation(getDb(), "legacy purge");
+      throw new Error("Durable branch purge unavailable");
+    }
     return this.branchManager.permanentPurgeChatBranch(chatJid);
   }
 
@@ -844,12 +848,15 @@ export class AgentPool {
     sourceChatJid: string,
     options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
-    if (this.durableApplication) throw new Error("Durable branch fork unavailable");
+    if (this.durableApplication) {
+      requireLegacyRoutingMutation(getDb(), "legacy fork");
+      throw new Error("Durable branch fork unavailable");
+    }
     return this.branchManager.createForkedChatBranch(sourceChatJid, options);
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
-    if (this.durableApplication) throw new Error("Durable root session creation unavailable");
+    if (this.durableApplication && !hasNativeRouting(getDb())) throw new Error("Durable root session creation unavailable");
     return this.branchManager.createRootChatSession(agentName);
   }
 
