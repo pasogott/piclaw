@@ -17,7 +17,7 @@ import {
 import { deleteSshConfig } from "../db.js";
 import { clearLiveSshConfig } from "../extensions/ssh-core.js";
 
-import { getAutomaticRecoveryConfig } from "./automatic-recovery.js";
+import { getAutomaticRecoveryConfig } from "./recovery-policy.js";
 import { getAgentRuntimeConfig, getSessionStorageConfig, getToolUseBudget } from "../core/config.js";
 import {
   beginOpenRouterRequestAttempt,

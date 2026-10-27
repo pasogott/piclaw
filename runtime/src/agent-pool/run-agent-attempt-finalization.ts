@@ -5,7 +5,8 @@ import {
   inspectBlankTurnSessionDelta,
   isBlankTurnSessionDelta,
 } from "./blank-turn-detection.js";
-import { classifyOpaqueAgentFailure, type RecoveryAttemptSnapshot } from "./automatic-recovery.js";
+import { classifyOpaqueAgentFailure } from "./recovery-classification.js";
+import type { RecoveryAttemptSnapshot } from "./recovery-decision-types.js";
 import type { AgentFailureCategory, AgentOutput, RunAgentOptions } from "./contracts.js";
 import { consumeAgentAbortCause } from "./abort-provenance.js";
 import { getAutoCompactionTokenStatusForSession } from "./compaction.js";

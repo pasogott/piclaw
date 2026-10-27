@@ -8,16 +8,15 @@
 
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
-import {
-  classifyOpaqueAgentFailure,
-  decideAutomaticRecovery,
-  getAutomaticRecoveryDelayMs,
-  type AutomaticRecoveryConfig,
-  type RecoveryAttemptSnapshot,
-  type RecoveryClassifier,
-  type RecoveryDecision,
-  type RecoveryStrategy,
-} from "./automatic-recovery.js";
+import { decideAutomaticRecovery } from "./recovery-decision.js";
+import { classifyOpaqueAgentFailure } from "./recovery-classification.js";
+import type {
+  RecoveryAttemptSnapshot,
+  RecoveryClassifier,
+  RecoveryDecision,
+  RecoveryStrategy,
+} from "./recovery-decision-types.js";
+import { getAutomaticRecoveryDelayMs, type AutomaticRecoveryConfig } from "./recovery-policy.js";
 import {
   buildFreshContextUsageUpdateEvent,
   getAutoCompactionTokenStatusForSession,

@@ -35,7 +35,7 @@ import {
   type SearchMatchMode,
 } from "../../../core/config.js";
 import { generateTotpQr } from "../../../utils/totp-qr.js";
-import { getAutomaticRecoveryConfig } from "../../../agent-pool/automatic-recovery.js";
+import { getAutomaticRecoveryConfig } from "../../../agent-pool/recovery-policy.js";
 import { getAgentRuntimeConfig } from "../../../core/config.js";
 import { ensureAvatarCache, resolveAvatarUrl, type AvatarKind } from "../media/avatar-service.js";
 import { getServerUiOutputConfig, getServerUiThemeConfig, setServerUiOutputConfig, setServerUiThemeConfig } from "../ui-state.js";

@@ -4580,9 +4580,10 @@ test("processChat can materialize a deferred queued follow-up when resumed idle"
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
 
   let runCount = 0;
+  let queuedWork: Promise<void> | undefined;
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
-    queue: { enqueue: async (fn: () => Promise<void>) => fn() },
+    queue: { enqueue: (fn: () => Promise<void>) => { queuedWork = fn(); } },
     agentPool: {
       setSessionBinder: () => {},
       runAgent: async () => {
@@ -4595,6 +4596,10 @@ test("processChat can materialize a deferred queued follow-up when resumed idle"
 
   web.enqueueQueuedFollowupItem("web:default", 0, "queued idle item");
   await web.processChat("web:default", "default");
+  // Materialization queues the next cycle; it does not join that queue lane.
+  // Observe its real completion, including lazy compatibility module loads.
+  expect(queuedWork).toBeDefined();
+  await queuedWork;
 
   expect(runCount).toBe(1);
   expect(web.getQueuedFollowupCount("web:default")).toBe(0);

@@ -19,7 +19,7 @@
 import type { AgentPool } from "../agent-pool.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { getExecutionIdentity } from "../core/execution-context.js";
-import { formatRecoverySummary } from "../agent-pool/automatic-recovery.js";
+import { formatRecoverySummary } from "../agent-pool/recovery-summary.js";
 import { parseControlCommand, type AgentControlCommand } from "../agent-control/index.js";
 import { stripTrigger } from "../agent-control/parser-utils.js";
 import { isSlashCommandInvocation } from "../agent-pool/slash-command.js";

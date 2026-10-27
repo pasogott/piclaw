@@ -1,20 +1,9 @@
 import { expect, test } from "bun:test";
 
-import {
-  classifyOpaqueAgentFailure,
-  decideAutomaticRecovery as decideTypedAutomaticRecovery,
-  DEFAULT_AUTOMATIC_RECOVERY_CONFIG,
-  getAutomaticRecoveryConfig,
-  isContextPressureFailure,
-  isLengthStopFailure,
-  isNonRecoverableFailure,
-  isProviderAuthConfigFailure,
-  isTransientFailure,
-  MAX_AUTOMATIC_RECOVERY_BUDGET_MS,
-  MIN_AUTOMATIC_RECOVERY_BUDGET_MS,
-  resolveAutomaticRecoveryBudgetMs,
-  type RecoveryDecisionInput,
-} from "../../src/agent-pool/automatic-recovery.js";
+import { classifyOpaqueAgentFailure, isContextPressureFailure, isLengthStopFailure, isNonRecoverableFailure, isProviderAuthConfigFailure, isTransientFailure } from "../../src/agent-pool/recovery-classification.js";
+import { decideAutomaticRecovery as decideTypedAutomaticRecovery } from "../../src/agent-pool/recovery-decision.js";
+import { MAX_AUTOMATIC_RECOVERY_BUDGET_MS, MIN_AUTOMATIC_RECOVERY_BUDGET_MS, DEFAULT_AUTOMATIC_RECOVERY_CONFIG, getAutomaticRecoveryConfig, resolveAutomaticRecoveryBudgetMs } from "../../src/agent-pool/recovery-policy.js";
+import type { RecoveryDecisionInput } from "../../src/agent-pool/recovery-decision-types.js";
 
 type OpaqueRecoveryDecisionInput = Omit<RecoveryDecisionInput, "failureCategory"> & {
   errorText: string | null | undefined;

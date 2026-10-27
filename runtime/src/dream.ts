@@ -7,7 +7,7 @@ import type { Zippable } from "fflate";
 
 import type { AgentPool } from "./agent-pool.js";
 
-import { formatRecoverySummary } from "./agent-pool/automatic-recovery.js";
+import { formatRecoverySummary } from "./agent-pool/recovery-summary.js";
 import { buildDreamPrompt } from "./agent-memory/dream-prompt.js";
 import { inspectDailyNoteSummaryBacklog, refreshDailyNotesFromMessages } from "./agent-memory/daily-notes.js";
 import { refreshAgentMemoryFromDailyNotes, type RefreshAgentMemoryResult } from "./agent-memory/refresh.js";

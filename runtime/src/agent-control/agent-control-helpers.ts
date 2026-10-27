@@ -19,7 +19,7 @@ import { existsSync } from "fs";
 import { getConfigPath, WORKSPACE_DIR } from "../core/config.js";
 import { readJsonConfig, writeJsonConfig } from "../core/config-store.js";
 import { getChatJid } from "../core/chat-context.js";
-import { isContextPressureFailure } from "../agent-pool/automatic-recovery.js";
+import { isContextPressureFailure } from "../agent-pool/recovery-classification.js";
 import { finalizeRecoveryCompactionOutcome, runCompactionWithTimeout } from "../agent-pool/compaction.js";
 import {
   didPromptAdvanceSession,

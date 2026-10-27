@@ -66,10 +66,7 @@ import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./gen
 import { resolveAvatarUrl } from "../media/avatar-service.js";
 import { broadcastInteractionUpdated } from "../cards/interaction-service.js";
 import { storeAgentTurn } from "../messaging/agent-message-store.js";
-import { finalizeSuccessfulProcessChatRun, persistIntermediateProcessChatTurn } from "../runtime/process-chat-finalization-runtime.js";
-import { createProcessChatStreamingRuntime } from "../runtime/process-chat-streaming-runtime.js";
 import { getMessageByRowId, promoteCompletedAgentReply } from "../../../db/messages.js";
-import { runProcessChatPreflight } from "../runtime/process-chat-preflight-runtime.js";
 import {
   MODEL_COMMAND_TYPES,
   executeDeferredControlCommand,
@@ -93,7 +90,7 @@ import {
   protectedRecoveryHandoffContentBlockFields,
   type ProtectedRecoveryHandoffMetadata,
 } from "../../../agent-pool/protected-recovery-handoff-reason.js";
-import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
+import { classifyOpaqueAgentFailure } from "../../../agent-pool/recovery-classification.js";
 import { cancelScheduledIdleAutoCompaction } from "../../../agent-pool/compaction.js";
 import { DEFAULT_BASE_RETRY_MS, getRetryAtIso } from "../../../queue/retry-policy.js";
 import { formatProviderError, sanitizeProviderErrorDetail } from "./provider-error-format.js";
@@ -101,6 +98,25 @@ import { endTrackedPhase } from "../../../runtime/progress-watchdog.js";
 
 const log = createLogger("web.handlers.agent");
 const TOOL_BUDGET_CONTINUATION_EXTENSION_ID = "piclaw.tool-budget-continuation";
+
+let processChatStreamingRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-streaming-runtime.js")> | null = null;
+let processChatPreflightRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-preflight-runtime.js")> | null = null;
+let processChatFinalizationRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-finalization-runtime.js")> | null = null;
+
+function loadProcessChatStreamingRuntimeModule() {
+  processChatStreamingRuntimeModulePromise ??= import("../runtime/process-chat-streaming-runtime.js");
+  return processChatStreamingRuntimeModulePromise;
+}
+
+function loadProcessChatPreflightRuntimeModule() {
+  processChatPreflightRuntimeModulePromise ??= import("../runtime/process-chat-preflight-runtime.js");
+  return processChatPreflightRuntimeModulePromise;
+}
+
+function loadProcessChatFinalizationRuntimeModule() {
+  processChatFinalizationRuntimeModulePromise ??= import("../runtime/process-chat-finalization-runtime.js");
+  return processChatFinalizationRuntimeModulePromise;
+}
 
 function reserveContinuation(extensionId: string, chatJid: string, threadKey: string): boolean {
   const kv = getExtensionKvStore();
@@ -1737,39 +1753,94 @@ async function processAuthorisedChat(
   });
 
   const coordinator = channel.dispatchAcceptedInput;
+  if (coordinator !== undefined && typeof coordinator !== "function") {
+    throw new Error("Accepted dispatch coordinator must be callable");
+  }
   const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
     rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
-  const waitForPending = coordinator?.waitForPending.bind(coordinator);
-  let acceptedDispatch: (() => Promise<"settled" | "pending">) | undefined;
+  const waitForPendingRaw = coordinator?.waitForPending;
+  if (waitForPendingRaw !== undefined && typeof waitForPendingRaw !== "function") {
+    throw new Error("Accepted pending observer must be callable");
+  }
+  const waitForPending = typeof waitForPendingRaw === "function"
+    ? waitForPendingRaw.bind(coordinator)
+    : undefined;
+  let acceptedDispatchRaw: unknown;
   try {
-    acceptedDispatch = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
+    acceptedDispatchRaw = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
   } catch {
     // A fenced or unreadable persisted selection is not evidence of legacy ownership.
-    acceptedDispatch = async () => "pending";
+    acceptedDispatchRaw = async () => "pending";
   }
+  if (acceptedDispatchRaw !== undefined && typeof acceptedDispatchRaw !== "function") {
+    throw new Error("Accepted dispatch must be callable");
+  }
+  const acceptedDispatch = acceptedDispatchRaw as (() => Promise<"settled" | "pending">) | undefined;
   if (acceptedDispatch) {
     const { setChatCursor } = await import("../../../db/chat-cursors.js");
+    if (channel.updateAgentStatus !== undefined && typeof channel.updateAgentStatus !== "function") {
+      throw new Error("Native status updater must be callable");
+    }
+    if (typeof channel.broadcastEvent !== "function") {
+      throw new Error("Native status broadcaster must be callable");
+    }
+    if (typeof channel.resumeChat !== "function") {
+      throw new Error("Native resume hook must be callable");
+    }
     const startedAt = new Date().toISOString();
     const nativeStatus = (type: "intent" | "done") => {
       const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,
         type: type === "intent" ? "thinking" : type, kind: "info", source: "durable_runtime", intent_key: "native_task", blocking: false,
         title: type === "done" ? "Idle" : "Thinking...", started_at: startedAt };
-      channel.updateAgentStatus?.(chatJid, payload);
-      channel.broadcastEvent("agent_status", payload);
+      try {
+        channel.updateAgentStatus?.(chatJid, payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status updater failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_updater_failed",
+          chatJid,
+          type,
+        });
+      }
+      try {
+        channel.broadcastEvent("agent_status", payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status broadcaster failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_broadcast_failed",
+          chatJid,
+          type,
+        });
+      }
     };
     // Native operations/submissions own recovery. A legacy inflight marker
     // would falsely advertise every live SDK turn as interrupted after reload.
     nativeStatus("intent");
-    let result = await acceptedDispatch().catch(() => "pending" as const);
+    let result = await Promise.resolve()
+      .then(() => acceptedDispatch())
+      .catch(() => "pending" as const);
+    if (result !== "settled" && result !== "pending") {
+      throw new Error("Accepted dispatch returned invalid status");
+    }
     if (result === "pending") {
       // The captured host port owns observation only. Shutdown must retain the recovery marker.
       if (!waitForPending) throw new Error("Accepted dispatch requires host pending observation");
-      result = await waitForPending(pendingIdentity);
+      result = await Promise.resolve()
+        .then(() => waitForPending(pendingIdentity))
+        .catch(() => "pending" as const);
+      if (result !== "settled" && result !== "pending") {
+        throw new Error("Accepted pending observer returned invalid status");
+      }
       if (result === "pending") return;
     }
     setChatCursor(chatJid, currentMessage.timestamp);
     nativeStatus("done");
-    channel.resumeChat(chatJid);
+    try {
+      channel.resumeChat(chatJid);
+    } catch (error) {
+      debugSuppressedError(log, "Native resume hook failed after accepted dispatch settlement.", error, {
+        operation: "process_chat.native_resume_failed",
+        chatJid,
+      });
+    }
     return;
   }
 
@@ -1850,6 +1921,7 @@ async function processAuthorisedChat(
   const threadId = lastMessage.timestamp;
 
   const turnId = createUuid("turn");
+  const { createProcessChatStreamingRuntime } = await loadProcessChatStreamingRuntimeModule();
   const streamRuntime = await createProcessChatStreamingRuntime({
     channel, chatJid, agentId, threadId, turnId, runStartedAt, sourceMessageId: lastMessage.id ?? null,
     withResolvedToolStatusHints, withAgentStatusProgressMetadata,
@@ -1864,6 +1936,7 @@ async function processAuthorisedChat(
 
   let startupFailure: string | undefined;
   let preflight: "continue" | "deferred" = "continue";
+  const { runProcessChatPreflight } = await loadProcessChatPreflightRuntimeModule();
   try { preflight = await runProcessChatPreflight({
     channel, chatJid, agentId, message: { id: lastMessage.id, timestamp: lastMessage.timestamp }, prevCursor, effectiveThreadRootId: effectiveThreadRootId ?? null, turnId, runStartedAt, browserObservability,
     streamingHandler: trackedStreamingHandler, compactionState: streamState,
@@ -2015,8 +2088,9 @@ async function processAuthorisedChat(
     return persistVisibleFailureOutcome(markerBase, visibleDetail, options);
   };
 
+  const processChatFinalizationRuntime = await loadProcessChatFinalizationRuntimeModule();
   let completedReplyRowId: number | null = null;
-  const finalizeSuccessfulRun = async () => finalizeSuccessfulProcessChatRun({
+  const finalizeSuccessfulRun = async () => processChatFinalizationRuntime.finalizeSuccessfulProcessChatRun({
     channel,
     emitter: trackedEmitter,
     chatJid,
@@ -2060,7 +2134,7 @@ async function processAuthorisedChat(
       completedReplyRowId = null;
       if (turn.text || turn.attachments.length > 0) {
         hadIntermediateOutput = true;
-        const stored = persistIntermediateProcessChatTurn({
+        const stored = processChatFinalizationRuntime.persistIntermediateProcessChatTurn({
           channel,
           emitter,
           chatJid,
