@@ -92,9 +92,3 @@ export function getAutomaticRecoveryConfig(
     maxDelayMs: normalizedRetry.maxDelayMs,
   });
 }
-
-export function getAutomaticRecoveryDelayMs(config: Pick<AutomaticRecoveryConfig, "baseDelayMs" | "maxDelayMs">, attempt: number): number {
-  const exponent = Math.max(0, attempt - 1);
-  const raw = Math.max(0, Math.round(config.baseDelayMs * 2 ** exponent));
-  return Math.min(raw, Math.max(config.baseDelayMs, config.maxDelayMs));
-}

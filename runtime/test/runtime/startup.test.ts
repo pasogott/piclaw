@@ -303,9 +303,6 @@ export {};
         queued_prewarms: 0,
         prewarm_queue_length: 0,
         prewarm_cooldowns: 0,
-        recovery_attempts_total: 0,
-        recovery_recovered_runs: 0,
-        recovery_exhausted_runs: 0,
       });
     } finally {
       ws.cleanup();

@@ -10,7 +10,6 @@ import { SESSIONS_DIR } from "../../src/core/config.js";
 import { archiveChatBranch, initDatabase, storeChatMetadata, getChatBranchByChatJid } from "../../src/db.js";
 import * as legacySession from "../../src/agent-pool/session.js";
 import { AgentToolFactory } from "../../src/agent-pool/tool-factory.js";
-import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
 import { AgentSessionBinder } from "../../src/agent-pool/session-binder.js";
 import { AgentBranchManager } from "../../src/agent-pool/branch-manager.js";
 import { getDb } from "../../src/db/connection.js";
@@ -91,7 +90,7 @@ for (const empty of [false, true]) {
       expect(services.sessionManager).not.toBeInstanceOf(AgentSessionManager);
       expect(services.sessionBinder).not.toBeInstanceOf(AgentSessionBinder);
       expect(services.toolFactory).not.toBeInstanceOf(AgentToolFactory);
-      expect(services.turnCoordinator).not.toBeInstanceOf(AgentTurnCoordinator);
+      expect(services).not.toHaveProperty("turnCoordinator");
       const databaseBefore = getDb().serialize();
       let runnerOptionReads = 0;
       // Backend-owned lookup remains live for post-startup routes.
