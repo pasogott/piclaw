@@ -524,7 +524,7 @@ test("native pending observer invalid status is rejected before legacy lifecycle
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-invalid-pending-status";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -544,7 +544,10 @@ test("native pending observer invalid status is rejected before legacy lifecycle
       throw new Error("Unexpected invalid pending observer failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -555,6 +558,7 @@ test("native pending observer invalid status is rejected before legacy lifecycle
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted pending observer returned invalid status");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -726,7 +730,7 @@ test("native status updater must be callable before accepted dispatch execution"
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-status-updater";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -756,7 +760,10 @@ test("native status updater must be callable before accepted dispatch execution"
       throw new Error("Unexpected non-callable status updater failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
   `;
 
   try {
@@ -787,6 +794,7 @@ test("native status updater must be callable before accepted dispatch execution"
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native status updater must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -886,7 +894,7 @@ test("native resume hook must be callable before accepted dispatch execution", a
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-resume-hook";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -916,7 +924,10 @@ test("native resume hook must be callable before accepted dispatch execution", a
       throw new Error("Unexpected non-callable resume hook failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
   `;
 
   try {
@@ -947,6 +958,7 @@ test("native resume hook must be callable before accepted dispatch execution", a
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native resume hook must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
