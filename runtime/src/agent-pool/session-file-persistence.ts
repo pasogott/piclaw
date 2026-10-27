@@ -22,4 +22,3 @@ export function forcePersistSessionFile(session: AgentSession): string | null {
     throw error;
   }
 }
-

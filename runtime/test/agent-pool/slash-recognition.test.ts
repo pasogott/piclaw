@@ -8,4 +8,3 @@ test("isSlashCommandInvocation only accepts command-shaped leading slash tokens"
   expect(isSlashCommandInvocation("/workspace/piclaw is the repo")).toBe(false);
   expect(isSlashCommandInvocation("/agent/keychain dispatch path")).toBe(false);
 });
-
