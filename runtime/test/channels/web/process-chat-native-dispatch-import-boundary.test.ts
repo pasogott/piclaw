@@ -20,7 +20,7 @@ for (const mode of ["settled", "pending"] as const) {
         });
       }});
 
-      const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+      const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
       const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
       const chatJid = "web:native-dispatch-boundary";
       const messageId = "msg-native-boundary";
@@ -52,12 +52,16 @@ for (const mode of ["settled", "pending"] as const) {
       };
 
       await processChat(channel, chatJid, "default");
+      const executionMarkers = getDb().prepare(
+        "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+      ).get(chatJid);
       console.log(JSON.stringify({
         mode,
         attempts,
         resumed,
         waitCalls,
         cursor: getChatCursor(chatJid),
+        executionMarkers,
       }));
     `;
 
@@ -89,6 +93,19 @@ for (const mode of ["settled", "pending"] as const) {
       expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
       expect(result.resumed).toBe(1);
       expect(result.waitCalls).toBe(mode === "pending" ? 1 : 0);
+      expect(result.executionMarkers).toEqual({
+        preflight_prev_ts: null,
+        preflight_message_id: null,
+        preflight_started_at: null,
+        inflight_prev_ts: null,
+        inflight_message_id: null,
+        inflight_started_at: null,
+        failed_prev_ts: null,
+        failed_ts: null,
+        failed_message_id: null,
+        failed_thread_root: null,
+        failed_created_at: null,
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -280,7 +297,7 @@ test("native accepted dispatch pending observer unresolved path exits without cu
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-pending-unresolved";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -310,7 +327,10 @@ test("native accepted dispatch pending observer unresolved path exits without cu
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), resumed, waitCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), resumed, waitCalls, executionMarkers }));
   `;
 
   try {
@@ -341,6 +361,7 @@ test("native accepted dispatch pending observer unresolved path exits without cu
     expect(result.cursor).toBe("");
     expect(result.resumed).toBe(0);
     expect(result.waitCalls).toBe(1);
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
