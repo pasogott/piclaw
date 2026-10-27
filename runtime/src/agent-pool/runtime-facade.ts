@@ -350,6 +350,12 @@ export class AgentRuntimeFacade {
       if (typeof port.branchId !== "string" || !port.branchId.trim()) {
         throw new Error("Durable compatibility branchId must be non-empty");
       }
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as { aborted?: unknown; addEventListener?: unknown };
+        if (!signal || typeof signal !== "object" || typeof signal.aborted !== "boolean" || typeof signal.addEventListener !== "function") {
+          throw new Error("Durable compatibility lifetimeSignal must be AbortSignal-like");
+        }
+      }
       const readPosition = bindCompatibilityMethod(port, "readPosition");
       if (!readPosition) throw new Error("Durable compatibility readPosition must be callable");
       return [chat, Object.freeze({
