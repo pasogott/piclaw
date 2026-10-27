@@ -126,7 +126,7 @@ test("native coordinator without admitted source fails before legacy processChat
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-missing-admission";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -162,7 +162,10 @@ test("native coordinator without admitted source fails before legacy processChat
       throw new Error("Unexpected missing-admission failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -192,6 +195,7 @@ test("native coordinator without admitted source fails before legacy processChat
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Native input has no admitted source");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -466,7 +470,7 @@ test("native accepted dispatch invalid status is rejected before legacy lifecycl
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-invalid-dispatch-status";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -486,7 +490,10 @@ test("native accepted dispatch invalid status is rejected before legacy lifecycl
       throw new Error("Unexpected invalid dispatch failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -497,6 +504,7 @@ test("native accepted dispatch invalid status is rejected before legacy lifecycl
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch returned invalid status");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
