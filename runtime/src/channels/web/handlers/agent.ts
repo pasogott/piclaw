@@ -1792,8 +1792,24 @@ async function processAuthorisedChat(
       const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,
         type: type === "intent" ? "thinking" : type, kind: "info", source: "durable_runtime", intent_key: "native_task", blocking: false,
         title: type === "done" ? "Idle" : "Thinking...", started_at: startedAt };
-      channel.updateAgentStatus?.(chatJid, payload);
-      channel.broadcastEvent("agent_status", payload);
+      try {
+        channel.updateAgentStatus?.(chatJid, payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status updater failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_updater_failed",
+          chatJid,
+          type,
+        });
+      }
+      try {
+        channel.broadcastEvent("agent_status", payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status broadcaster failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_broadcast_failed",
+          chatJid,
+          type,
+        });
+      }
     };
     // Native operations/submissions own recovery. A legacy inflight marker
     // would falsely advertise every live SDK turn as interrupted after reload.
