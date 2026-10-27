@@ -160,6 +160,8 @@ test("durable branch discovery stays host-only without legacy session constructi
     expect(Array.isArray(known)).toBe(true);
     expect(known.some(entry => entry.chat_jid === chat)).toBe(true);
     expect(pool.findChatByAgentName("durable-known")).toEqual({ chat_jid: chat, agent_name: "durable-known" });
+    expect(pool.findActiveChatByAgentName("durable-known")).toBeNull();
+    expect(pool.getAgentHandleForChat(chat)).toBe("durable-known");
     expect(factoryReads).toBe(0);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(snapshot()).toEqual(filesBefore);
