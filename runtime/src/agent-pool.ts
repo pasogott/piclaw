@@ -323,6 +323,11 @@ export class AgentPool {
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly addonAdmission?: AgentPoolOptions["prepareAddonOperation"];
   private readonly addonDispatch?: AgentPoolOptions["dispatchAddonOperation"];
+  private readonly addonReconcile?:AgentPoolOptions['reconcileAddonOperation'];
+  reconcileAddonOperation(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>{
+    if(!this.durableApplication||!this.addonReconcile)throw Error('Native add-on recovery unavailable');
+    return this.addonReconcile(operationId,expectedInputSequence);
+  }
   dispatchAddonOperation(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>{
     if(!this.durableApplication||!this.addonDispatch)throw Error('Native add-on execution unavailable');
     return this.addonDispatch(operationId,signal,expectedInputSequence);
@@ -346,6 +351,7 @@ export class AgentPool {
   constructor(options: AgentPoolOptions) {
     this.addonAdmission = options.prepareAddonOperation?.bind(options);
     this.addonDispatch = options.dispatchAddonOperation?.bind(options);
+    this.addonReconcile = options.reconcileAddonOperation?.bind(options);
     this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);

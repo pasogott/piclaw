@@ -1339,6 +1339,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     prepareAddonOperation:async()=>{throw Error('Offline maintenance cannot admit background operations');},
     dispatchAddonOperation:async()=>{throw Error('Offline maintenance cannot execute background operations');},
+    reconcileAddonOperation:async()=>{throw Error('Offline maintenance cannot settle background operations');},
     dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
     dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
     bind(options) {

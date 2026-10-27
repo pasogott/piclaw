@@ -4,12 +4,13 @@ import { readAccessConfig } from "../core/config-access.js";
 import { readOperationsConfig } from "../core/config-operations.js";
 import { getBudgetWork, listBudgetCaps } from "../db/budget-limits.js";
 import { evaluateBudget } from "../budget/evaluator.js";
-import type { OperationHost,OperationPrincipal,OperationAdmission } from "./operation-contracts.js";
+import type { OperationHost,OperationPrincipal,OperationAdmission,OperationExecution,OperationResult } from "./operation-contracts.js";
 
 /** Injectable AgentPool surface keeps operation tests provider-free. */
 export interface OperationAgentPool {
   isDurableRuntime?():boolean;
   dispatchAddonOperation?(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>;
+  reconcileAddonOperation?(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>;
   runAgent(
     prompt: string,
     chatJid: string,
@@ -64,6 +65,16 @@ export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,t
   return { decision: "allow", grant };
 }
 
+function operationResult(output:AgentOutput,native:boolean,signal:AbortSignal):OperationResult{
+  if(output.failureCategory==='provider_budget')return{status:'budget_blocked',reason:'budget_boundary'};
+  if(output.status==='error'){
+    if((native||signal.aborted)&&output.failureCategory==='aborted')return{status:'cancelled',reason:'executor_cancelled'};
+    return{status:'failed',reason:output.failureCategory==='timeout'?'execution_timeout':'execution_failed'};
+  }
+  if(output.requiresToolEnabledContinuation)return{status:'input_required',reason:'continuation_required'};
+  return{status:'completed',output:output.result||''};
+}
+
 export function createOperationHost(
   pool: OperationAgentPool,
   readConfig = readOperationsConfig,
@@ -98,23 +109,13 @@ export function createOperationHost(
           );
         },
       });
-      if (output.failureCategory === "provider_budget")
-        return { status: "budget_blocked", reason: "budget_boundary" };
-      if (output.status === "error") {
-        if ((native || input.signal.aborted) && output.failureCategory === "aborted")
-          return { status: "cancelled", reason: "executor_cancelled" };
-        return {
-          status: "failed",
-          reason:
-            output.failureCategory === "timeout"
-              ? "execution_timeout"
-              : "execution_failed",
-        };
-      }
-      if (output.requiresToolEnabledContinuation)
-        return { status: "input_required", reason: "continuation_required" };
-      return { status: "completed", output: output.result || "" };
+      return operationResult(output,native,input.signal);
     },
+  };
+  if(pool.isDurableRuntime?.()===true)host.recover=async(input:OperationExecution)=>{
+    if(!pool.reconcileAddonOperation)throw Error('Native add-on recovery unavailable');
+    const output=await pool.reconcileAddonOperation(input.operationId,input.inputSequence);
+    return output===null?null:operationResult(output,true,input.signal);
   };
   return host;
 }

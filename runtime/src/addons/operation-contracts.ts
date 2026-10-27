@@ -87,6 +87,9 @@ export interface OperationHost {
     action: "admit" | "read" | "cancel",
   ): Promise<OperationAdmission> | OperationAdmission;
   execute(input: OperationExecution): Promise<OperationResult>;
+  /** Observe/settle existing native receipts only. Null retains unknown outcome;
+   * this is never permission to resubmit working input. */
+  recover?(input:OperationExecution):Promise<OperationResult|null>;
 }
 export class OperationAccessError extends Error {
   constructor() {

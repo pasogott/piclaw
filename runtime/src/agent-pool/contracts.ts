@@ -224,6 +224,8 @@ export interface AgentPoolOptions {
   prepareAddonOperation?: (operationId:string,signal?:AbortSignal)=>Promise<PreparedNativeBackgroundInput>;
   /** Trusted persisted owner ID only; never a caller-supplied prompt or grant. */
   dispatchAddonOperation?: (operationId:string,signal:AbortSignal,expectedInputSequence?:number)=>Promise<AgentOutput>;
+  /** Existing outcome reconciliation; never submits/resumes model/tool work. */
+  reconcileAddonOperation?: (operationId:string,expectedInputSequence?:number)=>Promise<AgentOutput|null>;
   /** Application-owned native slash commands; never constructs a legacy session. */
   dispatchHostCommand?: (chatJid: string, rawText: string) => Promise<import("../agent-control/agent-control-types.js").AgentControlResult>;
   /** Select the durable backend for the entire pool. Captured bindings are exhaustive;

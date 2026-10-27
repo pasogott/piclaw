@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { readScheduledDefinition } from "../../src/db/scheduled-task-definitions.js";
 import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { parseModelFailure } from './host-model-failure.js';
+import { assertAddonBackgroundRecoveryOwner } from './host-addon-background.js';
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
@@ -572,19 +573,40 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         sourceSeq:row.source_seq,sourceId:row.source_id,payloadRef:row.payload_ref,requestId:row.request_id,requestHash:row.request_hash});
       if(resolveBackground(input)!==input.conversationId)throw Error('Background replay identity unavailable');return input;
     }
+    function backgroundResultFor(state:Awaited<ReturnType<typeof runtime.reconcile>>,timedOut=false):AgentOutput{
+      const category=state.status?.status==='unanswered'?parseModelFailure(state.status.detail)?.category:undefined;
+      const deadlineExpired=timedOut||state.operation.cancellation?.cause==='background_timeout'||category==='timeout';
+      if(state.operation.terminal?.disposition!=='completed'||!state.answer)return{status:'error',result:null,error:deadlineExpired?'Native background deadline expired':state.operation.cancellation?'Native background cancelled':'Native background failed',failureCategory:deadlineExpired?'timeout':state.operation.cancellation?'aborted':category==='budget'?'provider_budget':'provider'};
+      return{status:'success',result:state.answer.text,usage:state.answer.message.usage};
+    }
+    async function reconcileAddonOperation(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>{
+      assertLive();if(!background)throw Error('Native add-on recovery unavailable');
+      const check=()=>{assertLive();if(expectedInputSequence!==undefined&&readAddonOperationInputSequence(operationId,root)!==expectedInputSequence)throw Error('Native add-on recovery input epoch changed');};check();
+      const sourceId=background.sourceIdForAddon(operationId),input=acceptedBackgroundInput(sourceId),payload=backgroundPayloads.get(sourceId);
+      if(!input||!payload)return null;assertAddonBackgroundRecoveryOwner(root,payload);
+      const owned=backgroundRuns.get(sourceId);if(owned){const result=await owned;check();return result;}
+      // Neither absence of a caller nor a timeout authorises provider/tool replay.
+      // Unknown capacity and tool effects remain authoritative even if SDK error
+      // bookkeeping has reached a local terminal state.
+      const state=await runtime.reconcile(input);check();
+      const acknowledge=async()=>{const bound=await bindings.get(input);check();if(!bound)throw Error('Native recovery binding missing');if(bound.submissionId===null){await runtime.acknowledgeExistingInput(input);check();}};
+      // A committed completion/cancellation is a known local outcome, not proof
+      // that its historical provider charges were free or reconciled.
+      if(state.operation.terminal?.disposition==='completed'&&state.status?.status==='done'&&state.answer||state.operation.terminal?.disposition==='cancelled'&&state.status&&['done','unanswered'].includes(state.status.status)){await acknowledge();return backgroundResultFor(state);}
+      if(root.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(operationBudgetWorkId(input.operationId)))return null;
+      if(!state.submissionId||!state.status||!(state.status.status==='done'||state.status.status==='unanswered'&&(state.operation.cancellation!==null||state.status.reason==='model_error')))return null;
+      if(!await runtime.backgroundToolOutcomesKnown(input))return null;check();
+      await acknowledge();
+      if(!state.operation.terminal&&!await runtime.settle(input))return null;check();
+      const settled=await runtime.reconcile(input);check();return settled.operation.terminal?backgroundResultFor(settled):null;
+    }
     async function dispatchAddonOperation(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>{
       assertLive();config.assertAdmission?.();if(!background)throw Error('Native background execution unavailable');
       if(expectedInputSequence!==undefined&&readAddonOperationInputSequence(operationId,root)!==expectedInputSequence)throw Error('Native add-on dispatch input epoch changed');
       const sourceId=background.sourceIdForAddon(operationId),pending=backgroundRuns.get(sourceId);if(pending)return pending;
       const running=(async():Promise<AgentOutput>=>{
         let input=acceptedBackgroundInput(sourceId);
-        const resultFor=(state:Awaited<ReturnType<typeof runtime.reconcile>>,timedOut=false):AgentOutput=>{
-          const category=state.status?.status==='unanswered'?parseModelFailure(state.status.detail)?.category:undefined;
-          const deadlineExpired=timedOut||state.operation.cancellation?.cause==='background_timeout'||category==='timeout';
-          if(state.operation.terminal?.disposition!=='completed'||!state.answer)return{status:'error',result:null,error:deadlineExpired?'Native background deadline expired':state.operation.cancellation?'Native background cancelled':'Native background failed',failureCategory:deadlineExpired?'timeout':state.operation.cancellation?'aborted':category==='budget'?'provider_budget':'provider'};
-          return{status:'success',result:state.answer.text,usage:state.answer.message.usage};
-        };
-        if(input){const state=await runtime.reconcile(input);assertLive();if(state.operation.terminal)return resultFor(state);}
+        if(input){const state=await runtime.reconcile(input);assertLive();if(state.operation.terminal)return backgroundResultFor(state);}
         try{input=await prepareAddonOperation(operationId,signal,sourceId);}
         catch(error){
           // Only a definitely unaccepted input can return a pre-input budget
@@ -613,7 +635,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           if(cancelling)await cancelling;
           if(!await runtime.settle(input))throw Error('Background settlement remains pending');
           const settled=await runtime.reconcile(input);assertLive();
-          backgroundExecutions.delete(sourceId);return resultFor(settled,timedOut);
+          backgroundExecutions.delete(sourceId);return backgroundResultFor(settled,timedOut);
         }catch(error){failedExecution=true;primaryFailure=error;throw error;}
         finally{clearTimeout(timer);signal.removeEventListener('abort',cancel);if(cancelling){
           try{await cancelling;}catch(error){if(primaryFailure!==undefined&&primaryFailure!==error)throw new AggregateError([primaryFailure,error],'Background wait and cancellation failed');throw error;}
@@ -1039,8 +1061,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return hostFollowups.enqueueAcceptedFollowupOnce(input.sourceId, input.chatJid, input.text, input.queuedAt,
           { source: "goal.continuation" }, admission, onlyIfIdle);
       },
-      prepareAddonOperation,backgroundPolicyFor,dispatchAddonOperation,
-      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,prepareAddonOperation,dispatchAddonOperation,
+      prepareAddonOperation,backgroundPolicyFor,dispatchAddonOperation,reconcileAddonOperation,
+      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,prepareAddonOperation,dispatchAddonOperation,reconcileAddonOperation,
         dispatchHostCommand: config.dispatchHostCommand ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound command chat"); return config.dispatchHostCommand!(chat, text); } : undefined }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
@@ -1072,6 +1094,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       prepareAddonOperation(operationId:string,signal?:AbortSignal):Promise<AcceptedInput>;
       backgroundPolicyFor(input:AcceptedInput):NativeBackgroundPolicy|undefined;
       dispatchAddonOperation(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>;
+      reconcileAddonOperation(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>;
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
       dispatchAcceptedInput: typeof dispatch;
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;

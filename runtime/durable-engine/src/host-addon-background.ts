@@ -18,6 +18,15 @@ export function addonBackgroundOrigin(root:Database,id:string):Extract<NativeBac
   return Object.freeze({kind:'addon',operationId:record.id,addonId:record.addonId,principalId:record.principalId,target:record.target,
     grantRevision:record.grant.revision,inputSequence:sequence});
 }
+/** Passive ownership correlation, independent of live grants/expiry. A revoked
+ * operation still needs its original receipt and unresolved holds inspected. */
+export function assertAddonBackgroundRecoveryOwner(root:Database,raw:NativeBackgroundPayload):void{
+  const payload=readNativeBackgroundPayload(raw),policy=payload.policy,origin=policy.origin;
+  if(origin.kind!=='addon')throw Error('Expected native add-on recovery origin');
+  const record=readAddonOperation(origin.operationId,root);
+  if(!record||JSON.stringify(addonBackgroundOrigin(root,record.id))!==JSON.stringify(origin)||record.chatJid!=='operation:'+origin.operationId||record.workId!==policy.workId||record.grant.parentWorkId!==policy.parentWorkId||record.grant.maxToolCalls!==policy.maxToolCalls||JSON.stringify([...record.grant.allowedTools].sort())!==JSON.stringify(policy.allowedTools)||Date.parse(policy.expiresAt)-Date.parse(policy.acceptedAt)!==record.grant.timeoutMs)throw Error('Native add-on recovery owner changed');
+}
+
 /** Uses the SAME host grant decision as the existing operation owner. Parsing a
  * persisted snapshot alone never grants spending/tools, including after reopen. */
 export function assertAddonBackgroundCurrent(root:Database,raw:NativeBackgroundPayload,budgetAdmission=false):void{

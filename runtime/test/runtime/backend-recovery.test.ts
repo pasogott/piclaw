@@ -67,6 +67,25 @@ test('background execution facade: uncertain cleanup prevents replacement or any
   await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
 });
 
+test('background receipt recovery facade: waits for confirmed cleanup and never repeats a failed observation',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('uncertain receipt read');let prepares=0,oldReads=0,newReads=0;
+  old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,reconcileAddonOperation:async()=>{oldReads++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,reconcileAddonOperation:async(id,epoch)=>{expect([id,epoch]).toEqual(['accepted',1]);newReads++;return{status:'success',result:'persisted receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(failure);
+  let done=false;const explicit=backend.sessionOptions.reconcileAddonOperation!('accepted',1).then(result=>{done=true;return result;});
+  await tick();expect(done).toBe(false);expect(prepares).toBe(1);expect(newReads).toBe(0);gate.resolve();
+  expect(await explicit).toEqual({status:'success',result:'persisted receipt'});expect(oldReads).toBe(1);expect(newReads).toBe(1);await backend.close();
+});
+test('background receipt recovery facade: uncertain cleanup refuses replacement reads',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('uncertain close');let prepares=0;old.state.closeError=cleanup;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,reconcileAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
 function failAbort(f: ReturnType<typeof fixture>, method: "abort" | "abortRetry" = "abort") {
   const error = Error("Session failed after a storage error");
   f.port[method] = async () => { f.failure.resolve(error); await tick(); throw error; };

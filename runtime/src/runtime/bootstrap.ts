@@ -13,7 +13,7 @@ import type { WebChannelOpts } from "../channels/web.js";
 export interface RuntimeBackend {
   /** Resolves only after a failed public SDK session has closed its storage. */
   readonly storageFailure?: Promise<unknown>;
-  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation" | "dispatchAddonOperation">>;
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation" | "dispatchAddonOperation" | "reconcileAddonOperation">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
   attachChannel?(channel: NativeTurnViewChannel & { resumePendingChats?(chatJid?: string): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
@@ -99,6 +99,11 @@ export async function createRecoverableRuntimeBackend(prepare: () => Promise<Run
       await ready();
       if(!current.sessionOptions.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
       return current.sessionOptions.dispatchAddonOperation(...args); // Same accepted ID; no automatic retry after uncertainty.
+    } : undefined,
+    reconcileAddonOperation: current.sessionOptions.reconcileAddonOperation ? async (...args) => {
+      await ready();
+      if(!current.sessionOptions.reconcileAddonOperation)throw Error('Native add-on recovery unavailable');
+      return current.sessionOptions.reconcileAddonOperation(...args); // Observation only; no replay on failure.
     } : undefined,
     dispatchScheduledAgent: current.sessionOptions.dispatchScheduledAgent ? async (...args) => {
       await ready();

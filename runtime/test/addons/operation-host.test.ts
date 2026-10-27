@@ -198,6 +198,17 @@ test('native operation host forwards only the persisted owner ID and signal with
   expect(await host.execute({operationId:'accepted-native',inputSequence:7,chatJid:'operation:accepted-native',workId:'operation:accepted-native',text:'untrusted input is not dispatch authority',principal,grant:config.grants[0],signal})).toEqual({status:'completed',output:'native result'});
   expect(calls).toEqual([['accepted-native',signal,7]]);expect(legacy).toBe(0);
 });
+test('native receipt recovery host: only the persisted ID and epoch reach reconciliation',async()=>{
+  let executions=0;const observed:unknown[][]=[];
+  const host=createOperationHost({isDurableRuntime:()=>true,reconcileAddonOperation:async(...args)=>{observed.push(args);return{status:'success',result:'persisted result'};},dispatchAddonOperation:async()=>{executions++;throw Error('Recovery cannot dispatch');},runAgent:async()=>{executions++;throw Error('Recovery cannot use legacy');}},()=>{throw Error('Passive recovery cannot require a current grant');});
+  expect(await host.recover!({operationId:'persisted',inputSequence:7,chatJid:'operation:persisted',workId:'operation:persisted',text:'not execution authority',principal,grant:config.grants[0],signal:new AbortController().signal})).toEqual({status:'completed',output:'persisted result'});
+  expect(observed).toEqual([['persisted',7]]);expect(executions).toBe(0);
+});
+test('native receipt recovery host: a missing port cannot fall back to execution',async()=>{
+  let executions=0;const host=createOperationHost({isDurableRuntime:()=>true,runAgent:async()=>{executions++;return{status:'success',result:'forbidden'};}},()=>config);
+  await expect(host.recover!({operationId:'missing',inputSequence:1,chatJid:'operation:missing',workId:'operation:missing',text:'input',principal,grant:config.grants[0],signal:new AbortController().signal})).rejects.toThrow('Native add-on recovery unavailable');expect(executions).toBe(0);
+});
+
 test('native operation host refuses a missing dispatcher without falling back to runAgent',async()=>{
   let legacy=0;const host=createOperationHost({isDurableRuntime:()=>true,runAgent:async()=>{legacy++;return{status:'success',result:'must not run'};}},()=>config);
   await expect(host.execute({operationId:'missing-native',chatJid:'operation:missing-native',workId:'operation:missing-native',text:'input',principal,grant:config.grants[0],signal:new AbortController().signal})).rejects.toThrow('Native add-on execution unavailable');

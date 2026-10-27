@@ -17,7 +17,7 @@ import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } f
 import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import-schema.js";
-import { assertNativeBackgroundExecution,claimNativeBackgroundTool } from './host-background-policy.js';
+import { assertNativeBackgroundExecution,claimNativeBackgroundTool,nativeBackgroundToolReceiptKnown } from './host-background-policy.js';
 import { nativeBackgroundIdentity,readNativeBackgroundPolicy,type NativeBackgroundPolicy } from '../../src/agent-pool/background-operation-contract.js';
 import { projectPublicHistory } from "./session-tree.js";
 import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
@@ -1407,6 +1407,21 @@ export class HostConversationRuntime {
       },this.context));check();
     });
   }
+  /** Passive tool receipt inspection for an already settled input. Never grants
+   * scheduling, task replay or current spending permission. */
+  backgroundToolOutcomesKnown(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      const known=await this.harness.commit(async tx=>{
+        let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+        do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.tool'},100,cursor);
+          for(const task of page.items)if(!await nativeBackgroundToolReceiptKnown(tx,task))return false;
+          cursor=page.next;
+        }while(cursor!==undefined);return true;
+      },this.context);this.fence();return known;
+    },true);
+  }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     return this.captureSource(conversationId, taskId);
@@ -1667,6 +1682,16 @@ export class HostConversationRuntime {
     if (!admitted || admitted.id !== submission.id) throw new Error("Submission binding conflict");
     await port.recordSubmission(input, submission.id); this.fence();
     return submission.id;
+  }
+  /** ACK-only recovery of an existing, content/provenance-checked submission.
+   * Never creates an input or grants scheduler progress. */
+  acknowledgeExistingInput(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);const record=await this.record(copy);this.fence();
+      if(!record)throw Error('Existing SDK input acknowledgement required');
+      await this.port(false).recordSubmission(copy,record.id);this.fence();return record.id;
+    },true);
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy), true); }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AgentDoc, defineDocFamily, InboxDoc, LiveDoc, type ConversationId, type TaskId, type ToolTaskInput, type ConversationRecord, type Tx } from "@earendil-works/pi-durable";
+import { AgentDoc, defineDocFamily, InboxDoc, LiveDoc, type ConversationId, type TaskId, type ToolTaskInput, type ConversationRecord, type TaskRecord, type Tx } from "@earendil-works/pi-durable";
 import {
   assertNativeBackgroundDeadline,nativeBackgroundPolicyHash,readNativeBackgroundPolicy,nativeBackgroundIdentity,
   type NativeBackgroundPolicy,
@@ -56,6 +56,14 @@ export async function bindNativeBackgroundPolicy(tx:Tx,id:ConversationId,input:N
   }
   doc.sourceId=policy.sourceId;doc.policySha256=nativeBackgroundPolicyHash(policy);current(assertCurrent);
 }
+export async function nativeBackgroundToolReceiptKnown(tx:Tx,task:TaskRecord<unknown,unknown,unknown>):Promise<boolean>{
+  if(task.kind!=='pi.tool'||task.state.status!=='terminal'||task.state.outcome.status!=='completed')return false;
+  const result=task.state.outcome.result as {kind?:string;entryId?:import('@earendil-works/pi-durable').EntryId};
+  if(result.kind==='nested'||result.entryId===undefined)return false;
+  const entry=await tx.entry(result.entryId),diagnostics=(entry?.data as {diagnostics?:{code?:string}[]}|undefined)?.diagnostics;
+  return entry?.kind==='pi.tool-result'&&entry.conversationId===task.conversationId&&entry.byTaskId===task.id&&Array.isArray(diagnostics)&&!diagnostics.some(item=>['interrupted','aborted','faulted','orphaned'].includes(item.code??''));
+}
+
 /** A new owner input may reuse an idle context, never a fork or a live/unknown
  * tool. Host admission separately proves prior EF-S01 terminals. Existing
  * policy-family members remain immutable; only the new source gets a quota. */
@@ -75,14 +83,8 @@ export async function advanceNativeBackgroundPolicy(tx:Tx,id:ConversationId,raw:
     const page=await tx.scanTasks({conversationId:id},100,cursor);current(assertCurrent);
     for(const task of page.items){
       if(task.state.status!=='terminal')throw Error('Previous background task is still live');
-      if(task.kind==='pi.tool'){
-        if(task.state.outcome.status!=='completed')throw Error('Previous background tool outcome is unresolved');
-        const result=task.state.outcome.result as {kind?:string;entryId?:import('@earendil-works/pi-durable').EntryId};
-        if(result.kind==='nested'||result.entryId===undefined)throw Error('Unqualified previous background tool receipt');
-        const entry=await tx.entry(result.entryId);current(assertCurrent);
-        const diagnostics=(entry?.data as {diagnostics?:{code?:string}[]}|undefined)?.diagnostics;
-        if(entry?.kind!=='pi.tool-result'||entry.conversationId!==id||entry.byTaskId!==task.id||!Array.isArray(diagnostics)||diagnostics.some(item=>['interrupted','aborted','faulted','orphaned'].includes(item.code??'')))throw Error('Previous background tool effect is unresolved');
-      }
+      if(task.kind==='pi.tool'&&!await nativeBackgroundToolReceiptKnown(tx,task))throw Error('Previous background tool effect is unresolved');
+      current(assertCurrent);
     }
     cursor=page.next;
   }while(cursor!==undefined);
