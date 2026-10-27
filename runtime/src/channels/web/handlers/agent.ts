@@ -66,10 +66,7 @@ import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./gen
 import { resolveAvatarUrl } from "../media/avatar-service.js";
 import { broadcastInteractionUpdated } from "../cards/interaction-service.js";
 import { storeAgentTurn } from "../messaging/agent-message-store.js";
-import { finalizeSuccessfulProcessChatRun, persistIntermediateProcessChatTurn } from "../runtime/process-chat-finalization-runtime.js";
-import { createProcessChatStreamingRuntime } from "../runtime/process-chat-streaming-runtime.js";
 import { getMessageByRowId, promoteCompletedAgentReply } from "../../../db/messages.js";
-import { runProcessChatPreflight } from "../runtime/process-chat-preflight-runtime.js";
 import {
   MODEL_COMMAND_TYPES,
   executeDeferredControlCommand,
@@ -101,6 +98,25 @@ import { endTrackedPhase } from "../../../runtime/progress-watchdog.js";
 
 const log = createLogger("web.handlers.agent");
 const TOOL_BUDGET_CONTINUATION_EXTENSION_ID = "piclaw.tool-budget-continuation";
+
+let processChatStreamingRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-streaming-runtime.js")> | null = null;
+let processChatPreflightRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-preflight-runtime.js")> | null = null;
+let processChatFinalizationRuntimeModulePromise: Promise<typeof import("../runtime/process-chat-finalization-runtime.js")> | null = null;
+
+function loadProcessChatStreamingRuntimeModule() {
+  processChatStreamingRuntimeModulePromise ??= import("../runtime/process-chat-streaming-runtime.js");
+  return processChatStreamingRuntimeModulePromise;
+}
+
+function loadProcessChatPreflightRuntimeModule() {
+  processChatPreflightRuntimeModulePromise ??= import("../runtime/process-chat-preflight-runtime.js");
+  return processChatPreflightRuntimeModulePromise;
+}
+
+function loadProcessChatFinalizationRuntimeModule() {
+  processChatFinalizationRuntimeModulePromise ??= import("../runtime/process-chat-finalization-runtime.js");
+  return processChatFinalizationRuntimeModulePromise;
+}
 
 function reserveContinuation(extensionId: string, chatJid: string, threadKey: string): boolean {
   const kv = getExtensionKvStore();
@@ -1850,6 +1866,7 @@ async function processAuthorisedChat(
   const threadId = lastMessage.timestamp;
 
   const turnId = createUuid("turn");
+  const { createProcessChatStreamingRuntime } = await loadProcessChatStreamingRuntimeModule();
   const streamRuntime = await createProcessChatStreamingRuntime({
     channel, chatJid, agentId, threadId, turnId, runStartedAt, sourceMessageId: lastMessage.id ?? null,
     withResolvedToolStatusHints, withAgentStatusProgressMetadata,
@@ -1864,6 +1881,7 @@ async function processAuthorisedChat(
 
   let startupFailure: string | undefined;
   let preflight: "continue" | "deferred" = "continue";
+  const { runProcessChatPreflight } = await loadProcessChatPreflightRuntimeModule();
   try { preflight = await runProcessChatPreflight({
     channel, chatJid, agentId, message: { id: lastMessage.id, timestamp: lastMessage.timestamp }, prevCursor, effectiveThreadRootId: effectiveThreadRootId ?? null, turnId, runStartedAt, browserObservability,
     streamingHandler: trackedStreamingHandler, compactionState: streamState,
@@ -2015,8 +2033,9 @@ async function processAuthorisedChat(
     return persistVisibleFailureOutcome(markerBase, visibleDetail, options);
   };
 
+  const processChatFinalizationRuntime = await loadProcessChatFinalizationRuntimeModule();
   let completedReplyRowId: number | null = null;
-  const finalizeSuccessfulRun = async () => finalizeSuccessfulProcessChatRun({
+  const finalizeSuccessfulRun = async () => processChatFinalizationRuntime.finalizeSuccessfulProcessChatRun({
     channel,
     emitter: trackedEmitter,
     chatJid,
@@ -2060,7 +2079,7 @@ async function processAuthorisedChat(
       completedReplyRowId = null;
       if (turn.text || turn.attachments.length > 0) {
         hadIntermediateOutput = true;
-        const stored = persistIntermediateProcessChatTurn({
+        const stored = processChatFinalizationRuntime.persistIntermediateProcessChatTurn({
           channel,
           emitter,
           chatJid,
