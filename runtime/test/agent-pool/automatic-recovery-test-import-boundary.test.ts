@@ -14,7 +14,7 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-test("only automatic-recovery.test.ts uses automatic-recovery compatibility barrel", () => {
+test("runtime tests no longer import automatic-recovery compatibility barrel", () => {
   const files = walk(testsRoot);
   const importers = files
     .filter((file) => new Bun.Transpiler({ loader: "ts" })
@@ -24,5 +24,5 @@ test("only automatic-recovery.test.ts uses automatic-recovery compatibility barr
     .map((file) => file.slice(testsRoot.length + 1).replaceAll("\\", "/"))
     .sort();
 
-  expect(importers).toEqual(["agent-pool/automatic-recovery.test.ts"]);
+  expect(importers).toEqual([]);
 });
