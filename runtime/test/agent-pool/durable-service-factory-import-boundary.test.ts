@@ -62,10 +62,7 @@ for (const mode of ["bound", "empty"] as const) {
       catch (error) { getOrCreateBlocked = String(error).includes("Durable application does not construct legacy sessions"); }
       if (!getOrCreateBlocked) throw new Error("Durable getOrCreate must fail closed");
 
-      let trackerBlocked = false;
-      try { services.turnCoordinator.createTracker("web:bound"); }
-      catch (error) { trackerBlocked = String(error).includes("Durable application does not construct legacy sessions"); }
-      if (!trackerBlocked) throw new Error("Durable turn tracker must fail closed");
+      if ("turnCoordinator" in services) throw new Error("Retired turn owner must be absent");
 
       await services.sessionManager.shutdown();
       console.log(JSON.stringify({ mode, attempts }));

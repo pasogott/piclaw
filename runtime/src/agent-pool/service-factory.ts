@@ -13,7 +13,6 @@ import { AgentRuntimeFacade } from "./runtime-facade.js";
 import type { AgentSessionBinder } from "./session-binder.js";
 import type { AgentSessionManager, PoolEntry } from "./session-manager.js";
 import type { AgentToolFactory, AgentBashOperations } from "./tool-factory.js";
-import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentPoolOptions } from "./contracts.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
 import { McpCodemodeController } from "./mcp-codemode-runtime.js";
@@ -46,7 +45,6 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
 
 type SessionBinderService = Pick<AgentSessionBinder, "setBinder" | "bindSession">;
 type ToolFactoryService = Pick<AgentToolFactory, "createDefaultTools" | "createCustomToolOverrides">;
-type TurnCoordinatorService = Pick<AgentTurnCoordinator, "createTracker" | "subscribe" | "startPromptTimeout">;
 type SessionManagerService = Pick<AgentSessionManager,
   "assertLegacyCaptureIdle" | "blockMcpAdmissions" | "fenceMcpAndSnapshot" | "resumeMcpAdmissions" | "quarantineMcpRuntime"
   | "acquireEvictionProtection" | "getOrCreate" | "refreshRuntime" | "prewarm" | "cancelPrewarm" | "hasPendingSessionWork"
@@ -62,7 +60,6 @@ export interface AgentPoolServices {
   attachments: ReturnType<typeof getAttachmentRegistry>;
   sessionBinder: SessionBinderService;
   toolFactory: ToolFactoryService;
-  turnCoordinator: TurnCoordinatorService;
   sessionManager: SessionManagerService;
   runtimeFacade: AgentRuntimeFacade;
   branchManager: BranchManagerService;
@@ -113,21 +110,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   } : new (require("./tool-factory.js") as { AgentToolFactory: new (...args: any[]) => ToolFactoryService }).AgentToolFactory({
     workspaceDir: options.workspaceDir,
     bashOperations: options.bashOperations,
-  });
-
-  const turnCoordinator: TurnCoordinatorService = durable ? {
-    createTracker: unavailable,
-    subscribe: unavailable,
-    startPromptTimeout: unavailable,
-  } : new (require("./turn-coordinator.js") as { AgentTurnCoordinator: new (...args: any[]) => TurnCoordinatorService }).AgentTurnCoordinator({
-    takeAttachments: (chatJid: string) => attachments.take(chatJid),
-    touchSession: (chatJid: string) => {
-      const entry = options.pool.get(chatJid);
-      if (entry) entry.lastUsed = Date.now();
-    },
-    onInfo: options.onInfo,
-    onWarn: options.onWarn,
-    onError: options.onError,
   });
 
   let sessionManager: SessionManagerService;
@@ -216,7 +198,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     attachments,
     sessionBinder,
     toolFactory,
-    turnCoordinator,
     sessionManager,
     runtimeFacade,
     branchManager,

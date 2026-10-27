@@ -1,24 +1,9 @@
 /**
- * agent-pool.ts – Manages per-chat pi-agent sessions and orchestrates agent runs.
- *
- * The AgentPool is the central coordinator between inbound messages and the
- * pi-coding-agent SDK. It:
- *   - Maintains a map of chat JID → AgentSession (lazy-initialised).
- *   - Provides runAgent() which prompts the agent, streams events, records
- *     token usage, detects auto-compaction needs, and returns the result.
- *   - Handles slash commands by delegating to agent-pool/slash-command.ts.
- *   - Forwards agent-control commands (model switch, session management, etc.)
- *     to the agent-control module.
- *   - Manages session lifecycle: save/restore position (for scheduled tasks),
- *     clear sessions, reload resources.
- *   - Integrates the attachment registry for file-delivery tools.
- *
- * Consumers:
- *   - runtime.ts / runtime/message-loop.ts creates the AgentPool at startup
- *     and calls runAgent() for each inbound message.
- *   - task-scheduler.ts calls runAgent() for scheduled task execution.
- *   - channels/web.ts uses applyControlCommand() and agent status queries.
- *   - agent-control handlers call methods on AgentPool for session/model ops.
+ * Host facade for admitted native dispatch, models/auth, metadata and resources.
+ * SDK tasks/submissions and host accepted-source/terminal records own execution.
+ * Direct runAgent is a rejection-only boundary, never a second prompt loop.
+ * Explicit legacy resource/control composition and migration readers remain
+ * separate until their callers retire; ordinary startup selects native ports.
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
@@ -37,7 +22,7 @@ import type { AssistantMessageEventStream, Context, Model, Provider, SimpleStrea
 import type { AgentControlCommand, AgentControlResult } from "./agent-control/index.js";
 import { getNativeCommandCatalogue } from "./agent-control/native-control-capabilities.js";
 import { getPiclawAgentDir } from "./core/agent-dir.js";
-import { SESSIONS_DIR, WORKSPACE_DIR, getAgentLogConfig, getSessionPoolConfig } from "./core/config.js";
+import { SESSIONS_DIR, WORKSPACE_DIR, getSessionPoolConfig } from "./core/config.js";
 import { readAccessConfig } from "./core/config-access.js";
 import { getChatChannel, getChatJid } from "./core/chat-context.js";
 import { registerChannelDetector } from "./router.js";
@@ -56,37 +41,14 @@ import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/se
 import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
-import {
-  type ChatBranchRecord,
-  type MergeChatBranchIntoParentResult,
-  type SshConfig,
-  type SshConfigApplyTiming,
-  type SshConfigClearResult,
-  type SshConfigSetResult,
-  deleteSshConfig,
-  getDb,
-  getSshConfig,
-  ensureBudgetWork,
-  getActiveBudgetWorkForChat,
-  getBudgetWork,
-  setBudgetWorkStatus,
-  listRecentChatJids,
-  pruneOldTokenUsage,
-  reclaimFreelistPages,
-  restoreChatBranchIdentity,
-  shrinkDatabaseMemory,
-  upsertSshConfig,
-} from "./db.js";
+import { type ChatBranchRecord, type MergeChatBranchIntoParentResult, type SshConfig, type SshConfigApplyTiming, type SshConfigClearResult, type SshConfigSetResult, deleteSshConfig, getDb, getSshConfig, listRecentChatJids, pruneOldTokenUsage, reclaimFreelistPages, restoreChatBranchIdentity, shrinkDatabaseMemory, upsertSshConfig } from "./db.js";
 import { migrateProxmoxPortainerToKv } from "./db.js";
 import { registerRootExtensionKvStore } from "./db/register-extension-kv.js";
 import { setSshToolHandlers } from "./extensions/ssh.js";
 import { applyLiveSshConfig, clearLiveSshConfig, hasLiveChatSshConnection, hasLiveChatSshSession, resolveSshCoreConfigFromChatConfig } from "./extensions/ssh-core.js";
 import { getKeychainEntry } from "./secure/keychain.js";
 import { addLogSink, createLogger, debugSuppressedError, removeLogSink } from "./utils/logger.js";
-import { startAgentLogCleanup } from "./agent-pool/logging.js";
-import { createUuid } from "./utils/ids.js";
-import { withBudgetWorkContext } from "./budget/context.js";
-import { admitBudgetBoundary } from "./budget/admission.js";
+
 import { resolveProviderUsageAccountRef } from "./agent-pool/provider-usage.js";
 
 const log = createLogger("agent-pool");
@@ -100,12 +62,6 @@ export type {
   SidePromptResult,
   TurnOutput,
 } from "./agent-pool/contracts.js";
-
-export interface AgentPoolRecoveryInstrumentationSnapshot {
-  attemptsTotal: number;
-  recoveredRuns: number;
-  exhaustedRuns: number;
-}
 
 interface RuntimeInteropBridge {
   getChatJid?: (defaultValue?: string) => string;
@@ -144,7 +100,6 @@ export interface AgentPoolMemoryInstrumentationSnapshot {
   activeChats: number;
   sessionResources?: AgentPoolSessionResourceInstrumentationSnapshot;
   sessionManager: AgentSessionManagerInstrumentationSnapshot;
-  recovery: AgentPoolRecoveryInstrumentationSnapshot;
 }
 
 function collectSessionResourceInstrumentation(
@@ -179,10 +134,6 @@ function collectSessionResourceInstrumentation(
   }
   return snapshot;
 }
-
-
-const DEFAULT_PROVIDER_RATE_LIMIT_MAX_RETRIES = 5;
-const DEFAULT_PROVIDER_RATE_LIMIT_BASE_DELAY_MS = 5000;
 
 function stripJsonCommentsAndTrailingCommas(input: string): string {
   let output = "";
@@ -301,25 +252,17 @@ export class AgentPool {
   private shuttingDown = false;
   private memoryPressureActive = false;
   private readonly memoryReclamation = new MemoryReclamationGate();
-  private recoveryStats: AgentPoolRecoveryInstrumentationSnapshot = {
-    attemptsTotal: 0,
-    recoveredRuns: 0,
-    exhaustedRuns: 0,
-  };
-
   // Shared across all sessions (expensive to create, safe to reuse)
   private credentialStore: PiclawCredentialStore;
   private modelRuntime: ModelRuntime;
   private modelRegistry: ModelRegistry;
   private settingsManager = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
-  private logsDir = join(WORKSPACE_DIR, "logs");
   private bashOperations = createTrackedBashOperations({
     shellPath: () => this.settingsManager.getShellPath(),
   });
   private attachments: AgentPoolServices["attachments"];
   private sessionBinder: AgentPoolServices["sessionBinder"];
   private toolFactory: AgentPoolServices["toolFactory"];
-  private turnCoordinator: AgentPoolServices["turnCoordinator"];
   private sessionManager: AgentPoolServices["sessionManager"];
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
@@ -375,12 +318,10 @@ export class AgentPool {
     this.credentialStore = options.credentialStore;
     this.modelRuntime = options.modelRuntime;
     this.modelRegistry = options.modelRegistry ?? new ModelRegistry(this.modelRuntime);
-    this.applyRateLimitRetryDefaults();
     ({
       attachments: this.attachments,
       sessionBinder: this.sessionBinder,
       toolFactory: this.toolFactory,
-      turnCoordinator: this.turnCoordinator,
       sessionManager: this.sessionManager,
       mcpSettings: this.mcpSettings,
       runtimeFacade: this.runtimeFacade,
@@ -428,9 +369,6 @@ export class AgentPool {
     runtimeInterop.getKeychainEntry = getKeychainEntry;
     try { migrateProxmoxPortainerToKv(); } catch (e) { void e; /* migration is best-effort */ }
     if (options.getDurableSession === undefined) mkdirSync(SESSIONS_DIR, { recursive: true });
-    mkdirSync(this.logsDir, { recursive: true });
-    const agentLogConfig = getAgentLogConfig();
-    startAgentLogCleanup(this.logsDir, agentLogConfig.retentionMs, agentLogConfig.cleanupIntervalMs);
     this.cleanupTimer = setInterval(
       () => this.evictIdle(),
       this.config.cleanupIntervalMs,
@@ -447,117 +385,16 @@ export class AgentPool {
     } catch (e) { void e; }
   }
 
-  private applyRateLimitRetryDefaults(): void {
-    const settingsManager = this.settingsManager as SettingsManager & {
-      getRetrySettings?: () => { enabled: boolean; maxRetries: number; baseDelayMs: number };
-    };
-    if (typeof settingsManager.getRetrySettings !== "function") return;
-    const originalGetRetrySettings = settingsManager.getRetrySettings.bind(settingsManager);
-    settingsManager.getRetrySettings = () => {
-      const settings = originalGetRetrySettings();
-      return {
-        ...settings,
-        maxRetries: Math.max(settings.maxRetries ?? 0, DEFAULT_PROVIDER_RATE_LIMIT_MAX_RETRIES),
-        baseDelayMs: Math.max(settings.baseDelayMs ?? 0, DEFAULT_PROVIDER_RATE_LIMIT_BASE_DELAY_MS),
-      };
-    };
-  }
-
   setSessionBinder(binder?: (runtime: AgentSessionRuntime, chatJid: string) => Promise<void> | void): void {
     this.sessionBinder.setBinder(binder);
   }
 
-  /** Legacy compatibility runner. Native callers require admitted dispatch ports. */
-  async runAgent(prompt: string, chatJid: string, options: RunAgentOptions = {}): Promise<AgentOutput> {
-    if (this.durableApplication) return { status: "error", result: null,
+  /** @deprecated Rejection-only public boundary. Direct prompting is retired in
+   * every profile; supported callers must use admitted native operation ports.
+   * Never inspect options, create a session or change accounting here. */
+  async runAgent(_prompt: string, _chatJid: string, _options: RunAgentOptions = {}): Promise<AgentOutput> {
+    return { status: "error", result: null,
       error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" };
-    // Acquire before session lookup: the cleanup timer can run after getOrCreate
-    // returns but before AgentSession flips isStreaming at prompt start.
-    const releaseEvictionProtection = this.sessionManager.acquireEvictionProtection(chatJid);
-    try {
-      const resumedWork = !options.budgetWorkId && !options.executionProvenance?.executionId
-        ? getActiveBudgetWorkForChat(chatJid)
-        : null;
-      const budgetWorkId = options.budgetWorkId?.trim()
-        || options.executionProvenance?.executionId?.trim()
-        || (resumedWork?.last_boundary === "resume_pending" ? resumedWork.id : null)
-        || options.turnId?.trim()
-        || createUuid("work");
-      const budgetExecutionKind = options.budgetExecutionKind
-        ?? (resumedWork?.id === budgetWorkId ? resumedWork.execution_kind : undefined)
-        ?? (options.executionProvenance?.kind === "scheduled" ? "scheduled" : "interactive");
-      const budgetOptions: RunAgentOptions = {
-        ...options,
-        budgetWorkId,
-        budgetExecutionKind,
-        budgetBeforeModelCall: async (boundary, boundaryPrompt, providerId) => {
-          if (options.abortSignal?.aborted) return "Restricted execution cancelled.";
-          if (options.executionAdmissionCheck && !await options.executionAdmissionCheck()) return "Restricted execution grant revoked.";
-          const admitted = await admitBudgetBoundary({
-            workId: budgetWorkId,
-            boundary,
-            prompt: boundaryPrompt,
-            modelRuntime: this.modelRuntime,
-            providerId,
-          });
-          return admitted.message;
-        },
-      };
-      ensureBudgetWork({
-        id: budgetWorkId,
-        chatJid,
-        executionKind: budgetExecutionKind,
-        parentWorkId: budgetOptions.budgetParentWorkId ?? null,
-        scheduledTaskId: budgetOptions.budgetScheduledTaskId ?? null,
-      });
-      if (resumedWork?.id === budgetWorkId) {
-        setBudgetWorkStatus(budgetWorkId, "active", { boundary: "resumed" });
-      }
-      const observedOutputs: AgentOutput[] = [];
-      const { runAgentPrompt } = await import("./agent-pool/run-agent-orchestrator.js");
-      const runPrompt = (nextPrompt: string, nextOptions: RunAgentOptions) => runAgentPrompt(nextPrompt, chatJid, nextOptions, {
-        getOrCreateRuntime: (nextChatJid) => this.getOrCreateRuntime(nextChatJid),
-        turnCoordinator: this.turnCoordinator,
-        clearAttachments: (nextChatJid) => this.attachments.clear(nextChatJid),
-        takeAttachments: (nextChatJid) => this.attachments.take(nextChatJid),
-        logsDir: this.logsDir,
-        setActiveForkBaseLeaf: (nextChatJid, leafId) => this.activeForkBaseLeafByChat.set(nextChatJid, leafId),
-        clearActiveForkBaseLeaf: (nextChatJid) => {
-          this.activeForkBaseLeafByChat.delete(nextChatJid);
-        },
-        onInfo: (message, details) => log.info(message, details),
-        onWarn: (message, details) => log.warn(message, details),
-        onError: (message, details) => log.error(message, details),
-      });
-
-      const { runWithProtectedRecoveryHandoff } = await import("./agent-pool/protected-recovery-handoff.js");
-      const output = await withBudgetWorkContext({
-        workId: budgetWorkId,
-        chatJid,
-        kind: budgetExecutionKind,
-        parentWorkId: budgetOptions.budgetParentWorkId ?? null,
-      }, async () => await runWithProtectedRecoveryHandoff(prompt, budgetOptions, runPrompt, (observed) => {
-        observedOutputs.push(observed);
-      }));
-      const recoveries = observedOutputs.map((observed) => observed.recovery).filter(Boolean);
-      this.recoveryStats.attemptsTotal += recoveries.reduce(
-        (sum, recovery) => sum + Math.max(0, recovery?.attemptsUsed || 0),
-        0,
-      );
-      const handedOff = observedOutputs.some((observed) => observed.requiresToolEnabledContinuation);
-      if ((output.status !== "error" && observedOutputs.some((observed) => observed.recovery?.recovered)) || handedOff) {
-        this.recoveryStats.recoveredRuns += 1;
-      }
-      if (!handedOff && output.status === "error" && output.recovery?.exhausted) {
-        this.recoveryStats.exhaustedRuns += 1;
-      }
-      if (!handedOff && getBudgetWork(budgetWorkId)?.status === "active") {
-        setBudgetWorkStatus(budgetWorkId, "completed");
-      }
-      return output;
-    } finally {
-      releaseEvictionProtection();
-    }
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
@@ -610,7 +447,6 @@ export class AgentPool {
   async getAvailableModels(chatJid: string, options: { includeProviderUsage?: boolean; includeProviderDiagnostics?: boolean; includeCatalogue?: boolean } = {}): Promise<AvailableModelsResult> {
     return this.runtimeFacade.getAvailableModels(chatJid, options);
   }
-
 
   resolveBudgetProviderAccountRef(providerId: string): Promise<string | null> {
     return resolveProviderUsageAccountRef(this.modelRuntime, providerId);
@@ -795,7 +631,6 @@ export class AgentPool {
     return this.branchManager.renameChatBranch(chatJid, options);
   }
 
-
   async pruneChatBranch(chatJid: string): Promise<ChatBranchRecord> {
     return this.branchManager.pruneChatBranch(chatJid);
   }
@@ -882,7 +717,6 @@ export class AgentPool {
       activeChats: this.branchManager.listActiveChats().length,
       sessionResources,
       sessionManager: this.sessionManager.getInstrumentationSnapshot(),
-      recovery: { ...this.recoveryStats },
     };
   }
 

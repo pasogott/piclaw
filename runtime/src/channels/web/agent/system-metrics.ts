@@ -53,9 +53,6 @@ export interface RuntimeMemorySnapshot {
   queued_prewarms: number;
   prewarm_queue_length: number;
   prewarm_cooldowns: number;
-  recovery_attempts_total: number;
-  recovery_recovered_runs: number;
-  recovery_exhausted_runs: number;
 }
 
 export interface SystemMetricsSnapshot {
@@ -310,9 +307,6 @@ function normalizeRuntimeMemorySnapshot(snapshot: AgentPoolMemoryInstrumentation
     queued_prewarms: snapshot.sessionManager.queuedPrewarms,
     prewarm_queue_length: snapshot.sessionManager.prewarmQueueLength,
     prewarm_cooldowns: snapshot.sessionManager.prewarmCooldowns,
-    recovery_attempts_total: snapshot.recovery.attemptsTotal,
-    recovery_recovered_runs: snapshot.recovery.recoveredRuns,
-    recovery_exhausted_runs: snapshot.recovery.exhaustedRuns,
   };
 }
 

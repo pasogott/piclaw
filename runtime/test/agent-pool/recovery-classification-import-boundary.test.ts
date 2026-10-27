@@ -28,11 +28,6 @@ const cases: Array<{ entry: string; expected: string; legacy: string }> = [
     expected: "../../../agent-pool/recovery-classification.js",
     legacy: "../../../agent-pool/automatic-recovery.js",
   },
-  {
-    entry: "channels/web/handlers/agent.ts",
-    expected: "../../../agent-pool/recovery-classification.js",
-    legacy: "../../../agent-pool/automatic-recovery.js",
-  },
 ];
 
 for (const { entry, expected, legacy } of cases) {
@@ -42,3 +37,10 @@ for (const { entry, expected, legacy } of cases) {
     expect(imports).not.toContain(legacy);
   });
 }
+
+
+test("native web no longer imports the retired opaque attempt classifier", () => {
+  const imports = staticImports("channels/web/handlers/agent.ts");
+  expect(imports).not.toContain("../../../agent-pool/recovery-classification.js");
+  expect(imports).not.toContain("../../../agent-pool/automatic-recovery.js");
+});

@@ -130,7 +130,9 @@ export interface SidePromptOptions {
   budgetParentWorkId?: string | null;
 }
 
-/** Options for AgentPool.runAgent(): chatJid, messages, callbacks. */
+/** @deprecated Legacy adapter argument shape. AgentPool.runAgent rejects without
+ * inspecting any of these fields; admitted native ports own execution policy.
+ * Retained until the remaining legacy caller signatures are retired. */
 export interface RunAgentOptions {
   /** Server-owned execution provenance; never accept directly from browser/model payloads. */
   executionProvenance?: import("../core/execution-context.js").ExecutionProvenance;
