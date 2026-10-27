@@ -14,8 +14,10 @@
 import type Database from 'bun:sqlite';
 import type { TokenUsageRecord, TokenUsageSource, TokenUsageCostProvenance } from "./usage-report-types.js";
 import { getDb } from "./connection.js";
+import { getRouterState, setRouterState, deleteRouterState } from "./router-state.js";
+import { planUsageReportRetention, applyUsageReportRetention } from "./usage-report-retention.js";
 import { insertBudgetUsageEvent } from "./budget-limits.js";
-import { decodeUsageReport, encodeUsageReport, projectUsageEvent, readUsageProjectionEvent, tokenReportColumns, usageReportRecord, type UsageReportOrigin, unlinkedUsageReportPredicate } from "./usage-report-projection.js";
+import { decodeUsageReport, encodeUsageReport, projectUsageEvent, readUsageProjectionEvent, tokenReportColumns, usageReportRecord, type UsageReportOrigin } from "./usage-report-projection.js";
 
 /** Overall token/cost totals for a chat across all runs. */
 export interface TokenUsageTotalsSummary {
@@ -296,12 +298,24 @@ export function getLatestTokenUsageModel(chatJid: string): LatestTokenUsageModel
  * Event/request references retain accounting and replay evidence until their
  * owners explicitly retire it. This function never releases a request hold.
  *
- * @returns Number of deleted rows.
+ * One bounded page per existing startup invocation; no new schedule. Explicit
+ * maintenance persists owner plans/cursors for subsequent pages and ACK replay.
+ * @returns Number of deleted rows (at most 1000).
  */
 export function pruneOldTokenUsage(retentionDays = 90): number {
-  const db = getDb();
-  const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
-  const result = db.prepare(`DELETE FROM token_usage
-    WHERE run_at < ? AND ${unlinkedUsageReportPredicate("token_usage")}`).run(cutoff);
-  return result.changes;
+  if(!Number.isFinite(retentionDays)||retentionDays<0)throw Error("Invalid usage retention period");
+  const db = getDb(), cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString(), key="retention:legacy-usage-reports:v1";
+  return db.transaction(()=>{
+    const raw=getRouterState(key);
+    const cursor=raw===undefined?undefined:JSON.parse(raw) as {version:number;retentionDays:number;before:string;after:number};
+    if(raw!==undefined&&(!cursor||cursor.version!==1||!Number.isFinite(cursor.retentionDays)||cursor.retentionDays<0||typeof cursor.before!=="string"||
+      !Number.isFinite(Date.parse(cursor.before))||!Number.isSafeInteger(cursor.after)||cursor.after<0))throw Error("Invalid persisted usage retention cursor");
+    const resume=cursor?.retentionDays===retentionDays?cursor:undefined;
+    if(resume&&resume.before>cutoff)throw Error("Usage retention clock moved behind its cursor");
+    const plan=planUsageReportRetention(db,{before:resume?.before??cutoff,after:resume?.after??0,limit:1000});
+    const result=applyUsageReportRetention(db,plan);
+    if(result.next===null){deleteRouterState(key);if(getRouterState(key)!==undefined)throw Error("Usage retention cursor delete refused");}
+    else {const value=JSON.stringify({version:1,retentionDays,before:plan.before,after:result.next});setRouterState(key,value);if(getRouterState(key)!==value)throw Error("Usage retention cursor write refused");}
+    return result.removed.length;
+  }).immediate();
 }

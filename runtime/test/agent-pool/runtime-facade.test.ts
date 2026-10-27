@@ -74,6 +74,258 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
   return { facade, pool, warnings, errors, cleared };
 }
 
+test("durable runtime lookup must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    getDurableSession: "invalid-durable-runtime-lookup" as unknown as (chatJid: string) => undefined,
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable runtime lookup must be callable");
+});
+
+test("durable compatibility readPosition must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid", {
+      sessionId: "invalid-binding",
+      branchId: "main",
+      readPosition: "invalid-position-reader",
+    } as unknown as { sessionId: string; branchId: string; readPosition: () => Promise<string | null> }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility readPosition must be callable");
+});
+
+test("durable compatibility readContextUsage must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-context-reader", {
+      sessionId: "invalid-binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readContextUsage: "invalid-context-reader",
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      readContextUsage: () => Promise<{ tokens: number | null; contextWindow: number | null }>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility readContextUsage must be callable");
+});
+
+test("durable compatibility chat key must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility chat key must be non-empty");
+});
+
+test("durable compatibility lifetimeSignal must be AbortSignal-like", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-signal", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: "invalid-signal-shape",
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      lifetimeSignal: AbortSignal;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable compatibility lifetimeSignal requires removeEventListener", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-signal-shape", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      lifetimeSignal: AbortSignal;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable compatibility binding must be an object", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-binding", null as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility binding must be an object");
+});
+
+test("durable compatibility sessionId must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-session-id", {
+      sessionId: "",
+      branchId: "main",
+      readPosition: async () => null,
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility sessionId must be non-empty");
+});
+
+test("durable compatibility branchId must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-branch-id", {
+      sessionId: "binding",
+      branchId: "",
+      readPosition: async () => null,
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility branchId must be non-empty");
+});
+
+test("durable runtime binding must be an object", () => {
+  const { facade } = createFacade({ getDurableSession: () => null as any });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-binding")).toThrow("Durable runtime binding must be an object");
+});
+
+test("durable runtime binding requires non-empty sessionId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "", branchId: "main", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-session-id")).toThrow("Durable runtime sessionId must be non-empty");
+});
+
+test("durable runtime binding requires non-empty branchId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "binding", branchId: "", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-branch-id")).toThrow("Durable runtime branchId must be non-empty");
+});
+
+test("durable runtime binding requires callable readPosition", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "binding", branchId: "main", readPosition: "not-callable" } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-position")).toThrow("Durable runtime readPosition must be callable");
+});
+
+test("durable runtime lifetimeSignal must be AbortSignal-like", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: "invalid-runtime-signal-shape",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable runtime lifetimeSignal requires removeEventListener", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal-shape")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable runtime binding requires callable readModel when present", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readModel: "not-callable",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-model")).toThrow("Durable runtime readModel must be callable");
+});
+
+test("durable runtime binding requires callable readContextUsage when present", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readContextUsage: "not-callable",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-context-usage")).toThrow("Durable runtime readContextUsage must be callable");
+});
+
 test("native host-only controls and state never construct a legacy session", async () => {
   let legacy = 0, acquired = 0, released = 0;
   const port = { sessionId: "native-host", branchId: "main", readPosition: async () => "7",

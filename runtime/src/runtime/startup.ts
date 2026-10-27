@@ -22,7 +22,6 @@ import {
   STORE_DIR,
   WORKSPACE_DIR,
   getPushoverConfig,
-  getToolOutputConfig,
   getProgressWatchdogSafetyWarning,
 } from "../core/config.js";
 import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, getFailedRun, initDatabase } from "../db.js";
@@ -31,7 +30,6 @@ import { validateAccessStartup } from "../db/access-state.js";
 import { startAuthMaintenance } from "./auth-maintenance.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { prepareMcpInstanceConfig } from "../core/config-mcp.js";
-import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
 import { createLogger } from "../utils/logger.js";
@@ -207,8 +205,8 @@ export function initializeRuntimeEnvironment(state: RuntimeState): ReturnType<ty
   }
   launchWorkspaceIndexProcess({ scope: "all" });
   startWorkspaceIndexReconciliation();
-  const toolOutputConfig = getToolOutputConfig();
-  startToolOutputCleanup(toolOutputConfig.retentionMs, toolOutputConfig.cleanupIntervalMs);
+  // The production native backend has not validated/imported history yet.
+  // File age or missing registration is not authority to prune its tool payloads.
   state.loadTimestamps();
   state.loadChats();
   return access;

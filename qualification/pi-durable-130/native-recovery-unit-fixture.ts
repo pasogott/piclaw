@@ -12,13 +12,14 @@ import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite
 import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
 import { qualifyNativeRecoveryUnit } from "../../runtime/durable-engine/src/recovery-unit-qualification.ts";
+import { qualifyNativeRetentionUnit } from "./native-retention-unit-fixture.ts";
 import { importCopiedLegacyTree, LegacyTreeImportManifest, type GetLegacyContext } from "../../runtime/durable-engine/src/legacy-import.ts";
 import { buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "../../node_modules/@earendil-works/pi-coding-agent";
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 /** Test-only preparation starts from the actual quiescent native factory DB.
  * Capture/verification itself sees selected offline copies only. */
-export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace: string, dataDir: string) {
+export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace: string, dataDir: string, retention=false) {
   const base = join(workspace,"unit-fixture"); mkdirSync(base,{mode:0o700});
   const sourceWorkspace = join(base,"workspace"), addons = join(base,"addons"), answers = join(base,"answers");
   for (const path of [sourceWorkspace,addons,answers]) mkdirSync(path,{mode:0o700});
@@ -122,6 +123,7 @@ export async function qualifyNativeRecoveryUnitFixture(root: Database, workspace
   const opaqueManifest=await captureNativeRecoveryUnit({database:opaqueDatabase,answers,workspace:sourceWorkspace,output:opaqueUnit,environment,externalPayloads});
   expect(await verifyNativeRecoveryUnit(opaqueUnit,environment)).toEqual(opaqueManifest);
   expect(readFileSync(join(opaqueUnit,"manifest.json"),"utf8")).not.toContain(opaqueRef);
+  if(retention) await qualifyNativeRetentionUnit(opaqueUnit,environment,{answers,workspace:sourceWorkspace,externalPayloads});
   const opaqueReceipt=await qualifyNativeRecoveryUnit(opaqueUnit,environment,join(base,"opaque-restore"));
   expect(opaqueReceipt.scheduling).toBe("paused");
   const opaqueRestored=new Database(join(base,"opaque-restore/candidate.sqlite"),{readonly:true});

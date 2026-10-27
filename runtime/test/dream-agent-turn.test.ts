@@ -333,7 +333,7 @@ for(const replacement of [false,true])test(`Dream lock ownership: process exit r
       applyControlCommand:async()=>({status:'success',message:'fixture'}),
       runAgent:async()=>{if(${replacement}){renameSync(${JSON.stringify(lock)},${JSON.stringify(lock+'.former')});writeFileSync(${JSON.stringify(lock)},String(process.pid));}process.exit(0);},disposeChatSession:async()=>{},
     }});
-  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1'},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1',PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
   const [status,stderr]=await Promise.all([child.exited,new Response(child.stderr).text(),new Response(child.stdout).text()]);
   expect(status,stderr).toBe(0);expect(existsSync(lock)).toBe(replacement);if(replacement)expect(readFileSync(lock,'utf8')).toBe(String(child.pid));
 });
@@ -346,7 +346,7 @@ test('Dream lock ownership: a nonregular lock is retained without blocking proce
     import {initDatabase} from ${JSON.stringify(new URL('../src/db.ts',import.meta.url).pathname)};
     import {runDreamMaintenance} from ${JSON.stringify(new URL('../src/dream.ts',import.meta.url).pathname)};
     initDatabase();const result=await runDreamMaintenance({mode:'manual',days:1});if(!result.skipped)process.exit(2);process.exit(0);
-  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1'},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1',PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
   let timedOut=false;const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},3000);
   try{const [status,stderr]=await Promise.all([child.exited,new Response(child.stderr).text(),new Response(child.stdout).text()]);expect(timedOut).toBe(false);expect(status,stderr).toBe(0);expect(existsSync(lock)).toBe(true);}
   finally{clearTimeout(timer);if(child.exitCode===null)child.kill('SIGKILL');await child.exited;}

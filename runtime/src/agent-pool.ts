@@ -358,6 +358,9 @@ export class AgentPool {
     this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable session lookup must be callable");
+    }
     this.durableApplication = options.getDurableSession !== undefined;
     this.durableSessionLookup = options.getDurableSession?.bind(options);
     if (!options.credentialStore || !options.modelRuntime) {
@@ -815,6 +818,9 @@ export class AgentPool {
           ...(options.agentName !== undefined ? { agent_name: options.agentName } : {}) });
         const position = this.durableSessionLookup?.(restored.chat_jid);
         if (!position || position.branchId !== restored.branch_id) throw Error("Exact native restore binding unavailable");
+        if (position.assertCurrent !== undefined && typeof position.assertCurrent !== "function") {
+          throw Error("Exact native restore binding invalid");
+        }
         position.assertCurrent?.();
         return restored;
       }).immediate();
@@ -825,6 +831,7 @@ export class AgentPool {
   async permanentPurgeChatBranch(
     chatJid: string,
   ): Promise<{ branch: ChatBranchRecord; removedSessionArtifacts: string[] }> {
+    if (this.durableApplication) throw new Error("Durable branch purge unavailable");
     return this.branchManager.permanentPurgeChatBranch(chatJid);
   }
 
@@ -832,10 +839,12 @@ export class AgentPool {
     sourceChatJid: string,
     options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable branch fork unavailable");
     return this.branchManager.createForkedChatBranch(sourceChatJid, options);
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable root session creation unavailable");
     return this.branchManager.createRootChatSession(agentName);
   }
 
@@ -928,7 +937,11 @@ export class AgentPool {
   async getDurableSessionMetadata(chatJid: string) {
     if (!this.durableApplication) return undefined;
     const position = this.durableSessionLookup?.(chatJid);
-    if (!position?.readMetadata) return null;
+    if (!position) return null;
+    if (position.readMetadata !== undefined && typeof position.readMetadata !== "function") {
+      throw new Error("Durable metadata reader invalid");
+    }
+    if (!position.readMetadata) return null;
     const metadata = await position.readMetadata();
     return metadata ? { ...metadata, commandCatalogue: getNativeCommandCatalogue(position) } : null;
   }

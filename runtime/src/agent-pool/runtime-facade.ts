@@ -321,16 +321,148 @@ export class AgentRuntimeFacade {
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable runtime lookup must be callable");
+    }
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
+    const bindCompatibilityMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+    ): ((...args: any[]) => any) | undefined => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) return undefined;
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable compatibility ${String(method)} must be callable`);
+      }
+      return candidate.bind(port) as (...args: any[]) => any;
+    };
     // Capture routing before any session factory is entered. Never fall back on port failure.
-    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port),
-        readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port),
-        setModel: port.setModel?.bind(port), reset: port.reset?.bind(port), abort: port.abort?.bind(port),
-        compact: port.compact?.bind(port), reconcileMaintenance: port.reconcileMaintenance?.bind(port),
-        readTree: port.readTree?.bind(port), readMetadata: port.readMetadata?.bind(port), readReport: port.readReport?.bind(port),
-        assertCurrent: port.assertCurrent?.bind(port), runOwnedControl: port.runOwnedControl?.bind(port) })]));
-    this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) => {
+      if (typeof chat !== "string" || !chat.trim()) {
+        throw new Error("Durable compatibility chat key must be non-empty");
+      }
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable compatibility binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable compatibility sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable compatibility branchId must be non-empty");
+      }
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
+          throw new Error("Durable compatibility lifetimeSignal must be AbortSignal-like");
+        }
+      }
+      const readPosition = bindCompatibilityMethod(port, "readPosition");
+      if (!readPosition) throw new Error("Durable compatibility readPosition must be callable");
+      return [chat, Object.freeze({
+        ...port,
+        readPosition,
+        readContextUsage: bindCompatibilityMethod(port, "readContextUsage"),
+        readModel: bindCompatibilityMethod(port, "readModel"),
+        readThinkingLevel: bindCompatibilityMethod(port, "readThinkingLevel"),
+        setThinkingLevel: bindCompatibilityMethod(port, "setThinkingLevel"),
+        setModel: bindCompatibilityMethod(port, "setModel"),
+        reset: bindCompatibilityMethod(port, "reset"),
+        readAbortScope: bindCompatibilityMethod(port, "readAbortScope"),
+        abort: bindCompatibilityMethod(port, "abort"),
+        abortRetry: bindCompatibilityMethod(port, "abortRetry"),
+        restart: bindCompatibilityMethod(port, "restart"),
+        runBash: bindCompatibilityMethod(port, "runBash"),
+        abortBash: bindCompatibilityMethod(port, "abortBash"),
+        readExecutionPolicy: bindCompatibilityMethod(port, "readExecutionPolicy"),
+        setExecutionPolicy: bindCompatibilityMethod(port, "setExecutionPolicy"),
+        requestExit: bindCompatibilityMethod(port, "requestExit"),
+        compact: bindCompatibilityMethod(port, "compact"),
+        reconcileMaintenance: bindCompatibilityMethod(port, "reconcileMaintenance"),
+        readTree: bindCompatibilityMethod(port, "readTree"),
+        readMetadata: bindCompatibilityMethod(port, "readMetadata"),
+        readReport: bindCompatibilityMethod(port, "readReport"),
+        assertCurrent: bindCompatibilityMethod(port, "assertCurrent"),
+        runOwnedControl: bindCompatibilityMethod(port, "runOwnedControl"),
+      })] as const;
+    }));
+    const rawDurableLookup = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const validateDurableRuntimeMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+      options: { required?: boolean } = {},
+    ): void => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) {
+        if (options.required) throw new Error(`Durable runtime ${String(method)} must be callable`);
+        return;
+      }
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable runtime ${String(method)} must be callable`);
+      }
+    };
+    this.getDurableSession = (chatJid) => {
+      const port = rawDurableLookup(chatJid);
+      if (port === undefined) return undefined;
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable runtime binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable runtime sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable runtime branchId must be non-empty");
+      }
+      validateDurableRuntimeMethod(port, "readPosition", { required: true });
+      validateDurableRuntimeMethod(port, "readContextUsage");
+      validateDurableRuntimeMethod(port, "readModel");
+      validateDurableRuntimeMethod(port, "readThinkingLevel");
+      validateDurableRuntimeMethod(port, "setThinkingLevel");
+      validateDurableRuntimeMethod(port, "setModel");
+      validateDurableRuntimeMethod(port, "reset");
+      validateDurableRuntimeMethod(port, "readAbortScope");
+      validateDurableRuntimeMethod(port, "abort");
+      validateDurableRuntimeMethod(port, "abortRetry");
+      validateDurableRuntimeMethod(port, "restart");
+      validateDurableRuntimeMethod(port, "runBash");
+      validateDurableRuntimeMethod(port, "abortBash");
+      validateDurableRuntimeMethod(port, "readExecutionPolicy");
+      validateDurableRuntimeMethod(port, "setExecutionPolicy");
+      validateDurableRuntimeMethod(port, "requestExit");
+      validateDurableRuntimeMethod(port, "compact");
+      validateDurableRuntimeMethod(port, "reconcileMaintenance");
+      validateDurableRuntimeMethod(port, "readTree");
+      validateDurableRuntimeMethod(port, "readMetadata");
+      validateDurableRuntimeMethod(port, "readReport");
+      validateDurableRuntimeMethod(port, "assertCurrent");
+      validateDurableRuntimeMethod(port, "runOwnedControl");
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
+          throw new Error("Durable runtime lifetimeSignal must be AbortSignal-like");
+        }
+      }
+      return port;
+    };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
