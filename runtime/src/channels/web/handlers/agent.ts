@@ -1753,6 +1753,9 @@ async function processAuthorisedChat(
   });
 
   const coordinator = channel.dispatchAcceptedInput;
+  if (coordinator !== undefined && typeof coordinator !== "function") {
+    throw new Error("Accepted dispatch coordinator must be callable");
+  }
   const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
     rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
   const waitForPendingRaw = coordinator?.waitForPending;
