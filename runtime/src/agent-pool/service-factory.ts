@@ -90,6 +90,9 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
+  if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+    throw new Error("Durable service factory lookup must be callable");
+  }
   const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
 

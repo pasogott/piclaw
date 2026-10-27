@@ -29,6 +29,27 @@ test("durable lookup port must be callable", () => {
   }
 });
 
+test("durable service-factory lookup port must be callable", () => {
+  const model = createAgentPoolModelOptions();
+  const legacyCreate = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("JSONL forbidden"); });
+  try {
+    const options = {
+      pool: new Map(),
+      activeForkBaseLeafByChat: new Map(),
+      authStorage: model.credentialStore,
+      modelRuntime: model.modelRuntime,
+      modelRegistry: model.modelRegistry!,
+      settingsManager: SettingsManager.inMemory(),
+      workspaceDir: process.env.PICLAW_WORKSPACE!,
+      getDurableSession: "invalid-service-factory-lookup-port",
+    } as unknown as Parameters<typeof createAgentPoolServices>[0];
+    expect(() => createAgentPoolServices(options)).toThrow("Durable service factory lookup must be callable");
+    expect(legacyCreate).not.toHaveBeenCalled();
+  } finally {
+    legacyCreate.mockRestore();
+  }
+});
+
 for (const empty of [false, true]) {
   test(`durable backend ${empty ? "empty" : "exact"} scope never reads legacy factories or creates sessions`, async () => {
     initDatabase();
