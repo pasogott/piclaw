@@ -30,7 +30,7 @@ import { WORKSPACE_DIR, getRuntimeTimingConfig } from "./core/config.js";
 import { drainScheduledBudgetNotifications } from "./budget/scheduled-notifications.js";
 import { readAccessConfig } from "./core/config-access.js";
 import { getExecutionIdentity } from "./core/execution-context.js";
-import { formatRecoverySummary } from "./agent-pool/automatic-recovery.js";
+import { formatRecoverySummary } from "./agent-pool/recovery-summary.js";
 import { DREAM_TASK_ID, parseDreamPromptToken, runDreamAgentTurn, runDreamMaintenance } from "./dream.js";
 import { computeNextRun } from "./task-scheduler-utils.js";
 import type { AgentPool } from "./agent-pool.js";
