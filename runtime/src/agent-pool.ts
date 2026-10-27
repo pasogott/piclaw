@@ -358,6 +358,9 @@ export class AgentPool {
     this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable session lookup must be callable");
+    }
     this.durableApplication = options.getDurableSession !== undefined;
     this.durableSessionLookup = options.getDurableSession?.bind(options);
     if (!options.credentialStore || !options.modelRuntime) {

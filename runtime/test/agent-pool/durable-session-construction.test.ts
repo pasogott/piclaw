@@ -15,6 +15,20 @@ import { AgentSessionBinder } from "../../src/agent-pool/session-binder.js";
 import { AgentBranchManager } from "../../src/agent-pool/branch-manager.js";
 import { getDb } from "../../src/db/connection.js";
 
+test("durable lookup port must be callable", () => {
+  const legacyCreate = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("JSONL forbidden"); });
+  try {
+    const options = {
+      ...createAgentPoolModelOptions(),
+      getDurableSession: "invalid-durable-lookup-port",
+    } as unknown as ConstructorParameters<typeof AgentPool>[0];
+    expect(() => new AgentPool(options)).toThrow("Durable session lookup must be callable");
+    expect(legacyCreate).not.toHaveBeenCalled();
+  } finally {
+    legacyCreate.mockRestore();
+  }
+});
+
 for (const empty of [false, true]) {
   test(`durable backend ${empty ? "empty" : "exact"} scope never reads legacy factories or creates sessions`, async () => {
     initDatabase();
