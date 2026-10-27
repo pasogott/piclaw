@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   getThreadRootId,
   resumeChat,
-  retryFailedOnModelSwitch,
-  skipFailedOnModelSwitch,
   type ChatRunControlStore,
   type ResumeChatContext,
 } from "../../../../src/channels/web/runtime/chat-run-control.js";
@@ -12,10 +10,6 @@ describe("web chat run control helpers", () => {
   test("getThreadRootId delegates to store", () => {
     const store: ChatRunControlStore = {
       getThreadRootId: (chatJid, messageId) => (chatJid === "web:1" && messageId === "m1" ? 123 : null),
-      getFailedRun: () => undefined,
-      getChatCursor: () => "",
-      setChatCursor: () => {},
-      clearFailedRun: () => {},
     };
 
     expect(getThreadRootId("web:1", "m1", store)).toBe(123);
@@ -64,49 +58,5 @@ describe("web chat run control helpers", () => {
     resumeChat("web:1", null, ctx);
     expect(enqueued).toHaveLength(2);
     expect(enqueued[1].key).toBe("resume:web:1:wake");
-  });
-
-  test("skipFailedOnModelSwitch advances cursor only when needed and clears failure", () => {
-    const setCalls: Array<{ chatJid: string; ts: string }> = [];
-    const clearCalls: string[] = [];
-
-    const store: ChatRunControlStore = {
-      getThreadRootId: () => null,
-      getFailedRun: () => ({ prevTs: "2024-01-01T00:00:00.000Z", failedTs: "2024-01-01T00:00:05.000Z" }),
-      getChatCursor: () => "2024-01-01T00:00:00.000Z",
-      setChatCursor: (chatJid, ts) => {
-        setCalls.push({ chatJid, ts });
-      },
-      clearFailedRun: (chatJid) => {
-        clearCalls.push(chatJid);
-      },
-    };
-
-    skipFailedOnModelSwitch("web:1", store);
-
-    expect(setCalls).toEqual([{ chatJid: "web:1", ts: "2024-01-01T00:00:05.000Z" }]);
-    expect(clearCalls).toEqual(["web:1"]);
-  });
-
-  test("retryFailedOnModelSwitch rewinds cursor to the failed prevTs and clears failure", () => {
-    const setCalls: Array<{ chatJid: string; ts: string }> = [];
-    const clearCalls: string[] = [];
-
-    const store: ChatRunControlStore = {
-      getThreadRootId: () => null,
-      getFailedRun: () => ({ prevTs: "2024-01-01T00:00:00.000Z", failedTs: "2024-01-01T00:00:05.000Z" }),
-      getChatCursor: () => "2024-01-01T00:00:05.000Z",
-      setChatCursor: (chatJid, ts) => {
-        setCalls.push({ chatJid, ts });
-      },
-      clearFailedRun: (chatJid) => {
-        clearCalls.push(chatJid);
-      },
-    };
-
-    retryFailedOnModelSwitch("web:1", store);
-
-    expect(setCalls).toEqual([{ chatJid: "web:1", ts: "2024-01-01T00:00:00.000Z" }]);
-    expect(clearCalls).toEqual(["web:1"]);
   });
 });

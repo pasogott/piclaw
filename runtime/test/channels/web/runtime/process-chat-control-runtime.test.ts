@@ -93,7 +93,7 @@ describe("process chat control runtime", () => {
       },
       getMessagesSince: () => {
         remainingReads += 1;
-        return [];
+        return [makeMessage("m2", "2024-01-01T00:00:02.000Z")];
       },
     };
 
@@ -134,7 +134,6 @@ describe("process chat control runtime", () => {
       saveState: () => {
         saveCalls += 1;
       },
-      retryFailedOnModelSwitch: () => true,
       resumeChat: (chatJid, threadRootId) => {
         resumeCalls.push({ chatJid, threadRootId });
       },
@@ -160,7 +159,7 @@ describe("process chat control runtime", () => {
     expect(action).toBe("resumed");
     expect(cursorHistory).toEqual(["2024-01-01T00:00:01.000Z"]);
     expect(saveCalls).toBe(1);
-    expect(remainingReads).toBe(0);
+    expect(remainingReads).toBe(1);
     expect(sends).toEqual([
       {
         chatJid: "web:test",
@@ -215,7 +214,6 @@ describe("process chat control runtime", () => {
       updateAgentStatus: (_chatJid, status) => { statusUpdates.push(status); },
       broadcastEvent: (event, payload) => { broadcasts.push({ event, payload }); },
       saveState: () => {},
-      retryFailedOnModelSwitch: () => false,
       resumeChat: () => {},
     };
 
@@ -322,7 +320,6 @@ describe("process chat control runtime", () => {
         broadcasts.push({ event, payload });
       },
       saveState: () => {},
-      retryFailedOnModelSwitch: () => false,
       resumeChat: (chatJid, threadRootId) => {
         resumeCalls.push({ chatJid, threadRootId });
       },

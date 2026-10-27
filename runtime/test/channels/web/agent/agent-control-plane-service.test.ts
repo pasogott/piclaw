@@ -455,7 +455,7 @@ describe("WebAgentControlPlaneService", () => {
     });
   });
 
-  test("lists active runs and supports targeted abort, stale marker clear, and queue drain", async () => {
+  test("lists native runs and supports abort, terminal-display clearing and queue drain without editing old markers", async () => {
     initDatabase();
     const events: Array<{ type: string; data: unknown }> = [];
     const controlCalls: Array<{ chatJid: string; command: unknown }> = [];
@@ -485,10 +485,12 @@ describe("WebAgentControlPlaneService", () => {
         };
       },
     };
+    let currentStatus: Record<string, unknown> = { type: "thinking", turn_id: "turn-hung" };
     const service = createService({
       broadcastEvent: (type, data) => events.push({ type, data }),
       queuedFollowupLifecycle: queueLifecycle,
-      getAgentStatus: (chatJid) => chatJid === "web:hung" ? { type: "thinking", turn_id: "turn-hung" } : null,
+      getAgentStatus: (chatJid) => chatJid === "web:hung" ? currentStatus : null,
+      updateAgentStatus: (_chatJid, status) => { currentStatus = status; },
       agentPool: {
         setSessionBinder: () => {},
         listActiveChats: () => [{ chat_jid: "web:hung", agent_name: "hung", is_active: true }],
@@ -506,7 +508,8 @@ describe("WebAgentControlPlaneService", () => {
         chat_jid: "web:hung",
         is_active: true,
         queue_count: 2,
-        inflight: expect.objectContaining({ messageId: "msg-hung" }),
+        inflight: null,
+        preflight: null,
         status: expect.objectContaining({ turn_id: "turn-hung" }),
       })],
     }));
@@ -539,11 +542,11 @@ describe("WebAgentControlPlaneService", () => {
       status: "ok",
       chat_jid: "web:hung",
       cleared: true,
-      had_inflight: true,
+      had_inflight: false,
       had_preflight: false,
       had_status: true,
     });
-    expect(getInflightRuns().some((run) => run.chatJid === "web:hung")).toBe(false);
+    expect(getInflightRuns().some((run) => run.chatJid === "web:hung")).toBe(true);
     expect(events).toEqual(expect.arrayContaining([
       { type: "agent_followup_drained", data: { chat_jid: "web:hung", removed_count: 2 } },
     ]));

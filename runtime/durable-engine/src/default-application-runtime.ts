@@ -32,7 +32,7 @@ import { createReadToolDefinition, SettingsManager } from "../../src/durable-leg
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
 import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
-import { clearInflightMarker, getDb, getMessageByRowId, storeChatMetadata } from "../../src/db.js";
+import { getDb, getMessageByRowId, storeChatMetadata } from "../../src/db.js";
 import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 import { DATA_DIR, SESSIONS_DIR, WORKSPACE_DIR } from "../../src/core/config.js";
 import { retainModelFailureEvidence } from "./host-model-failure-evidence.js";
@@ -1256,8 +1256,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         try { reconcileOperationBudgetWork(root, operationId); }
         finally {
           publishTerminal(operationId);
-          const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
-          if (row) clearInflightMarker(row.chat_jid);
         }
         processControls!.onOperationSettled(operationId, processExit);
         return; // No Goal or queue continuation after a committed exit receipt.
@@ -1266,7 +1264,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       finally {
         publishTerminal(operationId);
         const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
-        if (row) { clearInflightMarker(row.chat_jid); if (goal) wakeGoalFollowups(row.chat_jid); drainPending(row.chat_jid); }
+        if (row) { if (goal) wakeGoalFollowups(row.chat_jid); drainPending(row.chat_jid); }
       }
     },
     onRuntime(value) { captureRuntime = value; },

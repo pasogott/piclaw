@@ -26,11 +26,20 @@ Removed:
 
 Slash recognition now uses the existing command parser directly. The explicitly retained legacy slash executor re-exports recognition for its current callers; native web parsing does not import that executor merely to recognise a command.
 
-Before #1674 closes, retire the remaining legacy restart draft/interruption helpers and their public wiring, review model-switch failed-run handling, and qualify the complete pending/reconnect/queue/cancellation path at the merged head. #1673 owns final runner/compaction retirement. #1691/#1692 own the subsequent schema/projection removals. Source deletion does not authorise live data cleanup, migration, deployment or restart.
+Legacy restart draft/interruption publication, failed-cursor retry/skip controls and their forwarding APIs are removed. Startup retains native restart handoffs and a read-only pending-message/queue scan; repeated wakes use one stable queue key, including attachment-only deferred input. Neither model changes nor login/card continuation actions rewind a cursor or consume historical failed markers. Live draft buffers remain transient; older stored draft payloads stay opaque and are not published as new assistant history.
+
+Status reads and `/agent/runs` do not derive activity from preflight/inflight markers. Historical response keys remain empty for compatibility. Stale-clear changes only terminal display state and rejects active native work; abort still uses the fenced native control. Native terminal settlement no longer clears legacy markers. The session-control tool no longer advertises `retry_failed`/`skip_failed`; old direct requests fail explicitly, while inspect/model/abort/wake/unblock remain supported.
+
+A native fault fixture commits the answer/terminal ledger, rejects the polling cursor write, then closes/reopens the disposable store and repeats startup wakeups. The same source/submission/task identities, answer, historical markers and provider-call count survive; only the polling cursor advances after confirmed observation. This is deterministic fault/reopen evidence, not a live-service restart or unclean-process-kill claim.
+
+#1673 owns final runner/compaction retirement. #1691/#1692 own subsequent schema/projection removals and residual historical JSON preservation. Source deletion does not authorise live data cleanup, migration, deployment or restart.
 
 ## Focused evidence
 
 - `native-web-only.test.ts`: missing dispatcher cannot access a legacy runner or write markers; historical failed markers cannot skip accepted input; pending wakeups retain one identity.
+- `native-web-recovery-retirement.test.ts`: startup/status/model/control paths cannot read or mutate legacy recovery authority; removed APIs are absent and draft buffers do not persist recovery payloads.
+- Existing native factory case `native-web-cursor-ack`: committed terminal publication survives a failed cursor write and real store reopen with repeated discovery, no provider replay or duplicate answer.
+- `web-channel-recovery-state.test.ts`: startup preserves historical drafts/markers byte-exact without manufacturing messages.
 - `process-chat-native-dispatch-import-boundary.test.ts`: native settlement/pending/failure/status paths never load retired helpers or publish legacy run markers.
 - `web-channel.test.ts`: surviving HTTP, cards, controls, queue and status contracts use explicit accepted-dispatch test ports; legacy runner calls are trapped in migrated execution cases.
 - `application-web.test.ts`: real native pool/channel, lost wait acknowledgement and deferred uncertain compaction.

@@ -42,8 +42,6 @@ export interface WebChannelPrototypeMembers extends WebChannelLike {
   handleFetch(req: Request, server?: Bun.Server<WebSocketSessionData>): Promise<Response | undefined>;
   handleRequest(req: Request): Promise<Response>;
   enqueueAgentMessage(request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult>;
-  recoverInflightRuns(): void;
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean;
   resumePendingChats(chatJid?: string): void;
   loadState(): void;
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void>;
@@ -329,34 +327,6 @@ export function installWebChannelPrototype(
       value: withRuntimePublicSurface((service, chatJid: string, threadRootId?: number | null): void => {
         service.resumeChat(chatJid, threadRootId);
       }),
-    },
-    skipFailedOnModelSwitch: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string): boolean => (
-        service.skipFailedOnModelSwitch(chatJid)
-      )),
-    },
-    retryFailedOnModelSwitch: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string): boolean => (
-        service.retryFailedOnModelSwitch(chatJid)
-      )),
-    },
-    recoverInflightRuns: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service): void => {
-        service.recoverInflightRuns();
-      }),
-    },
-    recoverStaleInflightRun: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean => (
-        service.recoverStaleInflightRun(chatJid, options)
-      )),
     },
     resumePendingChats: {
       configurable: true,

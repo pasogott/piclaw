@@ -2,26 +2,11 @@
  * channels/web/chat-run-control.ts – chat run control helpers (resume/cursor/failure handling).
  */
 
-import {
-  clearFailedRun,
-  getChatCursor,
-  getFailedRun,
-  getMessageThreadRootIdById,
-  setChatCursor,
-} from "../../../db.js";
+import { getMessageThreadRootIdById } from "../../../db.js";
 
-interface FailedRunLike {
-  prevTs: string;
-  failedTs: string;
-}
-
-/** Persistence contract used by chat run control helpers. */
+/** Persistence used for thread lineage; execution state belongs to native tasks. */
 export interface ChatRunControlStore {
   getThreadRootId(chatJid: string, messageId: string): number | null;
-  getFailedRun(chatJid: string): FailedRunLike | undefined;
-  getChatCursor(chatJid: string): string;
-  setChatCursor(chatJid: string, ts: string): void;
-  clearFailedRun(chatJid: string): void;
 }
 
 /** Runtime callbacks required to resume a queued chat run. */
@@ -31,13 +16,7 @@ export interface ResumeChatContext {
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void>;
 }
 
-const defaultStore: ChatRunControlStore = {
-  getThreadRootId: getMessageThreadRootIdById,
-  getFailedRun,
-  getChatCursor,
-  setChatCursor,
-  clearFailedRun,
-};
+const defaultStore: ChatRunControlStore = { getThreadRootId: getMessageThreadRootIdById };
 
 /** Resolve a persisted thread root id for a chat/message pair. */
 export function getThreadRootId(
@@ -80,36 +59,4 @@ export function resumeChat(
   ctx.enqueue(async () => {
     await ctx.processChat(chatJid, ctx.defaultAgentId, threadRootId ?? undefined);
   }, key, `chat:${chatJid}`);
-}
-
-/** Skip an unresolved failed run and advance the cursor past it. */
-export function skipFailedOnModelSwitch(
-  chatJid: string,
-  store: ChatRunControlStore = defaultStore
-): boolean {
-  const failed = store.getFailedRun(chatJid);
-  if (!failed) return false;
-
-  const current = store.getChatCursor(chatJid);
-  if (!current || current < failed.failedTs) {
-    store.setChatCursor(chatJid, failed.failedTs);
-  }
-  store.clearFailedRun(chatJid);
-  return true;
-}
-
-/** Re-enable replay of an unresolved failed run after a model switch. */
-export function retryFailedOnModelSwitch(
-  chatJid: string,
-  store: ChatRunControlStore = defaultStore
-): boolean {
-  const failed = store.getFailedRun(chatJid);
-  if (!failed) return false;
-
-  const current = store.getChatCursor(chatJid);
-  if (!current || current > failed.prevTs) {
-    store.setChatCursor(chatJid, failed.prevTs);
-  }
-  store.clearFailedRun(chatJid);
-  return true;
 }

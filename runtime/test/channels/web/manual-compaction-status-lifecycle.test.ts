@@ -17,8 +17,7 @@ for (const terminal of ['success', 'error', 'cancelled'] as const) {
     const result = gate<any>();
     const publish = gate<void>();
     const publishing = gate<void>();
-    const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) },
-      { getInflightRuns: () => [], getPreflightRuns: () => [] });
+    const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
     let physicallyCompacting = false;
     let abortCalls = 0;
     const channel = {

@@ -1,564 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import {
-  buildInterruptedTurnOutcomeMarker,
-  recoverInflightRuns,
-  recoverStaleInflightRun,
-  resumePendingChats,
-  type WebRecoveryContext,
-  type WebRecoveryStore,
-} from "../../../src/channels/web/runtime/recovery.js";
+import { resumePendingChats, type WebPendingResumeContext, type WebPendingResumeStore } from "../../../src/channels/web/runtime/recovery.js";
 import { AgentQueue } from "../../../src/queue.js";
 import { waitFor } from "../../helpers.js";
 
 describe("web recovery helpers", () => {
-  test("native recovery never reads or publishes legacy interruption/draft state", () => {
-    const ctx: WebRecoveryContext = { isNativeRuntime: () => true, assistantName: "Pi", defaultAgentId: "default",
-      enqueue() { throw Error("Legacy enqueue"); }, async processChat() { throw Error("Legacy process"); } };
-    const store = new Proxy({} as WebRecoveryStore, { get() { throw Error("Legacy recovery store accessed"); } });
-    expect(() => recoverInflightRuns(ctx, store)).not.toThrow();
-    expect(recoverStaleInflightRun(ctx, "web:native", {}, store)).toBe(false);
-  });
-
-  test("buildInterruptedTurnOutcomeMarker uses cause-specific detail text", () => {
-    expect(buildInterruptedTurnOutcomeMarker("service_restart")).toMatchObject({
-      type: "turn_outcome_marker",
-      kind: "interrupted",
-      title: "Turn interrupted",
-      detail: "The service restarted before the reply finished.",
-      cause: "service_restart",
-    });
-
-    expect(buildInterruptedTurnOutcomeMarker("runtime_stale")).toMatchObject({
-      type: "turn_outcome_marker",
-      kind: "interrupted",
-      title: "Turn interrupted",
-      detail: "The previous run stalled before the reply finished.",
-      cause: "runtime_stale",
-    });
-  });
-
-  test("recoverInflightRuns clears stale preflight markers before handling inflight runs", () => {
-    const clearedPreflight: string[] = [];
-    const clearedInflight: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:05:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [{ chatJid: "web:preflight", prevTs: "t0", messageId: "m0", startedAt: "2026-01-01T00:03:00Z" }],
-      getInflightRuns: () => [{ chatJid: "web:inflight", prevTs: "t1", messageId: "m1", startedAt: "2026-01-01T00:04:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearChatPreflight: (chatJid) => { clearedPreflight.push(chatJid); },
-      clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(clearedPreflight).toEqual(["web:preflight"]);
-    expect(clearedInflight).toEqual(["web:inflight"]);
-  });
-
-  test("recoverInflightRuns uses fixed stale age and backoff for active recovery compactions", () => {
-    const clearedCompactions: string[] = [];
-    const clearedInflight: string[] = [];
-    const backoffs: Array<{ chatJid: string; failureCount: number; lastFailedAt: string; backoffUntil: string; lastErrorMessage?: string | null }> = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:10:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [],
-      getActiveChatCompactions: () => [{ chatJid: "web:compact", startedAt: "2026-01-01T00:00:00Z", reason: "recovery" }],
-      getInflightRuns: () => clearedInflight.length ? [] : [{ chatJid: "web:compact", prevTs: "t0", messageId: "m0", startedAt: "2026-01-01T00:01:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearChatCompactionActive: (chatJid) => { clearedCompactions.push(chatJid); },
-      getChatCompactionBackoff: () => ({ failureCount: 1 }),
-      setChatCompactionBackoff: (chatJid, backoff) => { backoffs.push({ chatJid, ...backoff }); },
-      clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(clearedCompactions).toEqual(["web:compact"]);
-    expect(clearedInflight).toEqual(["web:compact"]);
-    expect(backoffs).toEqual([{
-      chatJid: "web:compact",
-      failureCount: 2,
-      lastFailedAt: "2026-01-01T00:10:00.000Z",
-      backoffUntil: "2026-01-01T04:10:00.000Z",
-      lastErrorMessage: "Stale recovery compaction recovered after 600s; clearing active turn and entering compaction backoff",
-    }]);
-  });
-
-  test("recoverInflightRuns advances past pending manual compact when stale manual compaction is quarantined", () => {
-    const quarantined: Array<{ chatJid: string; reason: string; backoffUntil?: string | null }> = [];
-    const backoffs: string[] = [];
-    const clearedInflight: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:10:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [],
-      getActiveChatCompactions: () => [{ chatJid: "web:compact", startedAt: "2026-01-01T00:00:00Z", reason: "manual" }],
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      getChatCompactionBackoff: () => ({ failureCount: 1 }),
-      setChatCompactionBackoff: (chatJid) => { backoffs.push(chatJid); },
-      quarantinePendingManualCompactCommands: (chatJid, options) => {
-        quarantined.push({ chatJid, reason: options.reason, backoffUntil: options.backoffUntil });
-        return {
-          chatJid,
-          prevTs: "t0",
-          cursorTs: "t-compact",
-          skippedCount: 2,
-          lastMessageRowId: 42,
-          lastMessageId: "msg-compact-2",
-          reason: options.reason,
-        };
-      },
-      clearChatCompactionActive: () => { throw new Error("should be handled by quarantinePendingManualCompactCommands"); },
-      clearInflightMarker: (chatJid) => { clearedInflight.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(quarantined).toHaveLength(1);
-    expect(quarantined[0].chatJid).toBe("web:compact");
-    expect(quarantined[0].reason).toContain("Stale manual compaction recovered after 600s");
-    expect(quarantined[0].backoffUntil).toBe("2026-01-01T04:10:00.000Z");
-    expect(backoffs).toEqual([]);
-    expect(clearedInflight).toEqual([]);
-  });
-
-  test("recoverInflightRuns triggers backoff after repeated fresh compaction failures", () => {
-    const clearedCompactions: string[] = [];
-    const backoffs: Array<{ chatJid: string; failureCount: number; backoffUntil: string }> = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      // Compaction marker is only 30s old — well under the 4-minute stale threshold
-      now: () => new Date("2026-01-01T00:00:30Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [],
-      // Compaction started 30s ago (fresh, not stale)
-      getActiveChatCompactions: () => [{ chatJid: "web:loop", startedAt: "2026-01-01T00:00:00Z", reason: "threshold" }],
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearChatCompactionActive: (chatJid) => { clearedCompactions.push(chatJid); },
-      // Simulate 2 prior failures — this will be the 3rd, which should trigger backoff
-      getChatCompactionBackoff: () => ({ chatJid: "web:loop", failureCount: 2, lastFailedAt: "2026-01-01T00:00:00Z", backoffUntil: "2026-01-01T00:00:00Z", lastErrorMessage: null }),
-      setChatCompactionBackoff: (chatJid, backoff) => { backoffs.push({ chatJid, failureCount: backoff.failureCount, backoffUntil: backoff.backoffUntil }); },
-      clearInflightMarker: () => {},
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(clearedCompactions).toEqual(["web:loop"]);
-    // After 3 failures, backoff should be set with a future timestamp
-    expect(backoffs.length).toBe(1);
-    expect(backoffs[0].failureCount).toBe(3);
-    expect(new Date(backoffs[0].backoffUntil).getTime()).toBeGreaterThan(new Date("2026-01-01T00:00:30Z").getTime());
-  });
-
-  test("recoverInflightRuns enters backoff for a fresh automatic threshold compaction", () => {
-    const backoffs: Array<{ chatJid: string; failureCount: number; backoffUntil: string; lastErrorMessage?: string | null }> = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:00:30Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [],
-      getActiveChatCompactions: () => [{ chatJid: "web:fresh", startedAt: "2026-01-01T00:00:00Z", reason: "threshold" }],
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearChatCompactionActive: () => {},
-      // First failure — no prior backoff. Automatic threshold compaction must
-      // still enter backoff immediately because the existing progress watchdog
-      // can restart the process before the stale-age threshold is reached.
-      getChatCompactionBackoff: () => null,
-      setChatCompactionBackoff: (_chatJid, backoff) => { backoffs.push({ chatJid: _chatJid, failureCount: backoff.failureCount, backoffUntil: backoff.backoffUntil, lastErrorMessage: backoff.lastErrorMessage }); },
-      clearInflightMarker: () => {},
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(backoffs.length).toBe(1);
-    expect(backoffs[0].failureCount).toBe(1);
-    expect(new Date(backoffs[0].backoffUntil).getTime()).toBeGreaterThan(new Date("2026-01-01T00:00:30Z").getTime());
-    expect(backoffs[0].lastErrorMessage).toContain("Interrupted threshold compaction recovered after 30s");
-  });
-
-  test("recoverInflightRuns quarantines stale preflight markers instead of requeueing compaction", () => {
-    const clearedPreflight: string[] = [];
-    const quarantined: Array<{ chatJid: string; messageId: string; reason: string; backoffUntil?: string | null }> = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:10:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getPreflightRuns: () => [{ chatJid: "web:preflight", prevTs: "t0", messageId: "m0", startedAt: "2026-01-01T00:00:00Z" }],
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearChatPreflight: (chatJid) => { clearedPreflight.push(chatJid); },
-      quarantineStalePreflightRun: (preflight, options) => {
-        quarantined.push({ chatJid: preflight.chatJid, messageId: preflight.messageId, reason: options.reason, backoffUntil: options.backoffUntil });
-        return {
-          chatJid: preflight.chatJid,
-          prevTs: preflight.prevTs,
-          failedTs: "2026-01-01T00:01:00Z",
-          messageId: preflight.messageId,
-          threadRootId: 1,
-          createdAt: options.createdAt,
-          reason: options.reason,
-        };
-      },
-      clearInflightMarker: () => {},
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(clearedPreflight).toEqual([]);
-    expect(quarantined).toHaveLength(1);
-    expect(quarantined[0].chatJid).toBe("web:preflight");
-    expect(quarantined[0].messageId).toBe("m0");
-    expect(quarantined[0].reason).toContain("Stale preflight recovered after 600s");
-    expect(quarantined[0].backoffUntil).toBe("2026-01-01T04:10:00.000Z");
-  });
-
-  test("recoverInflightRuns preserves terminal/partial output and marks no-output runs as interrupted without replay", async () => {
-    const now = new Date("2026-01-01T00:05:00Z");
-    const inflights = [
-      { chatJid: "web:1", prevTs: "t1", messageId: "m1", startedAt: "2026-01-01T00:04:00Z" },
-      { chatJid: "web:2", prevTs: "t2", messageId: "m2", startedAt: "2026-01-01T00:04:15Z" },
-      { chatJid: "web:3", prevTs: "t3", messageId: "m3", startedAt: "2026-01-01T00:04:30Z" },
-    ];
-
-    const cleared: string[] = [];
-    const enqueued: Array<{ key: string; laneKey?: string; task: () => Promise<void> }> = [];
-    const processed: Array<{ chatJid: string; agentId: string }> = [];
-    const replyChecks: Array<{ chatJid: string; afterTs: string }> = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (task, key, laneKey) => {
-        enqueued.push({ task, key, laneKey });
-      },
-      processChat: async (chatJid, agentId) => {
-        processed.push({ chatJid, agentId });
-      },
-      now: () => now.getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => inflights,
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: (chatJid, afterTs) => {
-        replyChecks.push({ chatJid, afterTs });
-        if (chatJid === "web:1") return "terminal";
-        if (chatJid === "web:2") return "partial";
-        return "none";
-      },
-      clearInflightMarker: (chatJid) => {
-        cleared.push(chatJid);
-      },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(replyChecks).toEqual([
-      { chatJid: "web:1", afterTs: "2026-01-01T00:04:00Z" },
-      { chatJid: "web:2", afterTs: "2026-01-01T00:04:15Z" },
-      { chatJid: "web:3", afterTs: "2026-01-01T00:04:30Z" },
-    ]);
-    expect(cleared).toEqual(["web:1", "web:2", "web:3"]);
-    expect(enqueued.map(({ key, laneKey }) => ({ key, laneKey }))).toEqual([]);
-  });
-
-  test("recoverInflightRuns persists a buffered draft instead of an interrupted marker when restart recovery has visible text", () => {
-    const cleared: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: async () => {},
-      processChat: async () => {},
-      getDraftRecovery: (chatJid) => chatJid === "web:draft"
-        ? { turnId: "turn-draft", text: "Recovered draft after restart", totalLines: 1, updatedAt: Date.now() }
-        : null,
-      clearDraftRecovery: (chatJid) => {
-        cleared.push(chatJid);
-      },
-      now: () => new Date("2026-01-01T00:05:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:draft", prevTs: "t0", messageId: "m1", startedAt: "2026-01-01T00:04:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(cleared).toEqual(["web:draft"]);
-  });
-
-  test("recoverInflightRuns clears stale inflight markers without replay", () => {
-    const staleStartedAt = "2026-01-01T00:00:00Z";
-    const now = new Date("2026-01-01T01:00:00Z").getTime();
-
-    const inflights = [
-      { chatJid: "web:stale", prevTs: "t0", messageId: "m1", startedAt: staleStartedAt },
-    ];
-
-    const cleared: string[] = [];
-    const enqueued: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (_task, key) => { enqueued.push(key); },
-      processChat: async () => {},
-      now: () => now,
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => inflights,
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(cleared).toEqual(["web:stale"]);
-    expect(enqueued).toEqual([]);
-  });
-
-  test("recoverStaleInflightRun clears and marks an old no-output inflight chat without replay", () => {
-    const enqueued: string[] = [];
-    const cleared: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (_task, key) => { enqueued.push(key); },
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:01:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:ux", prevTs: "t-prev", messageId: "m1", startedAt: "2026-01-01T00:00:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    const recovered = recoverStaleInflightRun(ctx, "web:ux", { hasActiveStatus: false, minAgeMs: 15_000 }, store);
-    expect(recovered).toBe(true);
-    expect(cleared).toEqual(["web:ux"]);
-    expect(enqueued).toEqual([]);
-  });
-
-  test("recoverStaleInflightRun does nothing while a live status exists or the grace period has not elapsed", () => {
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: () => {},
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:00:10Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:ux", prevTs: "t-prev", messageId: "m1", startedAt: "2026-01-01T00:00:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => { throw new Error("should not clear"); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    expect(recoverStaleInflightRun(ctx, "web:ux", { hasActiveStatus: true, minAgeMs: 15_000 }, store)).toBe(false);
-    expect(recoverStaleInflightRun(ctx, "web:ux", { hasActiveStatus: false, minAgeMs: 15_000 }, store)).toBe(false);
-  });
-
-  test("recoverStaleInflightRun also clears interrupted branch chats without replay", () => {
-    const enqueued: string[] = [];
-    const cleared: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (_task, key) => { enqueued.push(key); },
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:01:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:default:branch:abc123", prevTs: "t-prev", messageId: "m1", startedAt: "2026-01-01T00:00:00Z" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    const recovered = recoverStaleInflightRun(ctx, "web:default:branch:abc123", { hasActiveStatus: false, minAgeMs: 15_000 }, store);
-    expect(recovered).toBe(true);
-    expect(cleared).toEqual(["web:default:branch:abc123"]);
-    expect(enqueued).toEqual([]);
-  });
-
-  test("recoverInflightRuns clears root and branch interrupted runs without replay", () => {
-    const enqueued: string[] = [];
-    const cleared: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (_task, key) => {
-        enqueued.push(key);
-      },
-      processChat: async () => {},
-      now: () => new Date("2026-01-01T00:05:00Z").getTime(),
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [
-        { chatJid: "web:default", prevTs: "t1", messageId: "m1", startedAt: "2026-01-01T00:04:00Z" },
-        { chatJid: "web:default:branch:abc123", prevTs: "t2", messageId: "m2", startedAt: "2026-01-01T00:04:10Z" },
-      ],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: (chatJid) => { cleared.push(chatJid); },
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-
-    expect(enqueued).toEqual([]);
-    expect(cleared).toEqual(["web:default", "web:default:branch:abc123"]);
-  });
-
-  test("recoverInflightRuns stops when transaction fails", () => {
-    const enqueued: string[] = [];
-
-    const ctx: WebRecoveryContext = {
-      assistantName: "Pi",
-      defaultAgentId: "default",
-      enqueue: (_task, key) => {
-        enqueued.push(key);
-      },
-      processChat: async () => {},
-    };
-
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:1", prevTs: "t1", messageId: "m1", startedAt: "s1" }],
-      transaction: () => {
-        throw new Error("boom");
-      },
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
-      getAllChatCursors: () => ({}),
-      getKnownChatJids: () => [],
-      getDeferredQueuedFollowups: () => [],
-      getMessagesSince: () => [],
-    };
-
-    recoverInflightRuns(ctx, store);
-    expect(enqueued).toHaveLength(0);
-  });
 
   test("resumePendingChats enqueues only chats with pending messages", async () => {
     const enqueued: Array<{ key: string; task: () => Promise<void> }> = [];
     const processed: Array<{ chatJid: string; agentId: string }> = [];
 
-    const ctx: WebRecoveryContext = {
+    const ctx: WebPendingResumeContext = {
       assistantName: "Pi",
       defaultAgentId: "default",
       enqueue: (task, key) => {
@@ -569,11 +19,7 @@ describe("web recovery helpers", () => {
       },
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({ "web:1": "t1", "web:2": "t2" }),
       getKnownChatJids: () => ["web:1", "web:2"],
       getDeferredQueuedFollowups: () => [],
@@ -591,7 +37,7 @@ describe("web recovery helpers", () => {
     const enqueued: Array<{ key: string; task: () => Promise<void> }> = [];
     const calls: Array<{ chatJid: string; since: string }> = [];
 
-    const ctx: WebRecoveryContext = {
+    const ctx: WebPendingResumeContext = {
       assistantName: "Pi",
       defaultAgentId: "default",
       enqueue: (task, key) => {
@@ -600,11 +46,7 @@ describe("web recovery helpers", () => {
       processChat: async () => {},
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({ "web:known": "t1" }),
       getKnownChatJids: () => ["web:known", "web:new"],
       getDeferredQueuedFollowups: () => [],
@@ -624,7 +66,7 @@ describe("web recovery helpers", () => {
     const enqueued: Array<{ key: string; task: () => Promise<void> }> = [];
     const calls: Array<{ chatJid: string; since: string }> = [];
 
-    const ctx: WebRecoveryContext = {
+    const ctx: WebPendingResumeContext = {
       assistantName: "Pi",
       defaultAgentId: "default",
       enqueue: (task, key) => {
@@ -633,11 +75,7 @@ describe("web recovery helpers", () => {
       processChat: async () => {},
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({
         "web:default": "t-root",
         "web:default:branch:research": "t-branch",
@@ -662,7 +100,7 @@ describe("web recovery helpers", () => {
   test("resumePendingChats enqueues deferred-only queued followups", async () => {
     const enqueued: Array<{ key: string; task: () => Promise<void> }> = [];
 
-    const ctx: WebRecoveryContext = {
+    const ctx: WebPendingResumeContext = {
       assistantName: "Pi",
       defaultAgentId: "default",
       enqueue: (task, key) => {
@@ -671,11 +109,7 @@ describe("web recovery helpers", () => {
       processChat: async () => {},
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({ "web:queue-only": "" }),
       getKnownChatJids: () => ["web:queue-only"],
       getDeferredQueuedFollowups: () => [{ rowId: -1, queuedContent: "queued after restart", threadId: null, queuedAt: "2026-01-01T00:00:00.000Z" }],
@@ -687,7 +121,7 @@ describe("web recovery helpers", () => {
     expect(enqueued.map((item) => item.key)).toEqual(["resume:web:queue-only"]);
   });
 
-  test("inflight recovery and resume_pending collapse to one queued replay per chat", async () => {
+  test("repeated resume_pending wakeups collapse to one queued observation per chat", async () => {
     const queue = new AgentQueue();
     const processed: string[] = [];
     let resolveRun: (() => void) | null = null;
@@ -695,7 +129,7 @@ describe("web recovery helpers", () => {
       resolveRun = resolve;
     });
 
-    const ctx: WebRecoveryContext = {
+    const ctx: WebPendingResumeContext = {
       assistantName: "Pi",
       defaultAgentId: "default",
       enqueue: (task, key) => {
@@ -707,18 +141,14 @@ describe("web recovery helpers", () => {
       },
     };
 
-    const store: WebRecoveryStore = {
-      getInflightRuns: () => [{ chatJid: "web:1", prevTs: "t0", messageId: "m1", startedAt: "s1" }],
-      transaction: (run) => run(),
-      getAgentReplyStateAfter: () => "none",
-      clearInflightMarker: () => {},
+    const store: WebPendingResumeStore = {
       getAllChatCursors: () => ({ "web:1": "t0" }),
       getKnownChatJids: () => ["web:1"],
       getDeferredQueuedFollowups: () => [],
       getMessagesSince: () => [{ id: "m1" }],
     };
 
-    recoverInflightRuns(ctx, store);
+    resumePendingChats(ctx, undefined, store);
     resumePendingChats(ctx, undefined, store);
     await waitFor(() => processed.length === 1, 250, 1);
 
@@ -727,4 +157,13 @@ describe("web recovery helpers", () => {
     resolveRun?.();
     await queue.shutdown(50);
   });
+});
+
+test("pending discovery wakes attachment-only deferred input without interpreting its payload", () => {
+  const keys: string[] = [];
+  const context: WebPendingResumeContext = { assistantName: "Pi", defaultAgentId: "default", enqueue(_task,key){keys.push(key);}, async processChat(){} };
+  const store: WebPendingResumeStore = { getAllChatCursors:()=>({}),getKnownChatJids:()=>["web:attachments"],getMessagesSince:()=>[],
+    getDeferredQueuedFollowups:()=>[{rowId:-1,queuedContent:"",queuedAt:"2026-01-01T00:00:00.000Z",mediaIds:[99]}] };
+  resumePendingChats(context,undefined,store);
+  expect(keys).toEqual(["resume:web:attachments"]);
 });

@@ -7,8 +7,9 @@
  *
  * Persisted agentStatuses are treated as transient UI hints, not durable
  * truth. On startup, stale previous-process entries are discarded and any
- * needed recovery status is re-derived from durable inflight markers in
- * `chat_cursors`.
+ * live status is derived from native operation/task observations. Historical
+ * draftRecoveries are retained as opaque stored data until projection retirement;
+ * they are never published as new assistant history.
  *
  * Consumers: channels/web.ts reads/writes state during agent run
  *            orchestration and SSE broadcasting.
@@ -104,15 +105,4 @@ export class WebChannelState {
       : null;
   }
 
-  setDraftRecovery(chatJid: string, entry: PersistedDraftRecoveryEntry | null): void {
-    if (!entry) {
-      delete this.draftRecoveries[chatJid];
-      return;
-    }
-    this.draftRecoveries[chatJid] = entry;
-  }
-
-  getDraftRecovery(chatJid: string): PersistedDraftRecoveryEntry | null {
-    return this.draftRecoveries[chatJid] ?? null;
-  }
 }

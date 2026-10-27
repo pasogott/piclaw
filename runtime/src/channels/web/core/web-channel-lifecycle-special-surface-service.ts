@@ -28,7 +28,6 @@ export interface WebChannelLifecycleSpecialSurfaceChannel {
   interactionBroadcaster?: WebAdaptiveCardSidePromptChannelLike["interactionBroadcaster"];
   sendMessage?: WebAdaptiveCardSidePromptChannelLike["sendMessage"];
   broadcastEvent?: WebAdaptiveCardSidePromptChannelLike["broadcastEvent"];
-  skipFailedOnModelSwitch?: WebAdaptiveCardSidePromptChannelLike["skipFailedOnModelSwitch"];
 }
 
 export interface WebChannelLifecycleSpecialSurfaceServiceCarrier {

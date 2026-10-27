@@ -84,7 +84,6 @@ export interface DeferredControlCommandRuntime {
   getAgentStatus?(chatJid: string): Record<string, unknown> | null;
   broadcastEvent(eventType: string, data: unknown): void;
   saveState?(): void;
-  retryFailedOnModelSwitch(chatJid: string): boolean;
   resumeChat(chatJid: string, threadRootId?: number | null): void;
 }
 
@@ -208,17 +207,6 @@ export async function resolveAndBroadcastModelStateForCommand(
     supports_thinking: state.supportsThinking,
   });
   return state;
-}
-
-export function resumeFailedRunAfterModelSwitch(
-  channel: Pick<DeferredControlCommandRuntime, "retryFailedOnModelSwitch" | "resumeChat">,
-  chatJid: string,
-  command: ModelControlCommand,
-): boolean {
-  if (command.type !== "model" && command.type !== "cycle_model") return false;
-  if (!channel.retryFailedOnModelSwitch(chatJid)) return false;
-  channel.resumeChat(chatJid);
-  return true;
 }
 
 export async function executeDeferredControlCommand(
@@ -355,12 +343,6 @@ export async function executeDeferredControlCommand(
   }
   cursorStore.setChatCursor(chatJid, message.timestamp);
   channel.saveState?.();
-
-  if (result.status === "success" && isModelControlCommand(command)) {
-    if (resumeFailedRunAfterModelSwitch(channel, chatJid, command)) {
-      return "resumed";
-    }
-  }
 
   const cursorNow = cursorStore.getChatCursor(chatJid);
   const remainingPersisted = cursorStore.getMessagesSince(chatJid, cursorNow, assistantName);
