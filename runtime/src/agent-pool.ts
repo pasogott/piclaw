@@ -2,7 +2,7 @@
  * Host facade for admitted native dispatch, models/auth, metadata and resources.
  * SDK tasks/submissions and host accepted-source/terminal records own execution.
  * Direct runAgent is a rejection-only boundary, never a second prompt loop.
- * Explicit legacy resource/control composition and migration readers remain
+ * Explicit legacy resource composition and migration readers remain
  * separate until their callers retire; ordinary startup selects native ports.
  */
 
@@ -35,7 +35,6 @@ import {
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
-import type { SessionRotationResult } from "./session-rotation.js";
 import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
@@ -571,24 +570,6 @@ export class AgentPool {
     await this.sessionManager.recreate(chatJid);
   }
 
-  async emergencyRotateSession(chatJid: string, emergencyReason: string): Promise<SessionRotationResult> {
-    const runtime = await this.getOrCreateRuntime(chatJid);
-    const { rotateSession } = await import("./session-rotation.js");
-    const result = await rotateSession(runtime.session, runtime, {
-      reason: "automatic",
-      skipCompaction: true,
-      emergencyReason,
-      chatJid,
-    });
-    if (result.status === "success") {
-      const { clearCompactionFailureBackoff, resetCompactionSuccessCount } = await import("./agent-pool/compaction.js");
-      clearCompactionFailureBackoff(chatJid);
-      resetCompactionSuccessCount(chatJid);
-      await this.sessionManager.refreshRuntime(chatJid, runtime);
-    }
-    return result;
-  }
-
   hasProviderModels(provider: string): boolean {
     return this.runtimeFacade.hasProviderModels(provider);
   }
@@ -732,14 +713,13 @@ export class AgentPool {
     return this.branchManager.getAgentHandleForChat(chatJid);
   }
 
-  /** Execute a raw slash command in the AgentSession (extension commands). */
+  /** Dispatch host slash commands through the admitted native command owner. */
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
     if (this.hostCommandDispatch) {
       if (readAccessConfig().mode !== "single-user") throw Error("Native slash commands require single-user execution");
       return this.hostCommandDispatch(chatJid, rawText);
     }
-    if (this.durableApplication) throw Error("Native slash command unavailable");
-    return this.runtimeFacade.applySlashCommand(chatJid, rawText);
+    throw Error("Native slash command unavailable");
   }
 
   getSshConfig(chatJid: string): SshConfig | null {

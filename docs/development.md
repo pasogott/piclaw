@@ -324,27 +324,17 @@ Relevant files:
 
 ### Recovery and resilience
 
-Blank-turn detection, compaction stall bounding, the recovery chip, and the held-failed-run retry/skip model are documented in [architecture.md](architecture.md) under "Per-chat turn lifecycle and failure model", "Recovery chip", "Blank turn detection", and "Compaction stall guard".
+Native SDK tasks/submissions, host accepted-source records and terminal settlement own recovery. Manual compaction/reset, model/auth controls and read-only history use captured native ports. Legacy prompt loops, compact-then-retry, session-idle waiting, JSONL rotation and control/slash prompt dispatch are retired.
 
-Relevant files:
-- `runtime/src/agent-pool/blank-turn-detection.ts`
-- `runtime/src/agent-pool/prompt-utils.ts` — `waitForSessionIdle`, session idle defaults
-- `runtime/src/agent-pool/automatic-recovery.ts` — auto-recovery classification / retry policy
-- `runtime/src/channels/web/handlers/agent.ts` — web turn finalization, held-failure behavior, retry/skip resolution points
-- `runtime/src/channels/web/runtime/chat-run-control.ts` — explicit retry/skip cursor helpers
-- `runtime/src/db/chat-cursors.ts` — `beginChatRun`, inflight rollback, failed-run storage, rollback-with-error
-- `runtime/src/extensions/smart-compaction.ts` — working-indicator UI hooks
+Contracts and focused evidence:
+- [Native prompt-owner retirement](development/native-prompt-retirement.md)
+- [Native web execution](development/native-web-execution.md)
+- [Native background operations](development/native-background-operations.md)
+- `runtime/test/agent-pool/manual-control-retirement.test.ts`
+- `runtime/test/agent-pool/startup-session-import-boundary.test.ts`
+- `qualification/pi-durable-130/compact.test.ts` and `idle-model.test.ts`
 
-Focused regression tests:
-
-```bash
-bun test \
-  runtime/test/db/chat-cursors.test.ts \
-  runtime/test/channels/web/runtime/chat-run-control.test.ts \
-  runtime/test/channels/web/recovery.test.ts \
-  runtime/test/channels/web/web-channel-recovery-state.test.ts \
-  runtime/test/channels/web/web-channel.test.ts
-```
+Run explicitly selected files through `runtime/scripts/local-test-priority.ts`; use disposable stores and synthetic providers. Old cursor markers, JSONL records and receipts remain historical data, never native execution authority.
 
 ## Layout
 

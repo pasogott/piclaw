@@ -404,8 +404,6 @@ For the packaged Azure managed-identity/static-key path and its additional token
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_MAX_INPUT_CHARS` | `12000` | Max sampled tool-output characters sent to semantic summarizer |
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_MAX_TOKENS` | `320` | Max generated semantic summary tokens |
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_TIMEOUT_MS` | `12000` | Timeout for semantic summary generation before preview fallback |
-| `PICLAW_SESSION_IDLE_MAX_WAIT_MS` | `10000` | Max ms to wait for session idle before sending a turn response |
-| `PICLAW_SESSION_IDLE_COMPACTION_MAX_WAIT_MS` | `300000` | Max ms to wait for idle when a compaction is in progress |
 | `PICLAW_MAIN_SESSION_IDLE_TTL_MS` | `180000` (3 min) | Idle TTL for the main interactive session; `PICLAW_SESSION_IDLE_TTL_MS` overrides the fallback when set |
 | `PICLAW_SIDE_SESSION_IDLE_TTL_MS` | `60000` (1 min) | Idle TTL for side/background sessions; `PICLAW_SESSION_IDLE_TTL_MS` overrides the fallback when set |
 | `PICLAW_SESSION_IDLE_TTL_MS` | _(empty)_ | Shared idle TTL override for main and side sessions when their specific variables are unset |
@@ -420,10 +418,9 @@ Notes:
 - Tool output retention defaults to **30 days** and is capped at 30 days. `PICLAW_TOOL_OUTPUT_RETENTION_MS` overrides the legacy `PICLAW_TOOL_OUTPUT_RETENTION_DAYS`.
 - Tool-result compaction supports both a global gate (`PICLAW_TOOL_RESULT_COMPACTION_ENABLED`) and per-tool allowlisting (`PICLAW_TOOL_RESULT_COMPACTION_TOOLS`).
 - Semantic summaries are enabled by default for compacted tool results; if generation fails or times out (`PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_TIMEOUT_MS`), Piclaw falls back to preview-based summaries.
-- Session idle timeouts are configurable: `PICLAW_SESSION_IDLE_MAX_WAIT_MS` controls interactive turn flushing; `PICLAW_SESSION_IDLE_COMPACTION_MAX_WAIT_MS` (default 5 min) allows extra wait time during compaction so the agent does not cut off mid-summarisation.
 - Background and scheduled turns use `PICLAW_BACKGROUND_AGENT_TIMEOUT` when set; otherwise they fall back to `PICLAW_AGENT_TIMEOUT`.
 - On `systemd --user` installs, keep `PICLAW_WORKSPACE`, `PICLAW_STORE`, and `PICLAW_DATA` stable across restarts. Startup recovery relies on the persisted SQLite state plus writable IPC files under `PICLAW_DATA/ipc/tasks`.
-- Session auto-rotation defaults to `32 MB`. Persisted sessions can hydrate to much larger in-memory footprints than their on-disk JSONL size suggests.
+- Native sessions use SQLite context maintenance. Legacy JSONL rotation and session idle-wait settings have no native execution effect; retained historical file settings do not enable rotation.
 - Warm-session pressure mode defaults to **384 MB RSS** before clamping the main-session cache. Set `PICLAW_MAIN_SESSION_PRESSURE_RSS_BYTES` to override the threshold.
 - In pressure mode, the main-session pool clamps to `PICLAW_MAIN_SESSION_PRESSURE_POOL_MAX_SIZE` (default `1`) and uses the shorter `PICLAW_MAIN_SESSION_PRESSURE_IDLE_TTL_MS` (default `60000`).
 - Oversized persisted `toolResult` payloads are sanitized before session resume and at append-time so inline image/blob payloads do not keep re-accumulating inside session files.

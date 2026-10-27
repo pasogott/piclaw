@@ -5,7 +5,6 @@ import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { parseModelFailure } from './host-model-failure.js';
 import { assertAddonBackgroundRecoveryOwner } from './host-addon-background.js';
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
-import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
 import { markAddonOperationInputCommitted,readAddonOperationInputSequence } from '../../src/db/addon-operations.js';
 import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
@@ -45,6 +44,13 @@ import { createDurableQueuedSteering } from "../../src/agent-pool/durable-queued
 import { storeWebMessage } from "../../src/channels/web/messaging/message-store.js";
 import { createApplicationHostInput } from "./host-application-input.js";
 import { registerNativeBranchControlGuard } from "../../src/db/native-routing-policy.js";
+
+/** Format a timeout in a compact human-readable form. */
+function formatTimeoutDuration(timeoutMs: number): string {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return `${timeoutMs}ms`;
+  if (timeoutMs % 1000 === 0) return `${Math.round(timeoutMs / 1000)}s`;
+  return `${(timeoutMs / 1000).toFixed(1)}s`;
+}
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Keep the full queue intent proof, plus a payload digest that remains verifiable

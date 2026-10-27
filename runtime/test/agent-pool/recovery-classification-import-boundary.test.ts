@@ -14,16 +14,6 @@ function staticImports(entry: string): string[] {
 
 const cases: Array<{ entry: string; expected: string; legacy: string }> = [
   {
-    entry: "agent-control/agent-control-helpers.ts",
-    expected: "../agent-pool/recovery-classification.js",
-    legacy: "../agent-pool/automatic-recovery.js",
-  },
-  {
-    entry: "agent-pool/context-pressure-retry.ts",
-    expected: "./recovery-classification.js",
-    legacy: "./automatic-recovery.js",
-  },
-  {
     entry: "channels/web/sse/agent-events.ts",
     expected: "../../../agent-pool/recovery-classification.js",
     legacy: "../../../agent-pool/automatic-recovery.js",

@@ -30,7 +30,7 @@ for (const mode of ["durable", "legacy"] as const) {
   test(`fresh-process ${mode} AgentPool construction enforces the local load boundary`, async () => {
     const root = mkdtempSync(resolve(tmpdir(), "durable-import-boundary-"));
     const fence=mode==='durable'
-      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-context|run-agent-attempt-finalization|run-agent-recovery-phase|automatic-recovery|compaction|operation-session-profile|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
+      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-context|run-agent-attempt-finalization|run-agent-recovery-phase|automatic-recovery|compaction|operation-session-profile|protected-recovery-handoff|legacy-authority-capture|context-pressure-retry|slash-command)|session-rotation|agent-control\/handlers\/(?:control|session|model|queue))\.(?:ts|js)$/
       : /\/agent-pool\/(?:session|session-factory)\.(?:ts|js)$/;
     const script = `
       import { plugin } from "bun";

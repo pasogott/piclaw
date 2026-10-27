@@ -1,4 +1,5 @@
-import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
+// Historical control-intent decoding only. This text is not an executable retry policy.
+const TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT = "Continue the current task from persisted state without repeating completed work.";
 import {
   isProtectedRecoveryHandoffReason,
   protectedRecoveryHandoffContentBlockFields,

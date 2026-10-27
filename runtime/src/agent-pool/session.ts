@@ -12,7 +12,6 @@ import { assertCurrentProviderSelection } from './retired-provider-selection.js'
  * Consumers:
  *   - agent-pool.ts calls createDefaultSession() to initialise or replace
  *     the agent session for a chat.
- *   - ensureSessionDir() is also used by agent-control/handlers/session.ts.
  */
 
 import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "fs";

@@ -8,14 +8,13 @@
 import { revokeAddonLocalAgent } from "../addons/local-context.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentSession, AgentSessionRuntime, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 
 import type { AgentControlCommand, AgentControlResult } from "../agent-control/index.js";
 import { getNativeCommandCatalogue } from "../agent-control/native-control-capabilities.js";
 import type { NativeProviderAuthContext } from "../agent-control/provider-auth-context.js";
 import type { DurableSessionPositionPort } from "./durable-runtime-adapter.js";
-import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
 import { getLatestTokenUsageModel } from "../db.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { getSessionThinkingPolicy } from './thinking-policy.js';
@@ -293,20 +292,15 @@ export interface AgentRuntimeFacadeOptions {
   getDurableSession?: (chatJid: string) => DurableSessionPositionPort | undefined;
   /** Compatibility input for isolated callers; application routing uses the backend lookup. */
   durableSessions?: ReadonlyMap<string, DurableSessionPositionPort>;
-  getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
   modelRegistry: ModelRegistry;
   modelRuntime: ModelRuntime;
   settingsManager?: SettingsManager;
   authPath: string;
-  clearAttachments: (chatJid: string) => void;
-  refreshRuntime: (chatJid: string, runtime: AgentSessionRuntime) => Promise<void>;
   listKnownChats?: () => Array<{ chat_jid: string; model: string | null }>;
   acquireCommandProtection?: (chatJid: string) => () => void;
   onProviderUsageRefresh?: (event: ProviderUsageRefreshEvent) => void;
   onWarn?: (message: string, details: Record<string, unknown>) => void;
   onError?: (message: string, details: Record<string, unknown>) => void;
-  applyControlCommandFn?: (runtime: AgentSessionRuntime, modelRegistry: ModelRegistry, command: AgentControlCommand) => Promise<AgentControlResult>;
-  executeSlashCommandFn?: (session: AgentSession, chatJid: string, rawText: string) => Promise<AgentControlResult>;
 }
 
 /**
@@ -464,11 +458,7 @@ export class AgentRuntimeFacade {
       return port;
     };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
-    const legacy = options.getOrCreateRuntime;
-    this.options = { ...options, getOrCreateRuntime: chat => {
-      if (options.getDurableSession !== undefined) return Promise.reject(new Error("Durable application does not construct legacy sessions"));
-      return legacy(chat);
-    } };
+    this.options = options;
   }
 
   private async nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): Promise<NativeProviderAuthContext> {
@@ -505,12 +495,12 @@ export class AgentRuntimeFacade {
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
-    if (this.options.getDurableSession !== undefined && ["queue", "queue_all", "steer"].includes(command.type)) {
+    if (["queue", "queue_all", "steer"].includes(command.type)) {
       return { status: "error", message: "Native queue commands require host input admission. No legacy session was opened." };
     }
     // Operator process controls must not enter the model/session authority path.
     // The host shutdown handler seals ingress and owns the bounded cleanup deadline.
-    if (this.options.getDurableSession && (command.type === "exit" || command.type === "restart")) {
+    if (command.type === "exit" || command.type === "restart") {
       requireSingleUserDirectExecution("Host process controls");
       requestGracefulShutdown(`User /${command.type} requested`);
       return { status: "success", message: command.type === "restart"
@@ -690,14 +680,14 @@ export class AgentRuntimeFacade {
         }
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
-        const { resolveControlModelSelection } = await import("../agent-control/handlers/model.js");
+        const { resolveControlModelSelection } = await import("../agent-control/agent-control-helpers.js");
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);
         if ("status" in selected) return selected;
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
         try {
           await port.setModel({ provider: selected.provider, modelId: selected.id });
-          return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
+          return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.`, model_label: `${selected.provider}/${selected.id}` };
         } catch (error) {
           return { status: "error", message: error instanceof Error ? error.message : "Model selection failed." };
         } finally { release?.(); }
@@ -742,34 +732,7 @@ export class AgentRuntimeFacade {
         ? ["Session tree:", ...tree.nodes.slice(command.mode === "head" ? command.offset ?? 0 : -(command.limit ?? 10), command.mode === "head" ? (command.offset ?? 0) + (command.limit ?? 10) : undefined).map(node => `${node.active ? "→ " : ""}${node.id} ${node.preview}`)].join("\n")
         : "Tree is empty." };
     }
-    requireSingleUserDirectExecution("Direct control commands");
-    revokeAddonLocalAgent(chatJid);
-    const release = this.options.acquireCommandProtection?.(chatJid);
-    try {
-    const runtime = await this.options.getOrCreateRuntime(chatJid);
-    const session = runtime.session;
-    const previousSessionGeneration = typeof session.sessionId === "string" ? session.sessionId : null;
-    const channel = detectChannel(chatJid);
-    const { applyControlCommand: applyDefaultControlCommand } = await import("../agent-control/index.js") as {
-      applyControlCommand: NonNullable<AgentRuntimeFacadeOptions["applyControlCommandFn"]>;
-    };
-    const apply = this.options.applyControlCommandFn ?? applyDefaultControlCommand;
-    const result = await withChatContext(chatJid, channel, () => apply(runtime, this.options.modelRegistry, command));
-    if (result.refresh_runtime || runtime.session !== session) {
-      await this.options.refreshRuntime(chatJid, runtime);
-    }
-    const sessionGeneration = typeof runtime.session.sessionId === "string" ? runtime.session.sessionId : null;
-    return sessionGeneration
-      ? {
-        ...result,
-        sessionGeneration,
-        ...(result.contextUsage
-          ? { contextUsage: { ...result.contextUsage, sessionGeneration: previousSessionGeneration ?? sessionGeneration } }
-          : {}),
-        ...(sessionGeneration !== previousSessionGeneration ? { sessionGenerationChanged: true } : {}),
-      }
-      : result;
-    } finally { release?.(); }
+    return { status: "error", message: "Native control binding unavailable. No legacy session was opened." };
   }
 
   async getCurrentModelLabel(chatJid: string): Promise<string | null> {
@@ -778,9 +741,7 @@ export class AgentRuntimeFacade {
       if (!durable.readModel) throw new Error("Durable session model unavailable");
       return durable.readModel();
     }
-    const session = (await this.options.getOrCreateRuntime(chatJid)).session;
-    const model = session.model;
-    return model ? `${model.provider}/${model.id}` : null;
+    throw new Error("Durable session model unavailable");
   }
 
   async probeCompactionModel(modelLabel: string): Promise<CompactionModelProbeResult> {
@@ -980,32 +941,17 @@ export class AgentRuntimeFacade {
       if (!durable.readTree) throw new Error("Durable session tree unavailable");
       return durable.readTree();
     }
-    return buildSessionTreeSnapshot((await this.options.getOrCreateRuntime(chatJid)).session.sessionManager);
+    throw new Error("Durable session tree unavailable");
   }
 
   async saveSessionPosition(chatJid: string): Promise<string | null> {
     const durable = this.getDurableSession(chatJid);
-    if (durable) return durable.readPosition();
-    const session = (await this.options.getOrCreateRuntime(chatJid)).session;
-    return session.sessionManager.getLeafId();
+    if (!durable) throw new Error("Durable session position unavailable");
+    return durable.readPosition();
   }
 
-  async restoreSessionPosition(chatJid: string, leafId: string | null): Promise<void> {
-    if (this.options.getDurableSession !== undefined) throw new Error("Durable history navigation unavailable");
-    if (leafId === null) return;
-    const session = (await this.options.getOrCreateRuntime(chatJid)).session;
-    const currentLeaf = session.sessionManager.getLeafId();
-    if (currentLeaf === leafId) return;
-    try {
-      await session.navigateTree(leafId);
-    } catch (err) {
-      this.options.onError?.("Failed to restore session position", {
-        operation: "restore_session_position",
-        chatJid,
-        leafId,
-        err,
-      });
-    }
+  async restoreSessionPosition(_chatJid: string, _leafId: string | null): Promise<void> {
+    throw new Error("Durable history navigation unavailable");
   }
 
   hasProviderModels(provider: string): boolean {
@@ -1034,25 +980,4 @@ export class AgentRuntimeFacade {
     return Boolean(session.isStreaming || session.isCompacting || session.isRetrying || session.isBashRunning);
   }
 
-  async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
-    requireSingleUserDirectExecution("Direct slash commands");
-    revokeAddonLocalAgent(chatJid);
-    const release = this.options.acquireCommandProtection?.(chatJid);
-    try {
-    this.options.clearAttachments(chatJid);
-    const runtime = await this.options.getOrCreateRuntime(chatJid);
-    const session = runtime.session;
-    const channel = detectChannel(chatJid);
-    const { executeSlashCommand: executeDefaultSlashCommand } = await import("./slash-command.js") as {
-      executeSlashCommand: NonNullable<AgentRuntimeFacadeOptions["executeSlashCommandFn"]>;
-    };
-    const exec = this.options.executeSlashCommandFn ?? executeDefaultSlashCommand;
-    const result = await withChatContext(chatJid, channel, () => exec(session, chatJid, rawText));
-    if (result.refresh_runtime || runtime.session !== session) {
-      await this.options.refreshRuntime(chatJid, runtime);
-    }
-    this.options.clearAttachments(chatJid);
-    return result;
-    } finally { release?.(); }
-  }
 }

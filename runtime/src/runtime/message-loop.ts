@@ -22,7 +22,7 @@ import { getExecutionIdentity } from "../core/execution-context.js";
 import { formatRecoverySummary } from "../agent-pool/recovery-summary.js";
 import { parseControlCommand, type AgentControlCommand } from "../agent-control/index.js";
 import { stripTrigger } from "../agent-control/parser-utils.js";
-import { isSlashCommandInvocation } from "../agent-pool/slash-command.js";
+import { isSlashCommandInvocation } from "../agent-control/agent-control-parser.js";
 import { getMessagesSince, getNewMessages } from "../db.js";
 import type { AgentQueue } from "../queue.js";
 import { detectChannel, formatMessages, formatOutbound } from "../router.js";

@@ -48,9 +48,8 @@ test("shared DB next-request model controls persist while destructive reset reta
   let runtime = await HostConversationRuntime.open(config, context);
   const appFor = () => {
     const adapter = createDurableConversationAdapter({ incarnation: "idle", manifest, runtime });
-    return new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([["web:idle", adapter.sessionPosition("web:idle", "main", "idle")]]),
-      getOrCreateRuntime: unused, modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
-      authPath: "unused", clearAttachments() {}, refreshRuntime: unused });
+    return new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([["web:idle", adapter.sessionPosition("web:idle", "main", "idle")]]), modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
+      authPath: "unused",});
   };
   try {
     let app = appFor();

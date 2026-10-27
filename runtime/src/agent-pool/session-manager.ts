@@ -27,7 +27,7 @@ import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { restoreSessionThinkingPolicy } from "./thinking-policy.js";
 import { importAdoptedSession } from './adopted-session-import.js';
 import type { createDefaultSession } from "./session.js";
-import { forcePersistSessionFile } from "../session-rotation.js";
+import { forcePersistSessionFile } from "./session-file-persistence.js";
 
 /** Cached session entry stored for each chat JID. */
 export interface PoolEntry {

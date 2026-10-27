@@ -24,7 +24,6 @@ import { getChatJid } from "../../core/chat-context.js";
 import { isSingleUserAccess } from "../../core/config-access.js";
 import { createLogger } from "../../utils/logger.js";
 import { getProviderDefs, type ProviderDef } from "../provider-defs.js";
-import { handleModel } from "./model.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isNativeProviderAuthContext, type NativeProviderAuthContext, type ProviderAuthSubject } from "../provider-auth-context.js";
 
@@ -1014,21 +1013,6 @@ async function removeCustomModelConfig(modelRuntime: ModelRuntime, providerId: s
   });
 }
 
-async function activateProviderModel(
-  session: ProviderAuthSubject,
-  modelRegistry: ModelRegistry,
-  providerId: string,
-  modelId: string,
-): Promise<AgentControlResult> {
-  if (isNativeProviderAuthContext(session)) { assertNativeAuthCurrent(session); return session.activateModel(providerId, modelId); }
-  return handleModel(session, modelRegistry, {
-    type: "model",
-    provider: providerId,
-    modelId,
-    raw: `/model ${providerId}/${modelId}`,
-  });
-}
-
 /** Authentication never changes the active model; even one model needs confirmation. */
 async function showCard3OrComplete(
   session: ProviderAuthSubject,
@@ -1075,7 +1059,9 @@ async function handleStep3(
   if (!activation || activation.expiresAt <= Date.now() || activation.provider !== providerId || !activation.models.has(modelId) || activation.providerRevision !== providerAuthState(owner.runtime, providerId).revision) return { status: "error", message: "Stale or foreign model activation. Authenticate again or use /model explicitly." };
   owner.activations.delete(id);
 
-  return activateProviderModel(session, modelRegistry, providerId, modelId);
+  if (!isNativeProviderAuthContext(session)) return { status: "error", message: "Native model activation unavailable. No legacy model was changed." };
+  assertNativeAuthCurrent(session);
+  return session.activateModel(providerId, modelId);
 }
 
 // ── Command handlers ────────────────────────────────────────────
