@@ -578,7 +578,7 @@ test("native pending observer must be callable before legacy lifecycle fallback"
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-pending-observer";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -606,7 +606,10 @@ test("native pending observer must be callable before legacy lifecycle fallback"
       throw new Error("Unexpected non-callable pending observer failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -636,6 +639,7 @@ test("native pending observer must be callable before legacy lifecycle fallback"
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted pending observer must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -655,7 +659,7 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-coordinator";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -681,7 +685,10 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
       throw new Error("Unexpected non-callable coordinator failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
   `;
 
   try {
@@ -711,6 +718,7 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
     expect(result.attempts).toEqual([]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch coordinator must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -814,7 +822,7 @@ test("native status broadcaster must be callable before accepted dispatch execut
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-noncallable-status-broadcaster";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -844,7 +852,10 @@ test("native status broadcaster must be callable before accepted dispatch execut
       throw new Error("Unexpected non-callable status broadcaster failure: " + failure);
     }
 
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
   `;
 
   try {
@@ -875,6 +886,7 @@ test("native status broadcaster must be callable before accepted dispatch execut
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native status broadcaster must be callable");
+    expect(result.executionMarkers).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
