@@ -97,7 +97,7 @@ Complete recovery-unit capture includes `native-background-input` references fro
 
 ## Dream tool integration in progress
 
-`host-dream-tools.ts` provides private `messages` and `search_workspace` registrations using the existing shared schemas and implementations. Message effects follow the synchronous accepted-source fence. Workspace search captures an invocation fence in each index-access snapshot; stale-index refresh runs inline and is joined before returning. Ordinary search keeps its existing non-blocking refresh behavior. Revocation after an actual traversal await prevents the file commit.
+`host-dream-tools.ts` provides private `messages` and `search_workspace` registrations using the existing shared schemas and implementations. Message effects follow the synchronous accepted-source fence and retain the currently registered post/broadcast callback. Workspace search captures an invocation fence in each index-access snapshot; stale-index refresh runs inline and is joined before returning. Ordinary search keeps its existing non-blocking refresh behavior. Revocation after an actual traversal await prevents the file commit.
 
 These registrations are not yet installed in the production factory or Dream dispatcher. Their component tests use an injected source guard and do not establish native admission or full Dream execution. The actual native default/override Dream regressions remain failing while caller/owner integration is unfinished.
 

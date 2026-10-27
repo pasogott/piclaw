@@ -185,3 +185,16 @@ test('private Dream tools: revocation across actual index traversal await preven
     expect(revoked).toBe(true);expect(db.query('SELECT path FROM workspace_files WHERE path=?').all('notes/dream-revoked-search.md')).toEqual([]);
   }finally{read.mockRestore();rmSync(file);closeDatabase();}
 });
+
+test('private Dream tools: message post retains the registered synchronous broadcast port',async()=>{
+  const {createHostDreamTools}=await import('../../runtime/durable-engine/src/host-dream-tools.ts');
+  const {setMessagesPostFn}=await import('../../runtime/src/extensions/messages-crud.js');
+  const {initDatabase,closeDatabase}=await import('../../runtime/src/db/connection.js');initDatabase();
+  const {storeChatMetadata,storeMessage}=await import('../../runtime/src/db.js');const chat='dream:private-broadcast-fixture';storeChatMetadata(chat,new Date().toISOString());
+  let broadcasts=0;setMessagesPostFn((chatJid,content,isBot)=>{broadcasts++;return storeMessage({id:'dream-broadcast-fixture',chat_jid:chatJid,sender:'fixture',sender_name:'Fixture',content,timestamp:new Date().toISOString(),is_from_me:isBot,is_bot_message:isBot});});
+  const tools=createHostDreamTools({assertOwner(){},async capture(){return{chatJid:chat,assertCurrent(){}};}});
+  try{
+    const result=await tools[0]!.execute({action:'post',content:'DREAM_BROADCAST_PARITY'} as never,{...api,conversationId:18,taskId:19} as never,context);
+    expect(broadcasts).toBe(1);expect(JSON.stringify(result.output)).not.toContain('error');
+  }finally{setMessagesPostFn(undefined);closeDatabase();}
+});
