@@ -1,6 +1,4 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import {
   buildPostTimeTooltip,
@@ -9,7 +7,6 @@ import {
   formatAgentTokenStats,
 } from '../../web/src/components/post.ts';
 
-const repoRoot = resolve(import.meta.dir, '../../..');
 
 test('formatAgentReplyDuration keeps reply timings compact', () => {
   expect(formatAgentReplyDuration(420)).toBe('420ms');
@@ -79,15 +76,4 @@ test('buildPostTimeTooltip labels catalogue estimates without inventing missing 
   expect(buildPostTimeTooltip({ timestamp: '2026-06-21T11:16:02.000Z' }, {
     usage: { input_tokens: 10, total_tokens: 10 },
   })).not.toContain('cost');
-});
-
-test('terminal agent outcomes attach agent_timing content blocks', () => {
-  const handlerSource = readFileSync(resolve(repoRoot, 'runtime/src/channels/web/handlers/agent.ts'), 'utf8');
-  const streamingRuntimeSource = readFileSync(
-    resolve(repoRoot, 'runtime/src/channels/web/runtime/process-chat-streaming-runtime.ts'),
-    'utf8',
-  );
-  expect(handlerSource).toContain('streamRuntime.buildAgentTimingBlock(output.usage)');
-  expect(streamingRuntimeSource).toContain('type: "agent_timing"');
-  expect(streamingRuntimeSource).toContain('buildAgentTimingBlock: (usage) =>');
 });

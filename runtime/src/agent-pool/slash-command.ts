@@ -16,6 +16,8 @@
  */
 
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { parseSlashCommand } from "../agent-control/agent-control-parser.js";
+export { isSlashCommandInvocation } from "../agent-control/agent-control-parser.js";
 
 import type { AgentControlResult } from "../agent-control/agent-control-types.js";
 import { getAgentRuntimeConfig } from "../core/config.js";
@@ -63,21 +65,6 @@ function extractTextFromContent(content: unknown): string {
 
 function toMessageRole(value: unknown): string {
   return typeof value === "string" ? value : "unknown";
-}
-
-function parseSlashCommand(rawText: string): { trimmed: string; rawCommand: string; commandName: string } | null {
-  const trimmed = rawText.trim();
-  if (!trimmed.startsWith("/")) return null;
-
-  const rawCommand = trimmed.slice(1);
-  const argIndex = rawCommand.search(/\s/);
-  const commandName = argIndex === -1 ? rawCommand : rawCommand.slice(0, argIndex);
-  if (!/^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(commandName)) return null;
-  return { trimmed, rawCommand, commandName };
-}
-
-export function isSlashCommandInvocation(rawText: string): boolean {
-  return parseSlashCommand(rawText) !== null;
 }
 
 function resolveSlashCommandKind(

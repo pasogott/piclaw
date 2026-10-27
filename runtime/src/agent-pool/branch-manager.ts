@@ -1,4 +1,4 @@
-import { hasNativeRouting, requireLegacyRoutingMutation } from "../db/native-routing-policy.js";
+import { hasNativeRouting, requireLegacyRoutingMutation, assertNativeRootCreation } from "../db/native-routing-policy.js";
 /**
  * agent-pool/branch-manager.ts – Branch identity, listing, and fork lifecycle helpers.
  *
@@ -373,31 +373,35 @@ export class AgentBranchManager {
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
-    if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
-    const normalized = normalizeAgentHandlePart(agentName || "");
-    if (!normalized) throw new Error("Root session handle must contain at least one letter or number.");
-    if (normalized === "branch") throw new Error("Root session handle cannot be 'branch'.");
+    return getDb().transaction(() => {
+      const native = hasNativeRouting(getDb());
+      if (native) assertNativeRootCreation(getDb());
+      if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
+      const normalized = normalizeAgentHandlePart(agentName || "");
+      if (!normalized) throw new Error("Root session handle must contain at least one letter or number.");
+      if (normalized === "branch") throw new Error("Root session handle cannot be 'branch'.");
 
-    const chatJid = `web:${normalized}`;
-    const existingByJid = getChatBranchByChatJid(chatJid);
-    if (existingByJid) {
-      throw new Error(`Root session already exists: ${chatJid}`);
-    }
+      const chatJid = `web:${normalized}`;
+      const existingByJid = getChatBranchByChatJid(chatJid);
+      if (existingByJid) {
+        throw new Error(`Root session already exists: ${chatJid}`);
+      }
 
-    const existingByHandle = getChatBranchByAgentName(normalized);
-    if (existingByHandle && !existingByHandle.archived_at) {
-      throw new Error(`Session handle already exists: @${normalized}`);
-    }
+      const existingByHandle = getChatBranchByAgentName(normalized);
+      if (existingByHandle && !existingByHandle.archived_at) {
+        throw new Error(`Session handle already exists: @${normalized}`);
+      }
 
-    storeChatMetadata(chatJid, new Date().toISOString(), normalized);
-    const branch = ensureChatBranch({
-      chat_jid: chatJid,
-      root_chat_jid: chatJid,
-      parent_branch_id: null,
-      agent_name: normalized,
-    });
-    this.options.scheduleSessionWarmup?.(chatJid);
-    return branch;
+      storeChatMetadata(chatJid, new Date().toISOString(), normalized);
+      const branch = ensureChatBranch({
+        chat_jid: chatJid,
+        root_chat_jid: chatJid,
+        parent_branch_id: null,
+        agent_name: normalized,
+      });
+      if (!native) this.options.scheduleSessionWarmup?.(chatJid);
+      return branch;
+    }).immediate();
   }
 
   async mergeChatBranchIntoParent(
