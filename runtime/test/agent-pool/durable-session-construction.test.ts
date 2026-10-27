@@ -130,6 +130,35 @@ test("durable pruneChatBranch archives metadata without legacy session construct
   }
 });
 
+test("durable metadata lookup rejects invalid reader contract without legacy construction", async () => {
+  initDatabase();
+  const chat = "web:native-invalid-metadata-reader";
+  const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
+  const filesBefore = snapshot();
+  let factoryReads = 0;
+  const options = {
+    ...createAgentPoolModelOptions(),
+    getDurableSession: (id: string) => id !== chat ? undefined : {
+      sessionId: "durable-metadata",
+      branchId: "branch-metadata",
+      readMetadata: "invalid-reader" as unknown as () => Promise<unknown>,
+    },
+    get createSession(): never { factoryReads++; throw Error("legacy factory accessed"); },
+  };
+  const legacyCreate = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("JSONL forbidden"); });
+  let pool: AgentPool | undefined;
+  try {
+    pool = new AgentPool(options);
+    await expect(pool.getDurableSessionMetadata(chat)).rejects.toThrow("Durable metadata reader invalid");
+    expect(factoryReads).toBe(0);
+    expect(legacyCreate).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(filesBefore);
+  } finally {
+    await pool?.shutdown();
+    legacyCreate.mockRestore();
+  }
+});
+
 test("native restore invalid binding contract retains metadata atomicity without legacy construction", async () => {
   initDatabase();
   const chat = "web:native-restore-invalid-contract";

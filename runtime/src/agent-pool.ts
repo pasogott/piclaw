@@ -934,7 +934,11 @@ export class AgentPool {
   async getDurableSessionMetadata(chatJid: string) {
     if (!this.durableApplication) return undefined;
     const position = this.durableSessionLookup?.(chatJid);
-    if (!position?.readMetadata) return null;
+    if (!position) return null;
+    if (position.readMetadata !== undefined && typeof position.readMetadata !== "function") {
+      throw new Error("Durable metadata reader invalid");
+    }
+    if (!position.readMetadata) return null;
     const metadata = await position.readMetadata();
     return metadata ? { ...metadata, commandCatalogue: getNativeCommandCatalogue(position) } : null;
   }
