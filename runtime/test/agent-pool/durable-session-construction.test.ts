@@ -3,12 +3,15 @@ import { readdirSync } from "node:fs";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { spyOn } from "bun:test";
 import { AgentPool } from "../../src/agent-pool.js";
+import { AgentSessionManager } from "../../src/agent-pool/session-manager.js";
 import { createAgentPoolServices } from "../../src/agent-pool/service-factory.js";
 import { createAgentPoolModelOptions } from "../model-services-fixture.js";
 import { SESSIONS_DIR } from "../../src/core/config.js";
 import { initDatabase, storeChatMetadata, getChatBranchByChatJid } from "../../src/db.js";
 import * as legacySession from "../../src/agent-pool/session.js";
 import { AgentToolFactory } from "../../src/agent-pool/tool-factory.js";
+import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
+import { AgentSessionBinder } from "../../src/agent-pool/session-binder.js";
 import { AgentBranchManager } from "../../src/agent-pool/branch-manager.js";
 import { getDb } from "../../src/db/connection.js";
 
@@ -47,6 +50,10 @@ for (const empty of [false, true]) {
       });
       Object.defineProperties(serviceOptions, Object.getOwnPropertyDescriptors(compatibility));
       services = createAgentPoolServices(serviceOptions);
+      expect(services.sessionManager).not.toBeInstanceOf(AgentSessionManager);
+      expect(services.sessionBinder).not.toBeInstanceOf(AgentSessionBinder);
+      expect(services.toolFactory).not.toBeInstanceOf(AgentToolFactory);
+      expect(services.turnCoordinator).not.toBeInstanceOf(AgentTurnCoordinator);
       const databaseBefore = getDb().serialize();
       let runnerOptionReads = 0;
       // Backend-owned lookup remains live for post-startup routes.

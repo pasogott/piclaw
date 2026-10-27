@@ -20,6 +20,8 @@ import type { AgentBashOperations } from "./tool-factory.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
 import { McpCodemodeController } from "./mcp-codemode-runtime.js";
 
+const DURABLE_LEGACY_MESSAGE = "Durable application does not construct legacy sessions";
+
 /** Shared logger callbacks used across extracted AgentPool services. */
 export interface AgentPoolLogHooks {
   onInfo?: (message: string, details: Record<string, unknown>) => void;
@@ -42,16 +44,28 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   createSession?: AgentPoolOptions["createSession"];
 }
 
+type SessionBinderService = Pick<AgentSessionBinder, "setBinder" | "bindSession">;
+type ToolFactoryService = Pick<AgentToolFactory, "createDefaultTools" | "createCustomToolOverrides">;
+type TurnCoordinatorService = Pick<AgentTurnCoordinator, "createTracker" | "subscribe" | "startPromptTimeout">;
+type SessionManagerService = Pick<AgentSessionManager,
+  "assertLegacyCaptureIdle" | "blockMcpAdmissions" | "fenceMcpAndSnapshot" | "resumeMcpAdmissions" | "quarantineMcpRuntime"
+  | "acquireEvictionProtection" | "getOrCreate" | "refreshRuntime" | "prewarm" | "cancelPrewarm" | "hasPendingSessionWork"
+  | "recreate" | "hasProtectedRun" | "hasActiveMemoryReclamationWork" | "getInstrumentationSnapshot" | "evictIdle" | "shutdown">;
+type BranchManagerService = Pick<AgentBranchManager,
+  "ensureBranchRegistration" | "renameChatBranch" | "pruneChatBranch" | "mergeChatBranchIntoParent" | "renameChatJid"
+  | "restoreChatBranch" | "permanentPurgeChatBranch" | "createForkedChatBranch" | "createRootChatSession"
+  | "listActiveChats" | "listKnownChats" | "findActiveChatByAgentName" | "findChatByAgentName" | "getAgentHandleForChat">;
+
 /** Concrete helper instances composed into AgentPool. */
 export interface AgentPoolServices {
   mcpSettings: McpCodemodeController;
   attachments: ReturnType<typeof getAttachmentRegistry>;
-  sessionBinder: AgentSessionBinder;
-  toolFactory: AgentToolFactory;
-  turnCoordinator: AgentTurnCoordinator;
-  sessionManager: AgentSessionManager;
+  sessionBinder: SessionBinderService;
+  toolFactory: ToolFactoryService;
+  turnCoordinator: TurnCoordinatorService;
+  sessionManager: SessionManagerService;
   runtimeFacade: AgentRuntimeFacade;
-  branchManager: AgentBranchManager;
+  branchManager: BranchManagerService;
 }
 
 async function resolveSessionExtensionFactories(chatJid: string): Promise<ExtensionFactory[]> {
@@ -78,15 +92,31 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
   const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
-  const sessionBinder = new AgentSessionBinder({
+
+  const durable = getDurableSession !== undefined;
+  const unavailable = () => { throw new Error(DURABLE_LEGACY_MESSAGE); };
+
+  const sessionBinder: SessionBinderService = durable ? {
+    setBinder: () => undefined,
+    bindSession: async () => undefined,
+  } : new AgentSessionBinder({
     pool: options.pool,
     onError: options.onError,
   });
-  const toolFactory = new AgentToolFactory({
+
+  const toolFactory: ToolFactoryService = durable ? {
+    createDefaultTools: unavailable,
+    createCustomToolOverrides: () => [],
+  } : new AgentToolFactory({
     workspaceDir: options.workspaceDir,
     bashOperations: options.bashOperations,
   });
-  const turnCoordinator = new AgentTurnCoordinator({
+
+  const turnCoordinator: TurnCoordinatorService = durable ? {
+    createTracker: unavailable,
+    subscribe: unavailable,
+    startPromptTimeout: unavailable,
+  } : new AgentTurnCoordinator({
     takeAttachments: (chatJid) => attachments.take(chatJid),
     touchSession: (chatJid) => {
       const entry = options.pool.get(chatJid);
@@ -97,8 +127,8 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onError: options.onError,
   });
 
-  let sessionManager: AgentSessionManager;
-  let branchManager: AgentBranchManager;
+  let sessionManager: SessionManagerService;
+  let branchManager: BranchManagerService;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
     getDurableSession,
@@ -114,26 +144,41 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onWarn: options.onWarn,
     onError: options.onError,
   });
-  branchManager = new AgentBranchManager({
-    pool: options.pool,
-    activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
-    getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
-    refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
-    isActive: (chatJid) => runtimeFacade.isActive(chatJid),
-    scheduleSessionWarmup: (chatJid) => sessionManager.prewarm(chatJid),
-    cancelSessionWarmup: (chatJid) => sessionManager.cancelPrewarm(chatJid),
-    hasPendingSessionWork: (chatJid) => sessionManager.hasPendingSessionWork(chatJid),
-    onWarn: options.onWarn,
-  });
-  sessionManager = new AgentSessionManager({
+
+  sessionManager = durable ? {
+    assertLegacyCaptureIdle: () => undefined,
+    blockMcpAdmissions: () => undefined,
+    fenceMcpAndSnapshot: async () => [],
+    resumeMcpAdmissions: () => undefined,
+    quarantineMcpRuntime: async () => undefined,
+    acquireEvictionProtection: () => () => undefined,
+    getOrCreate: async () => { throw new Error(DURABLE_LEGACY_MESSAGE); },
+    refreshRuntime: async () => undefined,
+    prewarm: () => false,
+    cancelPrewarm: () => false,
+    hasPendingSessionWork: () => false,
+    recreate: async () => { throw new Error(DURABLE_LEGACY_MESSAGE); },
+    hasProtectedRun: () => false,
+    hasActiveMemoryReclamationWork: () => false,
+    getInstrumentationSnapshot: () => ({
+      branchSeedRealizationsInFlight: 0,
+      createInFlight: 0,
+      evictionProtectedChats: 0,
+      invalidDeferredSeedErrors: 0,
+      prewarmInFlight: 0,
+      queuedPrewarms: 0,
+      prewarmQueueLength: 0,
+      prewarmCooldowns: 0,
+    }),
+    evictIdle: () => undefined,
+    shutdown: async () => undefined,
+  } : new AgentSessionManager({
     getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
-    // Compatibility construction is absent from the selected durable backend.
-    ...(getDurableSession === undefined ? {
     createSession: options.createSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),
     createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
@@ -145,10 +190,21 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     ensureBranchRegistration: (chatJid, session) => {
       branchManager.ensureBranchRegistration(chatJid, session);
     },
-    } : {}),
     onInfo: options.onInfo,
     onWarn: options.onWarn,
     onError: options.onError,
+  });
+
+  branchManager = new AgentBranchManager({
+    pool: options.pool,
+    activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
+    getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
+    refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
+    isActive: (chatJid) => runtimeFacade.isActive(chatJid),
+    scheduleSessionWarmup: (chatJid) => sessionManager.prewarm(chatJid),
+    cancelSessionWarmup: (chatJid) => sessionManager.cancelPrewarm(chatJid),
+    hasPendingSessionWork: (chatJid) => sessionManager.hasPendingSessionWork(chatJid),
+    onWarn: options.onWarn,
   });
 
   return {
