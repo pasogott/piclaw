@@ -1783,10 +1783,16 @@ async function processAuthorisedChat(
     // would falsely advertise every live SDK turn as interrupted after reload.
     nativeStatus("intent");
     let result = await acceptedDispatch().catch(() => "pending" as const);
+    if (result !== "settled" && result !== "pending") {
+      throw new Error("Accepted dispatch returned invalid status");
+    }
     if (result === "pending") {
       // The captured host port owns observation only. Shutdown must retain the recovery marker.
       if (!waitForPending) throw new Error("Accepted dispatch requires host pending observation");
       result = await waitForPending(pendingIdentity);
+      if (result !== "settled" && result !== "pending") {
+        throw new Error("Accepted pending observer returned invalid status");
+      }
       if (result === "pending") return;
     }
     setChatCursor(chatJid, currentMessage.timestamp);

@@ -430,3 +430,103 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
     rmSync(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test("native accepted dispatch invalid status is rejected before legacy lifecycle modules", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "native-process-chat-invalid-dispatch-status-"));
+  const script = `
+    import { plugin } from "bun";
+    const source = ${JSON.stringify(source)};
+    const attempts = [];
+    plugin({ name: "legacy-process-chat-runtime-fence", setup(build) {
+      build.onLoad({ filter: /\\/channels\\/web\\/runtime\\/process-chat-(preflight|streaming|finalization)-runtime\\.(ts|js)$/ }, args => {
+        if (!args.path.startsWith(source + "/")) return;
+        attempts.push(args.path);
+        throw new Error("LEGACY_PROCESS_CHAT_FENCE:" + args.path);
+      });
+    }});
+
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
+    const chatJid = "web:native-invalid-dispatch-status";
+    const messageTs = "2026-01-01T00:00:01.000Z";
+    initDatabase();
+    storeChatMetadata(chatJid, messageTs, "boundary-user");
+    storeMessage({ id: "msg-native-invalid-dispatch-status", chat_jid: chatJid, sender: "boundary-user", sender_name: "Boundary User", content: "hello", timestamp: messageTs, is_from_me: false });
+
+    let failure = "";
+    const dispatchAcceptedInput = () => async () => "invalid-status";
+    dispatchAcceptedInput.waitForPending = async () => "settled";
+    const channel = { dispatchAcceptedInput, resumeChat() {}, broadcastEvent() {} };
+
+    try { await processChat(channel, chatJid, "default"); throw new Error("Expected invalid dispatch status rejection"); }
+    catch (error) { failure = String(error); }
+
+    if (!failure.includes("Accepted dispatch returned invalid status")) {
+      throw new Error("Unexpected invalid dispatch failure: " + failure);
+    }
+
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], { cwd: root, env: { PATH: process.env.PATH, HOME: root, PICLAW_WORKSPACE: resolve(root, "workspace"), PICLAW_STORE: resolve(root, "store"), PICLAW_DATA: resolve(root, "data"), PI_CODING_AGENT_DIR: resolve(root, "agent"), PICLAW_DB_IN_MEMORY: "1" }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
+    const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+    expect(result.attempts).toEqual([]);
+    expect(result.cursor).toBe("");
+    expect(String(result.failure)).toContain("Accepted dispatch returned invalid status");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
+
+test("native pending observer invalid status is rejected before legacy lifecycle modules", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "native-process-chat-invalid-pending-status-"));
+  const script = `
+    import { plugin } from "bun";
+    const source = ${JSON.stringify(source)};
+    const attempts = [];
+    plugin({ name: "legacy-process-chat-runtime-fence", setup(build) {
+      build.onLoad({ filter: /\\/channels\\/web\\/runtime\\/process-chat-(preflight|streaming|finalization)-runtime\\.(ts|js)$/ }, args => {
+        if (!args.path.startsWith(source + "/")) return;
+        attempts.push(args.path);
+        throw new Error("LEGACY_PROCESS_CHAT_FENCE:" + args.path);
+      });
+    }});
+
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
+    const chatJid = "web:native-invalid-pending-status";
+    const messageTs = "2026-01-01T00:00:01.000Z";
+    initDatabase();
+    storeChatMetadata(chatJid, messageTs, "boundary-user");
+    storeMessage({ id: "msg-native-invalid-pending-status", chat_jid: chatJid, sender: "boundary-user", sender_name: "Boundary User", content: "hello", timestamp: messageTs, is_from_me: false });
+
+    let failure = "";
+    const dispatchAcceptedInput = () => async () => "pending";
+    dispatchAcceptedInput.waitForPending = async () => "invalid-status";
+    const channel = { dispatchAcceptedInput, resumeChat() {}, broadcastEvent() {} };
+
+    try { await processChat(channel, chatJid, "default"); throw new Error("Expected invalid pending status rejection"); }
+    catch (error) { failure = String(error); }
+
+    if (!failure.includes("Accepted pending observer returned invalid status")) {
+      throw new Error("Unexpected invalid pending observer failure: " + failure);
+    }
+
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], { cwd: root, env: { PATH: process.env.PATH, HOME: root, PICLAW_WORKSPACE: resolve(root, "workspace"), PICLAW_STORE: resolve(root, "store"), PICLAW_DATA: resolve(root, "data"), PI_CODING_AGENT_DIR: resolve(root, "agent"), PICLAW_DB_IN_MEMORY: "1" }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
+    const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+    expect(result.attempts).toEqual([]);
+    expect(result.cursor).toBe("");
+    expect(String(result.failure)).toContain("Accepted pending observer returned invalid status");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
