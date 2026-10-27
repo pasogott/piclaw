@@ -23,18 +23,21 @@ function staticGraph(entry: string): Set<string> {
   return visited;
 }
 
-// Public SDK root imports (including ModelRegistry's SessionManager re-export) are
-// allowed. This fence proves only the LOCAL legacy construction entry points stay
-// unevaluated during actual AgentPool import and durable pool construction.
+// Public SDK definitions/resources remain allowed. Native startup must not
+// evaluate LOCAL retired execution/replay or lifecycle composition modules.
+// Legacy compatibility deliberately retains its separate session load fence.
 for (const mode of ["durable", "legacy"] as const) {
   test(`fresh-process ${mode} AgentPool construction enforces the local load boundary`, async () => {
     const root = mkdtempSync(resolve(tmpdir(), "durable-import-boundary-"));
+    const fence=mode==='durable'
+      ? /\/(?:agent-pool\/(?:session|session-factory|run-agent-orchestrator|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
+      : /\/agent-pool\/(?:session|session-factory)\.(?:ts|js)$/;
     const script = `
       import { plugin } from "bun";
       const source = ${JSON.stringify(source)};
       const attempts = [];
       plugin({ name: "local-legacy-construction-fence", setup(build) {
-        build.onLoad({ filter: /\\/agent-pool\\/(?:session|session-factory)\\.(?:ts|js)$/ }, args => {
+        build.onLoad({ filter: new RegExp(${JSON.stringify(fence.source)}) }, args => {
           if (!args.path.startsWith(source + "/")) return;
           attempts.push(args.path);
           throw new Error("LOCAL_CONSTRUCTION_FENCE:" + args.path);

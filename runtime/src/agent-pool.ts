@@ -23,7 +23,6 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
-import { captureResidentLegacyUpgradeBindings } from "./agent-pool/legacy-authority-capture.js";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -33,7 +32,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessageEventStream, Context, Model, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 
-import { type AgentControlCommand, type AgentControlResult } from "./agent-control/index.js";
+import type { AgentControlCommand, AgentControlResult } from "./agent-control/index.js";
 import { getNativeCommandCatalogue } from "./agent-control/native-control-capabilities.js";
 import { getPiclawAgentDir } from "./core/agent-dir.js";
 import { SESSIONS_DIR, WORKSPACE_DIR, getAgentLogConfig, getSessionPoolConfig } from "./core/config.js";
@@ -49,10 +48,7 @@ import {
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
-import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
-import { runWithProtectedRecoveryHandoff } from "./agent-pool/protected-recovery-handoff.js";
-import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
-import { rotateSession, type SessionRotationResult } from "./session-rotation.js";
+import type { SessionRotationResult } from "./session-rotation.js";
 import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
@@ -280,7 +276,8 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
 export class AgentPool {
   assertLegacyCaptureIdle(): void { this.sessionManager.assertLegacyCaptureIdle(); }
   /** Explicit read-only resident capture; never selects or constructs a session. */
-  captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+  async captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+    const { captureResidentLegacyUpgradeBindings } = await import("./agent-pool/legacy-authority-capture.js");
     return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());
   }
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
@@ -508,6 +505,7 @@ export class AgentPool {
         setBudgetWorkStatus(budgetWorkId, "active", { boundary: "resumed" });
       }
       const observedOutputs: AgentOutput[] = [];
+      const { runAgentPrompt } = await import("./agent-pool/run-agent-orchestrator.js");
       const runPrompt = (nextPrompt: string, nextOptions: RunAgentOptions) => runAgentPrompt(nextPrompt, chatJid, nextOptions, {
         getOrCreateRuntime: (nextChatJid) => this.getOrCreateRuntime(nextChatJid),
         turnCoordinator: this.turnCoordinator,
@@ -523,6 +521,7 @@ export class AgentPool {
         onError: (message, details) => log.error(message, details),
       });
 
+      const { runWithProtectedRecoveryHandoff } = await import("./agent-pool/protected-recovery-handoff.js");
       const output = await withBudgetWorkContext({
         workId: budgetWorkId,
         chatJid,
@@ -729,6 +728,7 @@ export class AgentPool {
 
   async emergencyRotateSession(chatJid: string, emergencyReason: string): Promise<SessionRotationResult> {
     const runtime = await this.getOrCreateRuntime(chatJid);
+    const { rotateSession } = await import("./session-rotation.js");
     const result = await rotateSession(runtime.session, runtime, {
       reason: "automatic",
       skipCompaction: true,
@@ -736,6 +736,7 @@ export class AgentPool {
       chatJid,
     });
     if (result.status === "success") {
+      const { clearCompactionFailureBackoff, resetCompactionSuccessCount } = await import("./agent-pool/compaction.js");
       clearCompactionFailureBackoff(chatJid);
       resetCompactionSuccessCount(chatJid);
       await this.sessionManager.refreshRuntime(chatJid, runtime);

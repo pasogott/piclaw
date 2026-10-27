@@ -11,24 +11,17 @@ import { join } from "node:path";
 import type { AgentSession, AgentSessionRuntime, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 
-import { applyControlCommand, type AgentControlCommand, type AgentControlResult } from "../agent-control/index.js";
-import { handleModel, resolveControlModelSelection } from "../agent-control/handlers/model.js";
-import { applySessionIndependentControlCommand, SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES } from "../agent-control/agent-control-handlers.js";
-import { handleProviderQuota } from "../agent-control/handlers/info.js";
+import type { AgentControlCommand, AgentControlResult } from "../agent-control/index.js";
 import { getNativeCommandCatalogue } from "../agent-control/native-control-capabilities.js";
-import { handleLogin, handleLogout, revokeNativeProviderAuthContext } from "../agent-control/handlers/login.js";
 import type { NativeProviderAuthContext } from "../agent-control/provider-auth-context.js";
 import type { DurableSessionPositionPort } from "./durable-runtime-adapter.js";
-import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } from "../agent-control/agent-control-helpers.js";
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
-import { renderSessionTreeWidget } from "../agent-control/handlers/tree.js";
 import { getLatestTokenUsageModel } from "../db.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { getSessionThinkingPolicy } from './thinking-policy.js';
 
 import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
-import { executeSlashCommand } from "./slash-command.js";
 import { peekProviderUsage, peekProviderUsageForRuntime, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
@@ -312,8 +305,8 @@ export interface AgentRuntimeFacadeOptions {
   onProviderUsageRefresh?: (event: ProviderUsageRefreshEvent) => void;
   onWarn?: (message: string, details: Record<string, unknown>) => void;
   onError?: (message: string, details: Record<string, unknown>) => void;
-  applyControlCommandFn?: typeof applyControlCommand;
-  executeSlashCommandFn?: typeof executeSlashCommand;
+  applyControlCommandFn?: (runtime: AgentSessionRuntime, modelRegistry: ModelRegistry, command: AgentControlCommand) => Promise<AgentControlResult>;
+  executeSlashCommandFn?: (session: AgentSession, chatJid: string, rawText: string) => Promise<AgentControlResult>;
 }
 
 /**
@@ -346,11 +339,14 @@ export class AgentRuntimeFacade {
     } };
   }
 
-  private nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): NativeProviderAuthContext {
+  private async nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): Promise<NativeProviderAuthContext> {
     if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal || port.lifetimeSignal.aborted) throw Error("Native authentication lifetime unavailable");
     const existing = this.nativeProviderAuthContexts.get(chatJid);
     if (existing && existing.bindingId === port.sessionId && existing.signal === port.lifetimeSignal) { existing.assertCurrent(); return existing; }
-    if (existing) revokeNativeProviderAuthContext(existing);
+    if (existing) {
+      const { revokeNativeProviderAuthContext } = await import("../agent-control/handlers/login.js");
+      revokeNativeProviderAuthContext(existing);
+    }
     const assertCurrent = port.assertCurrent.bind(port), runOwned = port.runOwnedControl.bind(port);
     const context: NativeProviderAuthContext = Object.freeze({
       kind: "native-provider-auth", chatJid, bindingId: port.sessionId, runtime: this.options.modelRuntime, signal: port.lifetimeSignal,
@@ -392,6 +388,7 @@ export class AgentRuntimeFacade {
     const port = this.getDurableSession(chatJid);
     if (port) {
       requireSingleUserDirectExecution("Native control commands");
+      const { applySessionIndependentControlCommand, SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES } = await import("../agent-control/agent-control-handlers.js");
       if (SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES.has(command.type)) {
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
@@ -434,11 +431,15 @@ export class AgentRuntimeFacade {
       }
       if (command.type === "login" || command.type === "logout") {
         if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal) return { status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." };
-        const context = this.nativeProviderAuthContext(chatJid, port);
+        const context = await this.nativeProviderAuthContext(chatJid, port);
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
-        try { return await withChatContext(chatJid, chatJid.startsWith("web:") ? "web" : "unknown", () => command.type === "login"
-          ? handleLogin(context, this.options.modelRegistry, command) : handleLogout(context, this.options.modelRegistry, command)); }
+        try { return await withChatContext(chatJid, chatJid.startsWith("web:") ? "web" : "unknown", async () => {
+          const { handleLogin, handleLogout } = await import("../agent-control/handlers/login.js");
+          return command.type === "login"
+            ? handleLogin(context, this.options.modelRegistry, command)
+            : handleLogout(context, this.options.modelRegistry, command);
+        }); }
         finally { release?.(); }
       }
       if (command.type === "commands") {
@@ -467,6 +468,7 @@ export class AgentRuntimeFacade {
           `Recorded cost: $${report.usage.cost.toFixed(6)}`].join("\n") };
       }
       if (command.type === "quota") {
+        const { handleProviderQuota } = await import("../agent-control/handlers/info.js");
         const label = await port.readModel?.();
         const split = label?.indexOf("/") ?? -1;
         return handleProviderQuota(this.options.modelRuntime, label && split > 0
@@ -488,6 +490,7 @@ export class AgentRuntimeFacade {
         return this.applyControlCommand(chatJid, { type: "model", provider: models[next]!.provider, modelId: models[next]!.id, raw: command.raw });
       }
       if (command.type === "cycle_thinking") {
+        const { getAvailableThinkingLevelsForModel } = await import("../agent-control/agent-control-helpers.js");
         const label = await port.readModel?.();
         const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === label);
         if (!model) return { status: "error", message: "No available native thinking model." };
@@ -517,7 +520,10 @@ export class AgentRuntimeFacade {
           await port.reset();
           const auth = this.nativeProviderAuthContexts.get(chatJid);
           this.nativeProviderAuthContexts.delete(chatJid);
-          if (auth) revokeNativeProviderAuthContext(auth);
+          if (auth) {
+            const { revokeNativeProviderAuthContext } = await import("../agent-control/handlers/login.js");
+            revokeNativeProviderAuthContext(auth);
+          }
           return { status: "success", message: "Started a new durable context. Previous history is retained.",
             sessionGeneration: port.sessionId, sessionGenerationChanged: false,
             contextUsage: { ...await this.readDurableControlContextUsage(port), source: "durable-reset" } };
@@ -552,6 +558,7 @@ export class AgentRuntimeFacade {
         }
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
+        const { resolveControlModelSelection } = await import("../agent-control/handlers/model.js");
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);
         if ("status" in selected) return selected;
         revokeAddonLocalAgent(chatJid);
@@ -564,6 +571,7 @@ export class AgentRuntimeFacade {
         } finally { release?.(); }
       }
       if (command.type === "thinking") {
+        const { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } = await import("../agent-control/agent-control-helpers.js");
         requireSingleUserDirectExecution("Direct thinking commands");
         if (command.level !== undefined && !port.setThinkingLevel) throw new Error("Durable thinking mutation unavailable");
         if (!port.readModel || !port.readThinkingLevel) throw new Error("Durable thinking reader unavailable");
@@ -597,6 +605,7 @@ export class AgentRuntimeFacade {
       if (command.type !== "tree" || command.targetId) return { status: "error", message: `Native command '${command.type}' is unavailable. No legacy session was opened.` };
       if (!port.readTree) throw new Error("Durable session tree unavailable");
       const tree = await port.readTree();
+      const { renderSessionTreeWidget } = await import("../agent-control/handlers/tree.js");
       return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length
         ? ["Session tree:", ...tree.nodes.slice(command.mode === "head" ? command.offset ?? 0 : -(command.limit ?? 10), command.mode === "head" ? (command.offset ?? 0) + (command.limit ?? 10) : undefined).map(node => `${node.active ? "→ " : ""}${node.id} ${node.preview}`)].join("\n")
         : "Tree is empty." };
@@ -609,7 +618,10 @@ export class AgentRuntimeFacade {
     const session = runtime.session;
     const previousSessionGeneration = typeof session.sessionId === "string" ? session.sessionId : null;
     const channel = detectChannel(chatJid);
-    const apply = this.options.applyControlCommandFn ?? applyControlCommand;
+    const { applyControlCommand: applyDefaultControlCommand } = await import("../agent-control/index.js") as {
+      applyControlCommand: NonNullable<AgentRuntimeFacadeOptions["applyControlCommandFn"]>;
+    };
+    const apply = this.options.applyControlCommandFn ?? applyDefaultControlCommand;
     const result = await withChatContext(chatJid, channel, () => apply(runtime, this.options.modelRegistry, command));
     if (result.refresh_runtime || runtime.session !== session) {
       await this.options.refreshRuntime(chatJid, runtime);
@@ -647,6 +659,7 @@ export class AgentRuntimeFacade {
     chatJid: string,
     options: { includeProviderUsage?: boolean; includeProviderDiagnostics?: boolean; includeCatalogue?: boolean } = {},
   ): Promise<AvailableModelsResult> {
+    const { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel } = await import("../agent-control/agent-control-helpers.js");
     // Passive UI refreshes should not hydrate a cold runtime just to render
     // model state for the picker.
     const session = this.options.getDurableSession === undefined ? this.options.pool.get(chatJid)?.runtime.session ?? null : null;
@@ -898,7 +911,10 @@ export class AgentRuntimeFacade {
     const runtime = await this.options.getOrCreateRuntime(chatJid);
     const session = runtime.session;
     const channel = detectChannel(chatJid);
-    const exec = this.options.executeSlashCommandFn ?? executeSlashCommand;
+    const { executeSlashCommand: executeDefaultSlashCommand } = await import("./slash-command.js") as {
+      executeSlashCommand: NonNullable<AgentRuntimeFacadeOptions["executeSlashCommandFn"]>;
+    };
+    const exec = this.options.executeSlashCommandFn ?? executeDefaultSlashCommand;
     const result = await withChatContext(chatJid, channel, () => exec(session, chatJid, rawText));
     if (result.refresh_runtime || runtime.session !== session) {
       await this.options.refreshRuntime(chatJid, runtime);
