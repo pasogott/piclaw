@@ -559,7 +559,7 @@ export function recoverInflightRuns(
       }
     });
   } catch (error) {
-    log.error("Failed to roll back inflight runs; will retry on next startup", {
+    log.error("Failed to clear inflight markers; will retry on next startup", {
       operation: "recover_inflight_runs",
       err: error,
     });
