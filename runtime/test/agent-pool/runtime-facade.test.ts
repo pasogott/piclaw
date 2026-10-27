@@ -172,6 +172,30 @@ test("durable compatibility lifetimeSignal must be AbortSignal-like", () => {
   })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
 });
 
+test("durable compatibility lifetimeSignal requires removeEventListener", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-signal-shape", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      lifetimeSignal: AbortSignal;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
+});
+
 test("durable compatibility binding must be an object", () => {
   const pool = new Map<string, { runtime: any; lastUsed: number }>();
   expect(() => new AgentRuntimeFacade({

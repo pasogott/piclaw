@@ -351,8 +351,18 @@ export class AgentRuntimeFacade {
         throw new Error("Durable compatibility branchId must be non-empty");
       }
       if (port.lifetimeSignal !== undefined) {
-        const signal = port.lifetimeSignal as unknown as { aborted?: unknown; addEventListener?: unknown };
-        if (!signal || typeof signal !== "object" || typeof signal.aborted !== "boolean" || typeof signal.addEventListener !== "function") {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
           throw new Error("Durable compatibility lifetimeSignal must be AbortSignal-like");
         }
       }
