@@ -408,6 +408,9 @@ export class AgentRuntimeFacade {
       if (typeof port.branchId !== "string" || !port.branchId.trim()) {
         throw new Error("Durable runtime branchId must be non-empty");
       }
+      if (typeof port.readPosition !== "function") {
+        throw new Error("Durable runtime readPosition must be callable");
+      }
       return port;
     };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
