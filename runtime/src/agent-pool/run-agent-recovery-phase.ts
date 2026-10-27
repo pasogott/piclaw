@@ -11,13 +11,12 @@ import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-
 import {
   classifyOpaqueAgentFailure,
   decideAutomaticRecovery,
-  getAutomaticRecoveryDelayMs,
-  type AutomaticRecoveryConfig,
   type RecoveryAttemptSnapshot,
   type RecoveryClassifier,
   type RecoveryDecision,
   type RecoveryStrategy,
 } from "./automatic-recovery.js";
+import { getAutomaticRecoveryDelayMs, type AutomaticRecoveryConfig } from "./recovery-policy.js";
 import {
   buildFreshContextUsageUpdateEvent,
   getAutoCompactionTokenStatusForSession,

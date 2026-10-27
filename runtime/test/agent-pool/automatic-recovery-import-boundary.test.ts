@@ -20,9 +20,7 @@ function walk(dir: string, out: string[] = []): string[] {
 test("automatic-recovery production imports are restricted to the retirement boundary", () => {
   const expected = [
     "agent-pool/run-agent-attempt-finalization.ts",
-    "agent-pool/run-agent-orchestrator.ts",
     "agent-pool/run-agent-recovery-phase.ts",
-    "channels/web/handlers/general-settings.ts",
   ].sort();
 
   const importers = walk(sourceRoot)
