@@ -321,6 +321,9 @@ export class AgentRuntimeFacade {
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable runtime lookup must be callable");
+    }
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
