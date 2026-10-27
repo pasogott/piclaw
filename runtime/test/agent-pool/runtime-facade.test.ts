@@ -258,6 +258,11 @@ test("durable compatibility branchId must be non-empty", () => {
   })).toThrow("Durable compatibility branchId must be non-empty");
 });
 
+test("durable runtime binding must be an object", () => {
+  const { facade } = createFacade({ getDurableSession: () => null as any });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-binding")).toThrow("Durable runtime binding must be an object");
+});
+
 test("durable runtime binding requires non-empty sessionId", () => {
   const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "", branchId: "main", readPosition: async () => null } as any) });
   expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-session-id")).toThrow("Durable runtime sessionId must be non-empty");
