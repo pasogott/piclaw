@@ -1807,7 +1807,9 @@ async function processAuthorisedChat(
     if (result === "pending") {
       // The captured host port owns observation only. Shutdown must retain the recovery marker.
       if (!waitForPending) throw new Error("Accepted dispatch requires host pending observation");
-      result = await waitForPending(pendingIdentity);
+      result = await Promise.resolve()
+        .then(() => waitForPending(pendingIdentity))
+        .catch(() => "pending" as const);
       if (result !== "settled" && result !== "pending") {
         throw new Error("Accepted pending observer returned invalid status");
       }
