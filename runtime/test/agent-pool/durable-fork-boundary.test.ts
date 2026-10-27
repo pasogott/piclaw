@@ -152,3 +152,69 @@ test("durable createRootChatSession fails closed without mutating branch metadat
     rmSync(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test("durable permanentPurgeChatBranch fails closed without mutating branch metadata", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "durable-purge-boundary-"));
+
+  const script = `
+    const { AgentPool } = await import(${JSON.stringify(resolve(source, "agent-pool.ts"))});
+    const { initDatabase, getDb } = await import(${JSON.stringify(resolve(source, "db.ts"))});
+    const { createAgentPoolModelOptions } = await import(${JSON.stringify(fixture)});
+
+    initDatabase();
+    const pool = new AgentPool({
+      ...createAgentPoolModelOptions(),
+      getDurableSession: () => undefined,
+    });
+
+    const beforeBranches = getDb().query("SELECT chat_jid, root_chat_jid, parent_branch_id, archived_at FROM chat_branches ORDER BY chat_jid").all();
+    let failure = "";
+    try {
+      await pool.permanentPurgeChatBranch("web:durable-purge-target");
+      throw new Error("Expected durable permanentPurgeChatBranch to fail closed");
+    } catch (error) {
+      failure = String(error);
+    }
+
+    if (!failure.includes("Durable branch purge unavailable")) {
+      throw new Error("Unexpected durable purge failure: " + failure);
+    }
+
+    const afterBranches = getDb().query("SELECT chat_jid, root_chat_jid, parent_branch_id, archived_at FROM chat_branches ORDER BY chat_jid").all();
+    if (JSON.stringify(afterBranches) !== JSON.stringify(beforeBranches)) {
+      throw new Error("Durable purge failure must not mutate branch metadata");
+    }
+
+    await pool.shutdown();
+    console.log(JSON.stringify({ failure }));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        PICLAW_WORKSPACE: resolve(root, "workspace"),
+        PICLAW_STORE: resolve(root, "store"),
+        PICLAW_DATA: resolve(root, "data"),
+        PI_CODING_AGENT_DIR: resolve(root, "agent"),
+        PICLAW_DB_IN_MEMORY: "1",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
+    const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+    expect(String(result.failure)).toContain("Durable branch purge unavailable");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);

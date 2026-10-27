@@ -825,6 +825,7 @@ export class AgentPool {
   async permanentPurgeChatBranch(
     chatJid: string,
   ): Promise<{ branch: ChatBranchRecord; removedSessionArtifacts: string[] }> {
+    if (this.durableApplication) throw new Error("Durable branch purge unavailable");
     return this.branchManager.permanentPurgeChatBranch(chatJid);
   }
 
