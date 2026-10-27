@@ -232,6 +232,33 @@ test("native restore invalid binding contract retains metadata atomicity without
   }
 });
 
+test("durable shutdown remains host-only without legacy session construction", async () => {
+  initDatabase();
+  const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
+  const filesBefore = snapshot();
+  let factoryReads = 0;
+  const options = {
+    ...createAgentPoolModelOptions(),
+    getDurableSession: () => undefined,
+    get createSession(): never { factoryReads++; throw Error("legacy factory accessed"); },
+  };
+  const spies = [
+    ...(["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL forbidden"); })),
+    ...(["ensureSessionDir", "ensureNamedSessionDir", "createDefaultSession", "createSessionInDir", "lightweightPrewarmSession"] as const)
+      .map(name => spyOn(legacySession, name).mockImplementation(() => { throw Error("legacy session setup forbidden"); })),
+  ];
+  const pool = new AgentPool(options);
+  try {
+    await pool.shutdown();
+    await pool.shutdown();
+    expect(factoryReads).toBe(0);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(filesBefore);
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+});
+
 for (const binding of ["missing", "foreign", "stale", "current"] as const) {
   test(`native restore ${binding} binding retains metadata atomicity without legacy construction`, async () => {
     initDatabase();
