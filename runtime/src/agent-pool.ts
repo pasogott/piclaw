@@ -832,10 +832,12 @@ export class AgentPool {
     sourceChatJid: string,
     options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable branch fork unavailable");
     return this.branchManager.createForkedChatBranch(sourceChatJid, options);
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable root session creation unavailable");
     return this.branchManager.createRootChatSession(agentName);
   }
 
