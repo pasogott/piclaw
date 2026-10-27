@@ -36,6 +36,9 @@ for (const empty of [false, true]) {
       spyOn(AgentBranchManager.prototype, "mergeChatBranchIntoParent").mockImplementation(() => { throw Error("legacy merge entered"); }),
       spyOn(AgentBranchManager.prototype, "restoreChatBranch").mockImplementation(() => { throw Error("legacy restore entered"); }),
       spyOn(AgentBranchManager.prototype, "renameChatJid").mockImplementation(() => { throw Error("legacy identity rename entered"); }),
+      spyOn(AgentBranchManager.prototype, "createForkedChatBranch").mockImplementation(() => { throw Error("legacy fork entered"); }),
+      spyOn(AgentBranchManager.prototype, "createRootChatSession").mockImplementation(() => { throw Error("legacy root creation entered"); }),
+      spyOn(AgentBranchManager.prototype, "permanentPurgeChatBranch").mockImplementation(() => { throw Error("legacy purge entered"); }),
     ];
     let pool: AgentPool | undefined;
     let services: ReturnType<typeof createAgentPoolServices> | undefined;
@@ -69,8 +72,12 @@ for (const empty of [false, true]) {
         await expect(pool.restoreChatBranch(chat)).rejects.toThrow(`Unknown chat branch: ${chat}`);
         expect(getDb().serialize()).toEqual(databaseBefore);
         await expect(pool.renameChatJid(chat, "web:renamed")).rejects.toThrow("Durable chat identity rename unavailable");
+        await expect(pool.createForkedChatBranch(chat, { agentName: "forked" })).rejects.toThrow("Durable branch fork unavailable");
+        await expect(pool.permanentPurgeChatBranch(chat)).rejects.toThrow("Durable branch purge unavailable");
         expect(await pool.applyControlCommand(chat, { type: "rollup", raw: "/rollup" })).toMatchObject({ status: "error", message: "Durable branch rollup unavailable" });
       }
+      await expect(pool.createRootChatSession("durable-root")).rejects.toThrow("Durable root session creation unavailable");
+      expect(getDb().serialize()).toEqual(databaseBefore);
       for (const chat of ["web:bound", "web:unknown", "dream:manual:fixture", "operation:fixture", "custom:room"]) {
         const options = { get budgetWorkId() { runnerOptionReads++; return `forbidden-native-${empty}-${chat}`; } };
         const output = await pool.runAgent("must not enter legacy orchestration", chat, options);
