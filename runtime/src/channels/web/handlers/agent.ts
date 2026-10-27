@@ -1781,6 +1781,12 @@ async function processAuthorisedChat(
     if (channel.updateAgentStatus !== undefined && typeof channel.updateAgentStatus !== "function") {
       throw new Error("Native status updater must be callable");
     }
+    if (typeof channel.broadcastEvent !== "function") {
+      throw new Error("Native status broadcaster must be callable");
+    }
+    if (typeof channel.resumeChat !== "function") {
+      throw new Error("Native resume hook must be callable");
+    }
     const startedAt = new Date().toISOString();
     const nativeStatus = (type: "intent" | "done") => {
       const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,
