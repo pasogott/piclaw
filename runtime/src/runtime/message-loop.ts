@@ -49,12 +49,20 @@ function requireSingleUserMessageLoop(): void {
   if (mode !== "single-user" || (identity && identity.mode !== "single-user")) throw new Error("Owner-bound non-web message processing is not available.");
 }
 
+function assertPollingSupported(pool:Pick<AgentPool,'isDurableRuntime'>):void {
+  if(pool.isDurableRuntime())throw new Error("Native non-web message processing requires host input admission");
+}
+
 /** Process pending messages for a single chat: send to agent, deliver response. */
 export async function processMessages(chatJid: string, deps: MessageProcessingDeps): Promise<boolean> {
   requireSingleUserMessageLoop();
   const since = deps.state.lastAgentTimestamp[chatJid] || "";
   const messages = getMessagesSince(chatJid, since, deps.assistantName);
   if (messages.length === 0) return true;
+  // Polling has no accepted native source/grant port. Refuse before commands,
+  // dedup markers, timestamp commits or legacy execution; leave pending input
+  // intact for an explicitly supported admitted transport integration.
+  assertPollingSupported(deps.agentPool);
 
   const commandQueue: Array<{ message: (typeof messages)[number]; command: AgentControlCommand }> = [];
   const promptMessages: typeof messages = [];
@@ -164,6 +172,7 @@ export async function processMessages(chatJid: string, deps: MessageProcessingDe
 
 /** Dependencies for the message polling loop. */
 export interface MessageLoopDeps {
+  agentPool: Pick<AgentPool,'isDurableRuntime'>;
   queue: AgentQueue;
   state: RuntimeState;
   assistantName: string;
@@ -199,6 +208,9 @@ export async function runMessageLoop(deps: MessageLoopDeps, signal?: AbortSignal
       if (signal?.aborted) return;
       const { messages, newTimestamp } = getNewMessages(jids, deps.state.lastTimestamp, deps.assistantName);
       if (messages.length > 0) {
+        // Validate the transport boundary before ANY queue admission or global
+        // cursor advancement, not just when an asynchronous worker later runs.
+        assertPollingSupported(deps.agentPool);
         // Deduplicate by chat
         const byChat = new Map<string, boolean>();
         for (const msg of messages) byChat.set(msg.chat_jid, true);

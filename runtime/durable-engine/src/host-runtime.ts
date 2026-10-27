@@ -17,6 +17,8 @@ import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } f
 import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import-schema.js";
+import { assertNativeBackgroundExecution,claimNativeBackgroundTool,nativeBackgroundToolReceiptKnown } from './host-background-policy.js';
+import { nativeBackgroundIdentity,readNativeBackgroundPolicy,type NativeBackgroundPolicy } from '../../src/agent-pool/background-operation-contract.js';
 import { projectPublicHistory } from "./session-tree.js";
 import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
@@ -81,7 +83,7 @@ export interface RuntimeOptions {
   readonly onMaintenanceSettled?: (workId: string) => void;
   readonly cancelSideSource?: (input: AcceptedInput) => void;
   /** Atomically persist operator cancellation against this exact operation version. */
-  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number) => void;
+  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number, cause?:'background_cancelled'|'background_timeout') => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   readonly withSessionResetGuard?: <T>(chatJid: string, body: () => Promise<T>) => Promise<T>;
@@ -300,6 +302,15 @@ export class HostConversationRuntime {
       this.fence();
       (this.options.existingConversationIds as ConversationId[]).push(binding.conversationId);
       return binding;
+    });
+  }
+  /** Existing private context publication never appends another conversation
+   * identity to the scheduling/recovery domain. */
+  prepareBackgroundInput(id:ConversationId,update:(tx:import('@earendil-works/pi-durable').Tx)=>Promise<void>,check:()=>void){
+    this.options.assertAdmission?.();
+    return this.observe(async()=>{
+      this.fence();check();if(!this.options.existingConversationIds.includes(id))throw Error('Existing background context is not registered');
+      await this.harness.commit(async tx=>{this.fence();check();await update(tx);this.fence();check();},this.context);this.fence();check();
     });
   }
   /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
@@ -1381,6 +1392,36 @@ export class HostConversationRuntime {
       });
     });
   }
+  /** Exact accepted private input, public SDK configuration and bounded quota.
+   * The same synchronous source fence also guards the actual host effect. */
+  qualifyBackgroundRequest(inputs:readonly HostInputBinding[],raw:NativeBackgroundPolicy,call?:{taskId:TaskId;callId:string;toolName:string}){
+    const policy=readNativeBackgroundPolicy(raw),captured=inputs.map(input=>Object.freeze({...inputSnapshot(input),submissionId:input.submissionId})),identity=nativeBackgroundIdentity(policy);
+    if(captured.length!==1||captured[0]!.sourceId!==identity.sourceId||captured[0]!.operationId!==identity.operationId||captured[0]!.chatJid!==identity.chatJid)throw Error('Exact background accepted input required');
+    const input=captured[0]!,actual=call&&Object.freeze({...call});
+    return this.observe(async()=>{
+      const check=()=>this.assertCapturedSourceCurrent(captured),guard=this.options.withPromptContextGuard;
+      if(!guard)throw Error('Background SDK transaction guard unavailable');check();
+      await guard(check,()=>this.harness.commit(async tx=>{
+        if(actual)await claimNativeBackgroundTool(tx,input.conversationId,policy,actual,Date.now(),check);
+        else await assertNativeBackgroundExecution(tx,input.conversationId,policy,Date.now(),check);
+      },this.context));check();
+    });
+  }
+  /** Passive tool receipt inspection for an already settled input. Never grants
+   * scheduling, task replay or current spending permission. */
+  backgroundToolOutcomesKnown(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      const known=await this.harness.commit(async tx=>{
+        let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+        do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.tool'},100,cursor);
+          for(const task of page.items)if(!await nativeBackgroundToolReceiptKnown(tx,task))return false;
+          cursor=page.next;
+        }while(cursor!==undefined);return true;
+      },this.context);this.fence();return known;
+    },true);
+  }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     return this.captureSource(conversationId, taskId);
@@ -1642,6 +1683,16 @@ export class HostConversationRuntime {
     await port.recordSubmission(input, submission.id); this.fence();
     return submission.id;
   }
+  /** ACK-only recovery of an existing, content/provenance-checked submission.
+   * Never creates an input or grants scheduler progress. */
+  acknowledgeExistingInput(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);const record=await this.record(copy);this.fence();
+      if(!record)throw Error('Existing SDK input acknowledgement required');
+      await this.port(false).recordSubmission(copy,record.id);this.fence();return record.id;
+    },true);
+  }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy), true); }
   /** Inspection and live documents are separate public observations. A task that
@@ -1801,7 +1852,8 @@ export class HostConversationRuntime {
         throw new Error("Unsupported final assistant content");
       if (message.stopReason !== "stop" && message.stopReason !== "length") throw new Error("Unsupported final assistant stop reason");
       const text = message.content.map(part => part.type === "text" ? part.text : "").join("");
-      if (text.length > 65536) throw new Error("Answer exceeds qualification bound");
+      const addonBackground=/^background:[a-f0-9]{64}$/.test(input.sourceId)&&input.chatJid.startsWith('operation:')&&this.options.operationConversationFor?.(input)===input.conversationId;
+      if (addonBackground ? Buffer.byteLength(text,'utf8')>256*1024 : text.length>65536) throw new Error("Answer exceeds qualification bound");
       answer = freezeTree({ message: structuredClone(message), text });
     }
     return { operation, submissionId: record.id, status, answer };
@@ -1880,6 +1932,86 @@ export class HostConversationRuntime {
       // Publish the public failed-storage proof before a caller considers recovery.
       if (this.storageClosing) await this.storageEnded;
       throw error;
+    });
+  }
+  /** Capture cleanup while the fresh private Dream source is still owned.
+   * The returned join is deliberately outside detachable observation tracking:
+   * shutdown must be able to close SDK resources before this waiter returns. */
+  captureDreamCleanup(input:AcceptedInput):Promise<()=>Promise<void>>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!copy.chatJid.startsWith('dream:')||!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact private Dream cleanup owner required');
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Fresh ownerless Dream context required');
+      const context=withoutAbortSignal(this.context);
+      let joined:Promise<void>|undefined;
+      return()=>joined??=(async()=>{
+        if(this.closed||this.storageClosing){await this.storageEnded;return;}
+        try{
+          this.options.owner.assert();
+          const conversation=await this.harness.conversation(copy.conversationId,context);
+          if(!conversation)throw Error('Private Dream cleanup context missing');
+          await conversation.abort(context,{background:true});
+        }catch(error){
+          // Do not release Dream's FD lease merely because observation/abort
+          // failed. SDK close owns actual provider/tool resource cleanup.
+          log.warn('Private Dream cleanup awaits confirmed SDK close',{operation:'durable_dream.cleanup_pending',conversationId:copy.conversationId});
+          await this.storageEnded;
+          throw error;
+        }
+      })();
+    });
+  }
+  /** Join the private context's SDK-owned compaction work before releasing its
+   * accepted source/lease. Observation detaches on close; SDK close still owns
+   * the real tasks and provider cleanup. No new scheduler progress is granted. */
+  joinBackgroundCompactions(input:AcceptedInput){
+    const copy=inputSnapshot(input),context=withAbortSignal(this.observations.signal,this.context);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact background compaction join required');
+      const joined=new Set<number>();
+      for(;;){
+        const tasks=await this.harness.commit(async tx=>{
+          const found:import('@earendil-works/pi-durable').TaskRecord<unknown,unknown,CompactionResult>[]=[];let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+          do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.compaction'},100,cursor);
+            for(const task of page.items)if(!joined.has(task.id))found.push(task as typeof found[number]);cursor=page.next;
+          }while(cursor!==undefined);return found;
+        },context);this.fence();if(!tasks.length)return;
+        for(const candidate of tasks){
+          const reason=(candidate.input as {reason?:string}).reason;
+          if(!['threshold','overflow'].includes(reason??''))throw Error('Unqualified private compaction task');
+          const task=candidate.state.status==='terminal'?candidate:await this.harness.waitForTask(candidate.id,context);this.fence();
+          if(task.state.status!=='terminal')throw Error('Private compaction task remains live');
+          if(task.state.outcome.status==='completed'&&task.state.outcome.result.submissionId!==undefined){
+            const submission=await this.harness.submission(task.state.outcome.result.submissionId,context);this.fence();
+            const status=await submission?.wait(context);this.fence();
+            if(!status||status.type!=='write'||status.conversationId!==copy.conversationId||!['done','unanswered'].includes(status.status))throw Error('Private compaction write remains uncertain');
+          }
+          joined.add(candidate.id);
+        }
+      }
+    });
+  }
+  /** Only an exact private ownerless/unforked context may be aborted wholesale.
+   * Cancellation is owner cleanup and does not require a current spend grant. */
+  abortBackground(input:AcceptedInput,cause:'background_cancelled'|'background_timeout'='background_cancelled'):Promise<boolean>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      const o=this.options;
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||copy.requestId!==copy.sourceId||copy.payloadRef!==copy.sourceId||
+        o.operationConversationFor?.(copy)!==copy.conversationId||o.conversationFor(copy.chatJid,copy.branchId)!==copy.conversationId||!o.cancelOperationSource)throw Error('Exact private background abort required');
+      const state=await this.readState(copy);this.fence();
+      if(state.operation.terminal)return false;
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Exact private background abort required');
+      const completed=state.status?.status==='done';
+      if(!completed&&!state.operation.cancellation)o.cancelOperationSource(copy,state.operation.version,undefined,cause);
+      this.fence();await this.progress(completed?undefined:copy);
+      const conversation=await this.harness.conversation(copy.conversationId,this.context);this.fence();
+      if(!conversation)throw Error('Missing private background conversation');
+      await conversation.abort(this.context,{background:true});this.fence();return !completed;
     });
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */

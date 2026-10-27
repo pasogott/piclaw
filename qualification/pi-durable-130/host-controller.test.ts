@@ -11,6 +11,13 @@ import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/dura
 import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { AcceptedReplyThreadUnavailableError } from "../../runtime/durable-engine/src/host-message-thread.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
+import { backgroundPolicyFixture,backgroundPolicyReopenFixture,backgroundPolicyOwnerFixture } from "./background-policy-fixture.ts";
+
+test('background policy SDK: paused disk reopen preserves quota and same-input replay',backgroundPolicyReopenFixture);
+test('background policy SDK: document owner matches its public registration',backgroundPolicyOwnerFixture);
+
+for(const mode of ['allowed','limit','ceiling','forged-call','revoked','expired','configuration','parallel','reused-call-id','api-change','long-call'] as const)
+  test(`background policy SDK: ${mode}`,()=>backgroundPolicyFixture(mode));
 
 // Each scenario owns its fixture and keeps the existing 15-second deadline.
 for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrelated-settlement-error"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],

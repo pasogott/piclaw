@@ -98,7 +98,7 @@ export function markWorkspaceIndexStale(params?: { scope?: WorkspaceSearchScope 
 }
 
 /** Full-text search across indexed workspace files. */
-export async function searchWorkspace(params: WorkspaceSearchParams): Promise<WorkspaceSearchResult> {
+export async function searchWorkspace(params: WorkspaceSearchParams, owner?: { refreshStaleInline: true }): Promise<WorkspaceSearchResult> {
   const access=workspaceIndexAccess();
   const policy=access.mode==='single-user'?workspaceIndexPolicySnapshot():null;
   const query = params.query.trim();
@@ -116,7 +116,8 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
   } else {
     const status = getWorkspaceIndexStatus({ scope });
     if (status.state !== "ready") {
-      requestBackgroundWorkspaceIndexRefresh({ scope, max_kb: params.max_kb });
+      if(owner?.refreshStaleInline)await refreshWorkspaceIndex({scope,max_kb:params.max_kb});
+      else requestBackgroundWorkspaceIndexRefresh({ scope, max_kb: params.max_kb });
     }
   }
 

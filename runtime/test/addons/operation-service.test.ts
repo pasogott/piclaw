@@ -11,6 +11,7 @@ import {
   readAddonOperation,
   transitionAddonOperation,
   purgeAddonOperations,
+  appendOperationInput,
 } from "../../src/db/addon-operations.js";
 import { withExecutionIdentity } from "../../src/core/execution-context.js";
 
@@ -211,6 +212,18 @@ test("restart reconciles unknown active executions without repeating work, but p
     reason: "interrupted_execution_unknown",
   });
   expect(service.recover()).toBe(0);
+});
+
+test('native owner receipt recovery: a stale recovered result cannot replace a later input',async()=>{
+  const receipt=await service.bind(principal).admit(input);service.shutdown();await service.waitForIdle();
+  const id=receipt.operation!.id;expect(transitionAddonOperation(id,['queued'],'working')?.status).toBe('working');
+  let entered!:()=>void,finish!:(value:OperationResult)=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});
+  const recovering=new AddonOperationService({authorize(){throw Error('Recovery must not borrow a spending grant');},async execute(){throw Error('Recovery must never execute');},async recover(record){expect(record.inputSequence).toBe(1);entered();return new Promise<OperationResult>(resolve=>{finish=resolve;});}});
+  try{
+    expect(recovering.recover()).toBe(1);await ready;
+    transitionAddonOperation(id,['working'],'input_required');appendOperationInput(id,'later input');transitionAddonOperation(id,['queued'],'working');const current=readAddonOperation(id);
+    finish({status:'completed',output:'stale answer'});await recovering.waitForIdle();expect(readAddonOperation(id)).toEqual(current);expect(executions).toHaveLength(0);
+  }finally{finish?.({status:'failed',reason:'fixture_cleanup'});recovering.shutdown();await recovering.waitForIdle();}
 });
 
 test("terminal retention expiry releases only the correct principal keys", async () => {

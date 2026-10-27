@@ -1,5 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, linkSync, writeFileSync } from "fs";
 import { join } from "path";
 
 import { importFresh } from "./helpers.js";
@@ -190,6 +190,7 @@ test("runDreamAgentTurn skips gracefully when another live Dream run holds the l
 test("runDreamAgentTurn records recovery summaries when the model pass succeeds after recovery", async () => {
   const config = await import("../src/core/config.js");
   resetDreamDestructiveFixture(config);
+  const db = await import("../src/db.js"); db.initDatabase();
 
   const dream = await importFresh<typeof import("../src/dream.js")>("../src/dream.js");
   const result = await dream.runDreamAgentTurn({
@@ -258,9 +259,163 @@ test("scheduled Dream consumes deferred startup backfill state and clears it aft
   expect(dream.hasOutstandingDreamConsolidation(2)).toBe(false);
 });
 
+for(const replacement of ['same-pid','symlink'] as const)test(`Dream lock ownership: a ${replacement} replacement stops mutation and is not unlinked by the former owner`,async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'),memory=join(config.WORKSPACE_DIR,'notes/memory/MEMORY.md');
+  const marker='replacement owner must keep these exact bytes';
+  const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+  const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+    applyControlCommand:acceptModelChange,runAgent:async()=>{
+      renameSync(lock,lock+'.former');
+      if(replacement==='symlink'){writeFileSync(lock+'.target',String(process.pid));symlinkSync(lock+'.target',lock);}
+      else writeFileSync(lock,String(process.pid));
+      writeFileSync(memory,marker);return{status:'success',result:'must not publish consolidation'};
+    },disposeChatSession:async()=>{throw Error('former owner must not clean data');},
+  } as any}).then(()=>undefined,error=>error);
+  expect(caught).toBeInstanceOf(Error);expect(existsSync(lock)).toBe(true);expect(readFileSync(lock,'utf8')).toBe(String(process.pid));expect(readFileSync(memory,'utf8')).toBe(marker);
+});
+
+test('Dream lock ownership: replacement during stale inspection is retained without starting the agent',async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock');mkdirSync(join(config.WORKSPACE_DIR,'notes/memory'),{recursive:true});writeFileSync(lock,'999999');
+  let calls=0;const kill=spyOn(process,'kill').mockImplementation(((pid:number)=>{
+    expect(pid).toBe(999999);renameSync(lock,lock+'.former');writeFileSync(lock,String(process.pid));throw Object.assign(Error('old owner exited'),{code:'ESRCH'});
+  }) as typeof process.kill);
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{runAgent:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
+    expect(result.skipped).toBe(true);expect(calls).toBe(0);expect(readFileSync(lock,'utf8')).toBe(String(process.pid));
+  }finally{kill.mockRestore();}
+});
+
+test('Dream lock ownership: stale inspection keeps the original inode pinned until replacement is decided',async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock');mkdirSync(join(config.WORKSPACE_DIR,'notes/memory'),{recursive:true});writeFileSync(lock,'999999');
+  let pinned=false;
+  const kill=spyOn(process,'kill').mockImplementation((()=>{
+    pinned=readdirSync('/proc/self/fd').some(fd=>{try{return readlinkSync('/proc/self/fd/'+fd)===lock;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}});
+    throw Object.assign(Error('old owner exited'),{code:'ESRCH'});
+  }) as typeof process.kill);
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{applyControlCommand:acceptModelChange,runAgent:async()=>({status:'success',result:'fixture'}),disposeChatSession:async()=>{}} as any});
+    expect(pinned).toBe(true);expect(existsSync(lock)).toBe(false);
+  }finally{kill.mockRestore();}
+});
+
+for(const kind of ['malformed','symlink','hardlink','unknown-process'] as const)test(`Dream lock ownership: ${kind} lock has no stale-owner deletion authority`,async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock');mkdirSync(join(config.WORKSPACE_DIR,'notes/memory'),{recursive:true});
+  if(kind==='symlink'||kind==='hardlink'){
+    writeFileSync(lock+'.target','999999');if(kind==='symlink')symlinkSync(lock+'.target',lock);else linkSync(lock+'.target',lock);
+  }else writeFileSync(lock,kind==='malformed'?'unverifiable owner':'999999');
+  const original=readFileSync(lock,'utf8');let calls=0;
+  const kill=spyOn(process,'kill').mockImplementation((()=>{throw Object.assign(Error('inspection unavailable'),{code:'EIO'});}) as typeof process.kill);
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{runAgent:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
+    expect(result.skipped).toBe(true);expect(calls).toBe(0);expect(readFileSync(lock,'utf8')).toBe(original);
+  }finally{kill.mockRestore();}
+});
+
+for(const replacement of [false,true])test(`Dream lock ownership: process exit removes only its original descriptor-bound lock (replacement=${replacement})`,async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock');
+  const child=Bun.spawn([process.execPath,'--no-env-file','-e',`
+    import {initDatabase} from ${JSON.stringify(new URL('../src/db.ts',import.meta.url).pathname)};
+    import {runDreamAgentTurn} from ${JSON.stringify(new URL('../src/dream.ts',import.meta.url).pathname)};
+    import {renameSync,writeFileSync} from 'node:fs';
+    initDatabase();await runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+      applyControlCommand:async()=>({status:'success',message:'fixture'}),
+      runAgent:async()=>{if(${replacement}){renameSync(${JSON.stringify(lock)},${JSON.stringify(lock+'.former')});writeFileSync(${JSON.stringify(lock)},String(process.pid));}process.exit(0);},disposeChatSession:async()=>{},
+    }});
+  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1',PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  const [status,stderr]=await Promise.all([child.exited,new Response(child.stderr).text(),new Response(child.stdout).text()]);
+  expect(status,stderr).toBe(0);expect(existsSync(lock)).toBe(replacement);if(replacement)expect(readFileSync(lock,'utf8')).toBe(String(child.pid));
+});
+
+test('Dream lock ownership: a nonregular lock is retained without blocking process inspection',async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const lock=join(config.WORKSPACE_DIR,'notes/memory/.dream.lock');mkdirSync(join(config.WORKSPACE_DIR,'notes/memory'),{recursive:true});
+  const made=Bun.spawnSync(['mkfifo',lock],{stdout:'pipe',stderr:'pipe'});expect(made.exitCode,made.stderr.toString()).toBe(0);
+  const child=Bun.spawn([process.execPath,'--no-env-file','-e',`
+    import {initDatabase} from ${JSON.stringify(new URL('../src/db.ts',import.meta.url).pathname)};
+    import {runDreamMaintenance} from ${JSON.stringify(new URL('../src/dream.ts',import.meta.url).pathname)};
+    initDatabase();const result=await runDreamMaintenance({mode:'manual',days:1});if(!result.skipped)process.exit(2);process.exit(0);
+  `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1',PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  let timedOut=false;const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},3000);
+  try{const [status,stderr]=await Promise.all([child.exited,new Response(child.stderr).text(),new Response(child.stdout).text()]);expect(timedOut).toBe(false);expect(status,stderr).toBe(0);expect(existsSync(lock)).toBe(true);}
+  finally{clearTimeout(timer);if(child.exitCode===null)child.kill('SIGKILL');await child.exited;}
+});
+
+test('Dream lock ownership: deterministic maintenance releases its original lease without a model runner',async()=>{
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+  const result=await dream.runDreamMaintenance({chatJid:'web:default',mode:'manual',days:1});
+  expect(result.skipped).toBe(false);expect(result.refresh).not.toBeNull();expect(existsSync(result.memory_path)).toBe(true);expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
+});
+
+test("Dream failed execution: a thrown agent outcome still refreshes notes/index without claiming consolidation", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const startup=await import('../src/agent-memory/startup-state.js');startup.writeDreamStartupMarker('backfill_required',config.WORKSPACE_DIR);
+  const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+  const failure=Error('uncertain accepted agent outcome');let disposed=0;
+  await expect(dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+    applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{disposed++;},
+  } as any})).rejects.toBe(failure);
+  for(const name of ['MEMORY.md','current-state.md','recent-context.md'])expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory',name))).toBe(true);
+  expect(db.getDb().query("SELECT path FROM workspace_files WHERE path='notes/memory/MEMORY.md'").get()).toEqual({path:'notes/memory/MEMORY.md'});
+  expect(startup.dreamStartupBackfillRequired(config.WORKSPACE_DIR)).toBe(true);
+  expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);expect(disposed).toBe(1);
+});
+
+test("Dream failed execution: deterministic refresh failure retains the original agent uncertainty", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const refresh=await import('../src/agent-memory/refresh.js');
+  const failure=Error('uncertain accepted agent outcome'),refreshFailure=Error('fixture refresh failed');
+  const hook=spyOn(refresh,'refreshAgentMemoryFromDailyNotes').mockImplementation(()=>{throw refreshFailure;});
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+      applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{},
+    } as any}).then(()=>undefined,error=>error);
+    expect(caught).toBeInstanceOf(AggregateError);expect(caught.errors).toEqual([failure,refreshFailure]);expect(hook).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
+  }finally{hook.mockRestore();}
+});
+
+test("Dream failed execution: access revocation blocks refresh and preserves the agent failure through cleanup", async () => {
+  const config=await import('../src/core/config.js');resetDreamDestructiveFixture(config);
+  const db=await import('../src/db.js');db.initDatabase();
+  const refresh=await import('../src/agent-memory/refresh.js'),access=await import('../src/core/config-access.js');
+  const refreshed=spyOn(refresh,'refreshAgentMemoryFromDailyNotes');let denied:{mockRestore():void}|undefined,disposed=0;
+  const failure=Error('uncertain accepted agent outcome');
+  try{
+    const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
+    const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
+      applyControlCommand:acceptModelChange,runAgent:async()=>{
+        denied=spyOn(access,'readAccessConfig').mockImplementation(()=>{throw Error('fixture access revoked');});throw failure;
+      },disposeChatSession:async()=>{disposed++;},
+    } as any}).then(()=>undefined,error=>error);
+    const failures=(error:unknown):unknown[]=>error instanceof AggregateError?error.errors.flatMap(failures):[error];
+    expect(caught).toBeInstanceOf(AggregateError);expect(failures(caught)).toContain(failure);
+    expect(refreshed).not.toHaveBeenCalled();expect(disposed).toBe(0);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/MEMORY.md'))).toBe(false);
+    expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
+  }finally{denied?.mockRestore();refreshed.mockRestore();}
+});
+
 test("runDreamAgentTurn falls back to deterministic refresh when the model pass errors", async () => {
   const config = await import("../src/core/config.js");
   resetDreamDestructiveFixture(config);
+  const db = await import("../src/db.js"); db.initDatabase();
 
   const dream = await importFresh<typeof import("../src/dream.js")>("../src/dream.js");
   let capturedTimeoutMs: number | undefined;

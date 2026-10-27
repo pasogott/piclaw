@@ -19,7 +19,10 @@
  *   - The AgentQueue (queue.ts) serialises task execution with user messages per chat lane while allowing unrelated chats to progress in parallel.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomUUID,createHash } from "node:crypto";
+import { withBudgetWorkContext } from './budget/context.js';
+import { ensureBudgetWork,getBudgetWork,setBudgetWorkStatus } from './db/budget-limits.js';
+import { nativeBackgroundSourceId } from './agent-pool/background-operation-contract.js';
 import { hostname } from "node:os";
 import Database from "bun:sqlite";
 
@@ -47,6 +50,7 @@ import type {
 } from "./service-effects/contracts/scheduled-run-store.js";
 import { hashCanonicalRequest, type CanonicalJsonValue, type EffectIdentity } from "./service-effects/contracts/common.js";
 import { createCurrentPiclawScheduledRunStore } from "./service-effects/current-piclaw/scheduled-run-store.js";
+import { hashScheduledLeaseToken } from './service-effects/current-piclaw/scheduled-run-values.js';
 import { addCanonicalDuration } from "./service-effects/current-piclaw/scheduled-run-values.js";
 import { scheduledResultRef } from "./service-effects/current-piclaw/scheduled-history-projection.js";
 import type { ScheduledTask } from "./types.js";
@@ -189,7 +193,12 @@ async function restoreOriginalModel(
 
 const MAX_SHELL_OUTPUT_CHARS = 8000;
 
-async function runInternalTask(task: ScheduledTask, deps: SchedulerDeps): Promise<{ result: string | null; error: string | null; notify: boolean }> {
+function scheduledDreamInvocationId(runId:string):string{
+  const hex=createHash('sha256').update('scheduled-dream:'+runId).digest('hex').slice(0,32);
+  return[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+}
+
+async function runInternalTask(task: ScheduledTask, deps: SchedulerDeps,nativeAuthority?:{invocationId:string;assertCurrent():void}): Promise<{ result: string | null; error: string | null; notify: boolean }> {
   const action = (task.prompt || "").trim().toLowerCase();
   const dreamToken = parseDreamPromptToken(action);
 
@@ -200,7 +209,7 @@ async function runInternalTask(task: ScheduledTask, deps: SchedulerDeps): Promis
         days: dreamToken.days,
         mode: "auto",
         model: task.model,
-        agentPool: deps.agentPool,
+        agentPool: deps.agentPool,nativeAuthority,
       });
       return {
         result: result.result,
@@ -316,6 +325,7 @@ export async function runScheduledTask(
   deps: SchedulerDeps,
   options: { advanceTask?: boolean } = {},
 ): Promise<ScheduledTaskRunOutcome> {
+  if(deps.agentPool.isDurableRuntime?.()===true)return{status:'skipped',result:null,error:'Native scheduled execution requires an admitted occurrence',durationMs:0,taskRunLogId:null};
   return executeScheduledTask(task, deps, options);
 }
 
@@ -362,16 +372,32 @@ async function executeScheduledTask(
         : "agent";
 
     if (kind === "internal") {
-      // Switch model if the internal task specifies one (e.g. Dream).
-      const savedModel = task.model ? await deps.agentPool.getCurrentModelLabel(task.chat_jid) : null;
+      const nativeDream=deps.agentPool.isDurableRuntime?.()===true&&task.id===DREAM_TASK_ID&&parseDreamPromptToken(task.prompt).matched;
+      let nativeAuthority:{invocationId:string;assertCurrent():void}|undefined;
+      if(nativeDream){
+        if(!scheduledLease)throw Error('Native scheduled Dream requires its occurrence lease');
+        const lease=scheduledLease,db=getDb(),tokenHash=hashScheduledLeaseToken(lease.leaseToken);
+        nativeAuthority={invocationId:scheduledDreamInvocationId(lease.record.runId),assertCurrent(){
+          if(!mayContinue()||getDb()!==db||!db.query(`SELECT 1 FROM service_effect_s07_occurrences r
+            JOIN service_effect_s07_tasks h ON h.task_id=r.task_id AND h.current_revision=r.task_revision AND h.status='active' AND h.next_run_at=r.scheduled_for
+            JOIN service_effect_s07_task_revisions v ON v.task_id=r.task_id AND v.revision=r.task_revision
+            WHERE r.run_id=? AND r.task_id=? AND r.task_revision=? AND r.attempt=? AND r.worker_id=? AND r.lease_token_hash=?
+              AND r.state='claimed' AND r.lease_expires_at>? AND v.config_hash=?`).get(lease.record.runId,task.id,lease.record.taskRevision,lease.record.attempt,lease.record.workerId,tokenHash,new Date().toISOString(),lease.task.configHash)){
+            allowed=false;throw Error('Scheduled Dream occurrence authority changed');
+          }
+        }};
+        nativeAuthority.assertCurrent();ensureBudgetWork({id:budgetWorkId,chatJid:task.chat_jid,executionKind:'scheduled',scheduledTaskId:task.id});
+      }
+      // Native Dream owns its exact private model; never switch the public chat.
+      const savedModel = !nativeDream&&task.model ? await deps.agentPool.getCurrentModelLabel(task.chat_jid) : null;
       if (!mayContinue()) return unsupportedScheduledRun();
-      if (task.model && (!savedModel || savedModel !== task.model)) {
+      if (!nativeDream&&task.model && (!savedModel || savedModel !== task.model)) {
         const switchErr = await switchTaskModel(task, deps);
         if (!mayContinue()) return unsupportedScheduledRun();
         if (switchErr) { error = switchErr; }
       }
       if (!error) {
-        const out = await runInternalTask(task, deps);
+        const out = await(nativeDream?withBudgetWorkContext({workId:budgetWorkId,chatJid:task.chat_jid,kind:'scheduled'},()=>runInternalTask(task,deps,nativeAuthority)):runInternalTask(task,deps));
         if (!mayContinue()) return unsupportedScheduledRun();
         if (out.error) {
           error = out.error;
@@ -379,8 +405,8 @@ async function executeScheduledTask(
           result = out.result;
         }
       }
-      // Restore original model after internal task completes.
-      if (task.model) {
+      // Restore only the legacy internal task's public model.
+      if (!nativeDream&&task.model) {
         await restoreOriginalModel(task, deps, savedModel, mayContinue);
       }
     } else if (kind === "shell") {
@@ -663,7 +689,7 @@ function scheduledReclaimAuthorities(now: string): ScheduledRunReclaimAuthority[
   ).all(now) as Array<{ run_id: string; attempt: number; snapshot_json: string }>;
   const authorities: ScheduledRunReclaimAuthority[] = [];
   for (const row of rows) {
-    let snapshot: { executionRepeatability?: string; chatJid?: string };
+    let snapshot: { executionRepeatability?: string; chatJid?: string;taskId?:string;kind?:string };
     try { snapshot = JSON.parse(row.snapshot_json); } catch { continue; }
     if (snapshot.executionRepeatability === "agent_source" && typeof snapshot.chatJid === "string") {
       const accepted = db.query(
@@ -678,6 +704,10 @@ function scheduledReclaimAuthorities(now: string): ScheduledRunReclaimAuthority[
         });
       }
     } else if (snapshot.executionRepeatability === "repeatable") {
+      if(snapshot.taskId===DREAM_TASK_ID&&snapshot.kind==='internal'&&typeof snapshot.chatJid==='string'){
+        const sourceId=nativeBackgroundSourceId({kind:'dream',invocationId:scheduledDreamInvocationId(row.run_id),chatJid:snapshot.chatJid,mode:'auto'});
+        if(db.query("SELECT 1 FROM service_effect_s01_sources WHERE source_id=? AND kind='internal'").get(sourceId))continue; // Accepted native effects are never repeatable authority.
+      }
       authorities.push({ runId: row.run_id, expectedAttempt: row.attempt, kind: "repeatable", reconciliationRef: null });
     }
   }
@@ -977,6 +1007,10 @@ async function runClaimedScheduledTask(
       ? `Error: ${outcome.error || "Unknown"}`
       : (outcome.result?.slice(0, 200) || "Completed");
     applyScheduledRunToTask(completed.value, summary);
+    if(task.id===DREAM_TASK_ID&&lease.task.kind==='internal'&&deps.agentPool.isDurableRuntime?.()===true){
+      const workId='scheduled:'+lease.record.runId,db=getDb();
+      if(getBudgetWork(workId,db)?.status==='active'&&!db.query("SELECT 1 FROM budget_work WHERE parent_work_id=? AND status IN ('active','paused') LIMIT 1").get(workId))setBudgetWorkStatus(workId,'completed',{boundary:'scheduled_dream_settled'},db);
+    }
     if (source) settleScheduledAgentSource(finalLease.task.chatJid, source, outcome.status, completedAt);
     if (outcome.budgetBlocked) await drainScheduledBudgetNotifications(deps);
     log.info("Scheduled run settled", {

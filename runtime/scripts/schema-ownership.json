@@ -12,6 +12,22 @@
     "host.historical-accounts/offline-empty-v1": "{\"base\":\"bae0a32550a17711957b75ae8d45bbc6b008e4c9\",\"historicalSource\":\"cdc214fcc06349dc9d315c2d17c866764e4557d5\",\"owner\":\"host.historical-accounts\",\"id\":\"offline-empty-v1\",\"migration_order\":1,\"checksum\":\"746a4c82365ce5a36baf333a86d4331c9272e9c812920652ab0c7743ba2bc09e\"}"
   },
   "owners": {
+    "core:background-contexts": {
+      "category": "core",
+      "initializer": "runtime/durable-engine/src/host-background-context.ts#publishNativeBackgroundContext",
+      "writers": ["runtime/durable-engine/src/host-background-context.ts"],
+      "sourceOfTruth": "Single application-owned stable operation-context key to private SDK conversation/session identity. This index grants no execution and is excluded from public chat/session ingress.",
+      "replayRetention": "Preserve private identities and source-keyed policy families across input epochs and ACK/reopen. Staged contexts retain their immutable payload references; no duplicate allocation, physical pruning or implicit source replay.",
+      "references": ["runtime/durable-engine/src/application-bootstrap.ts", "runtime/durable-engine/src/default-application-runtime.ts", "runtime/src/agent-pool/background-operation-contract.ts"]
+    },
+    "core:background-policy": {
+      "category": "core",
+      "initializer": "runtime/durable-engine/src/host-background-policy.ts#bindNativeBackgroundPolicy (opt-in public SDK allocation transaction)",
+      "writers": ["runtime/durable-engine/src/host-background-policy.ts"],
+      "sourceOfTruth": "The immutable accepted payload owns background policy. Each source-keyed SDK document family member binds its input/hash and bounds exact public tool-task quota claims; it is not execution permission or an effect/replay receipt.",
+      "replayRetention": "Preserve the binding and claimed task IDs across ACK loss/reopen. Same-policy binding never resets quota. Forks start unbound. No physical SDK pruning, policy renewal, schema migration or automatic registration.",
+      "references": ["runtime/src/agent-pool/background-operation-contract.ts", "runtime/durable-engine/src/host-background-policy.ts"]
+    },
     "core:access_state": {
       "category": "core",
       "initializer": "runtime/src/db/access-state.ts#initializeAccessSchema",
@@ -4646,6 +4662,20 @@
     }
   },
   "documents": [
+    {
+      "kind": "app.background-contexts",
+      "owner": "core:background-contexts",
+      "scope": "conversation",
+      "history": "latest",
+      "fork": "initial"
+    },
+    {
+      "kind": "app.background-policy",
+      "owner": "core:background-policy",
+      "scope": "conversation",
+      "history": "latest",
+      "fork": "initial"
+    },
     {
       "kind": "pi.agent",
       "owner": "sdk:storage",

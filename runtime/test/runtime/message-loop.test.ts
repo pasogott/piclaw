@@ -3,6 +3,8 @@ import { AgentQueue } from "../../src/queue.js";
 
 import { importFresh, withTempWorkspaceEnv } from "../helpers.js";
 
+const legacyPollingPool = { isDurableRuntime: () => false };
+
 function pollingState(chatJids: string[]) {
   return {
     chatJids: new Set(chatJids),
@@ -49,6 +51,7 @@ test("processMessages leaves lastAgentTimestamp unchanged when runAgent throws",
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => {
           throw new Error("agent crashed");
         },
@@ -85,6 +88,7 @@ test("processMessages persists lastAgentTimestamp after a recovered successful a
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => ({
           status: "success",
           result: "done",
@@ -129,6 +133,7 @@ test("processMessages treats leading path-like slash text after trigger as a nor
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         applySlashCommand: async () => {
           throw new Error("path-like slash text must not execute as slash command");
         },
@@ -170,6 +175,7 @@ test("processMessages persists lastAgentTimestamp after a successful agent run",
       assistantName: "Pi",
       triggerPattern: /@Pi/i,
       agentPool: {
+        isDurableRuntime: () => false,
         runAgent: async () => ({
           status: "success",
           result: "done",
@@ -198,7 +204,7 @@ test("abort during poll sleep clears timer and listener without another poll", a
     const clear = spyOn(globalThis, "clearTimeout");
     const remove = spyOn(controller.signal, "removeEventListener");
     try {
-      const running = loop.runMessageLoop({ queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
+      const running = loop.runMessageLoop({ agentPool: legacyPollingPool, queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
       expect(polls).toBe(1);
       const timer = timers.mock.results.at(-1)!.value;
       controller.abort();
@@ -224,7 +230,7 @@ test("stop after readonly fetch admits nothing and leaves cursor replayable", as
     let saves = 0;
     state.saveTimestamps = () => { saves++; };
     Object.defineProperty(state, "lastTimestamp", { get: () => { controller.abort(); return ""; } });
-    await loop.runMessageLoop({ queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
+    await loop.runMessageLoop({ agentPool: legacyPollingPool, queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
     expect(queue.getMetrics().enqueued).toBe(0);
     expect(saves).toBe(0);
     expect(db.getNewMessages([chat], "", "Pi").messages).toHaveLength(1);
@@ -246,7 +252,7 @@ test("partially admitted batch keeps original cursor and accepted queue work run
     const enqueue = queue.enqueue.bind(queue);
     const intercepted = spyOn(queue, "enqueue").mockImplementation((...args) => { enqueue(...args); controller.abort(); });
     try {
-      await loop.runMessageLoop({ queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => { accepted.resolve(); return true; } }, controller.signal);
+      await loop.runMessageLoop({ agentPool: legacyPollingPool, queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => { accepted.resolve(); return true; } }, controller.signal);
       expect(queue.getMetrics().enqueued).toBe(1);
       expect(state.lastTimestamp).toBe("");
       expect(db.getNewMessages(chats, state.lastTimestamp, "Pi").messages).toHaveLength(2);
@@ -269,7 +275,7 @@ test("shutdown joins poll then waits for accepted asynchronous queue processing 
     const queueStopping = Promise.withResolvers<void>();
     const calls: string[] = [];
     const running = loop.runMessageLoop({
-      queue, state: pollingState([chat]), assistantName: "Pi", pollIntervalMs: 60_000,
+      agentPool: legacyPollingPool, queue, state: pollingState([chat]), assistantName: "Pi", pollIntervalMs: 60_000,
       processMessages: async () => { entered.resolve(); await release.promise; calls.push("notification-complete"); return true; },
     }, controller.signal);
     const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
@@ -302,7 +308,7 @@ test("already stopped loop never polls", async () => {
     const state = pollingState([]);
     Object.defineProperty(state, "chatJids", { get: () => { throw new Error("must not poll"); } });
     const queue = new AgentQueue();
-    await loop.runMessageLoop({ queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
+    await loop.runMessageLoop({ agentPool: legacyPollingPool, queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => true }, controller.signal);
     expect(queue.getMetrics().enqueued).toBe(0);
     await queue.shutdown();
   });

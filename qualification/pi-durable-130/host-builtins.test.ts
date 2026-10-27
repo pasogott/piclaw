@@ -131,3 +131,70 @@ test("revocation while SDK mutation queue awaits prevents mkdir and file creatio
     expect(existsSync(join(cwd, "new"))).toBe(false);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test('private Dream tools: message effects use the captured source after the admission await',async()=>{
+  const {createHostDreamTools}=await import('../../runtime/durable-engine/src/host-dream-tools.ts');
+  const {initDatabase,getDb,closeDatabase}=await import('../../runtime/src/db/connection.js');initDatabase();const db=getDb();
+  let allowed=true,captures=0;const guard=()=>{if(!allowed)throw Error('Dream source revoked');};
+  const tools=createHostDreamTools({assertOwner:guard,async capture(){captures++;await Promise.resolve();return{chatJid:'dream:private-tool-fixture',assertCurrent:guard};}});
+  const invoke=(args:unknown)=>tools[0]!.execute(args as never,{...api,conversationId:18,taskId:19} as never,context);
+  try{
+    const before=db.query('SELECT count(*) AS n FROM messages').get();
+    const pending=invoke({action:'add',content:'FORBIDDEN_DREAM_MESSAGE'});allowed=false;
+    await expect(pending).rejects.toThrow('Native Dream tool failed');expect(db.query('SELECT count(*) AS n FROM messages').get()).toEqual(before);
+    allowed=true;const result=await invoke({action:'search',query:'absent-dream-message',chat_jid:'*',limit:1});
+    expect(JSON.stringify(result.output)).not.toContain('FORBIDDEN_DREAM_MESSAGE');expect(captures).toBe(2);
+    expect(tools.map(tool=>tool.name)).toEqual(['messages','search_workspace']);expect(tools.every(tool=>tool.replay==='unsafe')).toBe(true);
+  }finally{closeDatabase();}
+});
+
+test('private Dream tools: stale workspace search joins inline refresh and never launches a background writer',async()=>{
+  const {createHostDreamTools}=await import('../../runtime/durable-engine/src/host-dream-tools.ts');
+  const {initDatabase,closeDatabase}=await import('../../runtime/src/db/connection.js');initDatabase();
+  const {getWorkspaceDir}=await import('../../runtime/src/core/config-context.js');
+  const {mkdirSync}=await import('node:fs');const cwd=getWorkspaceDir();mkdirSync(join(cwd,'notes'),{recursive:true});writeFileSync(join(cwd,'notes','dream-source-search.md'),'DREAM_SEARCH_OWNED_SENTINEL');
+  const search=await import('../../runtime/src/workspace-search.js');let background=0,checks=0;
+  search.setBackgroundWorkspaceIndexRefreshRequesterForTests(()=>{background++;});
+  const guard=()=>{checks++;};const tools=createHostDreamTools({assertOwner:guard,async capture(){return{chatJid:'dream:private-tool-fixture',assertCurrent:guard};}});
+  try{
+    const result=await tools[1]!.execute({query:'DREAM_SEARCH_OWNED_SENTINEL',scope:'notes',limit:1} as never,{...api,conversationId:18,taskId:19} as never,context);
+    expect(JSON.stringify(result.output)).toContain('dream-source-search.md');expect(background).toBe(0);expect(checks).toBeGreaterThan(5);
+    expect(search.getWorkspaceIndexStatus({scope:'notes'}).state).toBe('ready');
+  }finally{search.setBackgroundWorkspaceIndexRefreshRequesterForTests(null);rmSync(join(cwd,'notes','dream-source-search.md'));closeDatabase();}
+});
+
+test('private Dream tools: index access snapshots retain and latch the invocation effect fence',async()=>{
+  const {withWorkspaceIndexAuthority,workspaceIndexAccess}=await import('../../runtime/src/core/workspace-index-access.js');
+  let allowed=true,checks=0;const assert=()=>{checks++;if(!allowed)throw Error('lease changed');};
+  const snapshot=withWorkspaceIndexAuthority(assert,()=>workspaceIndexAccess());
+  await Promise.resolve();allowed=false;expect(()=>snapshot.validate()).toThrow('Workspace index access denied');
+  allowed=true;expect(()=>snapshot.validate()).toThrow('Workspace index access denied');expect(checks).toBeGreaterThan(2);
+  expect(()=>workspaceIndexAccess().validate()).not.toThrow();
+});
+
+test('private Dream tools: revocation across actual index traversal await prevents the file commit',async()=>{
+  const {createHostDreamTools}=await import('../../runtime/durable-engine/src/host-dream-tools.ts');
+  const {initDatabase,getDb,closeDatabase}=await import('../../runtime/src/db/connection.js');initDatabase();const db=getDb();
+  const {getWorkspaceDir}=await import('../../runtime/src/core/config-context.js');const {mkdirSync}=await import('node:fs');
+  const fs=(await import('node:fs/promises')).default;const {spyOn}=await import('bun:test');const cwd=getWorkspaceDir(),file=join(cwd,'notes','dream-revoked-search.md');mkdirSync(join(cwd,'notes'),{recursive:true});writeFileSync(file,'DREAM_REVOKED_SEARCH_SENTINEL');
+  let allowed=true,revoked=false;const guard=()=>{if(!allowed)throw Error('PRIVATE_DREAM_LEASE');};
+  const original=fs.readdir,read=spyOn(fs,'readdir').mockImplementation((async(...args:Parameters<typeof original>)=>{const result=await original(...args);if(String(args[0])===join(cwd,'notes')){allowed=false;revoked=true;}return result;}) as typeof original);
+  const tools=createHostDreamTools({assertOwner:guard,async capture(){return{chatJid:'dream:private-tool-fixture',assertCurrent:guard};}});
+  try{
+    await expect(tools[1]!.execute({query:'DREAM_REVOKED_SEARCH_SENTINEL',scope:'notes',refresh:true} as never,{...api,conversationId:18,taskId:19} as never,context)).rejects.toThrow('Native Dream tool failed');
+    expect(revoked).toBe(true);expect(db.query('SELECT path FROM workspace_files WHERE path=?').all('notes/dream-revoked-search.md')).toEqual([]);
+  }finally{read.mockRestore();rmSync(file);closeDatabase();}
+});
+
+test('private Dream tools: message post retains the registered synchronous broadcast port',async()=>{
+  const {createHostDreamTools}=await import('../../runtime/durable-engine/src/host-dream-tools.ts');
+  const {setMessagesPostFn}=await import('../../runtime/src/extensions/messages-crud.js');
+  const {initDatabase,closeDatabase}=await import('../../runtime/src/db/connection.js');initDatabase();
+  const {storeChatMetadata,storeMessage}=await import('../../runtime/src/db.js');const chat='dream:private-broadcast-fixture';storeChatMetadata(chat,new Date().toISOString());
+  let broadcasts=0;setMessagesPostFn((chatJid,content,isBot)=>{broadcasts++;return storeMessage({id:'dream-broadcast-fixture',chat_jid:chatJid,sender:'fixture',sender_name:'Fixture',content,timestamp:new Date().toISOString(),is_from_me:isBot,is_bot_message:isBot});});
+  const tools=createHostDreamTools({assertOwner(){},async capture(){return{chatJid:chat,assertCurrent(){}};}});
+  try{
+    const result=await tools[0]!.execute({action:'post',content:'DREAM_BROADCAST_PARITY'} as never,{...api,conversationId:18,taskId:19} as never,context);
+    expect(broadcasts).toBe(1);expect(JSON.stringify(result.output)).not.toContain('error');
+  }finally{setMessagesPostFn(undefined);closeDatabase();}
+});

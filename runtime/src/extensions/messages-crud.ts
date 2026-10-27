@@ -36,7 +36,7 @@ import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "..
 import { getSearchMatchMode } from "../core/config.js";
 import { sanitizeModelPostedContentBlocks } from "../channels/web/messaging/content-block-safety.js";
 
-const MessagesSchema = Type.Object({
+export const MessagesSchema = Type.Object({
   action: Type.Optional(
     Type.Union([
       Type.Literal("search"),
@@ -1771,6 +1771,11 @@ export function setMessagesPostFn(fn: MessagePostFn | undefined): void {
   registeredPostFn = fn;
 }
 
+/** Shared execution entry retains the current synchronous post/broadcast port. */
+export function runRegisteredMessagesTool(params:MessagesParams,defaultChat:string){
+  return runMessagesTool(params,defaultChat,registeredPostFn);
+}
+
 export const messagesCrud: ExtensionFactory = (pi: ExtensionAPI) => {
   pi.on("before_agent_start", async (event) => ({
     systemPrompt: `${event.systemPrompt}\n\n${readAccessConfig().mode === "single-user" ? MESSAGES_TOOL_HINT : "## Owner-scoped messages\nOnly search/get/grep/extract/diff are available. Wildcard/all means active owned sessions only; omitted targets use the current source, and get may select owned row IDs across roots. Add/post/delete/move are disabled."}`,
@@ -1784,7 +1789,7 @@ export const messagesCrud: ExtensionFactory = (pi: ExtensionAPI) => {
     parameters: MessagesSchema,
     async execute(_toolCallId, params) {
       const defaultChat = getChatJid("web:default");
-      return runMessagesTool(params, defaultChat, registeredPostFn);
+      return runRegisteredMessagesTool(params, defaultChat);
     },
   });
 };

@@ -27,6 +27,12 @@ function errorFields(error: unknown, seen = new Set<object>(), depth = 0): Recor
   }
   const cause = read("cause");
   if (cause !== undefined) output.cause = errorFields(cause, seen, depth + 1);
+  const children=read('errors');
+  const aggregate=()=>{
+    try{if(!Array.isArray(children))return;return Array.from({length:Math.min(children.length,4)},(_,index)=>errorFields(children[index],seen,depth+1));}
+    catch{return[{message:'Aggregate errors unreadable'}];}
+  };
+  const nested=aggregate();if(nested)output.errors=nested;
   return output;
 }
 

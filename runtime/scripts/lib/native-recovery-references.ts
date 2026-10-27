@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
+import { backgroundRecoveryBindings } from '../../durable-engine/src/host-background-context.js';
 
 /** Data dependencies only. Discovering a reference never grants execution authority. */
 export interface NativeRecoveryReference {
-  owner: "native-answer" | "native-side-input" | "native-side-result" | "codex-image" | "outbox";
+  owner: "native-answer" | "native-side-input" | "native-side-result" | "native-background-input" | "codex-image" | "outbox";
   ref: string;
   location: "answers" | "workspace" | "external";
   mediaType?: string;
@@ -27,6 +28,7 @@ function present(db: Database, table: string) {
  */
 export function collectNativeRecoveryReferences(db: Database, submissions: ReadonlyMap<number,RecoverySubmissionState> = new Map()): readonly NativeRecoveryReference[] {
   const refs = new Map<string, NativeRecoveryReference>();
+  const backgroundRefs=new Set(backgroundRecoveryBindings(db).map(entry=>entry.sourceId));
   const add = (input: Omit<NativeRecoveryReference,"redactionClass"> & Partial<Pick<NativeRecoveryReference,"redactionClass">>) => {
     const value: NativeRecoveryReference = { mediaType:"text/plain",redactionClass:"private",...input };
     text(value.ref);
@@ -36,12 +38,14 @@ export function collectNativeRecoveryReferences(db: Database, submissions: Reado
     if (prior && JSON.stringify(prior) !== JSON.stringify(value)) throw Error("Conflicting recovery reference");
     refs.set(key, Object.freeze({ ...value }));
   };
+  for(const ref of backgroundRefs)add({owner:'native-background-input',ref,location:'answers'});
   if (present(db, "service_effect_s01_sources")) {
     const inputs = db.query("SELECT kind,source_id,payload_ref FROM service_effect_s01_sources WHERE kind='internal'").all() as
       { kind: string; source_id: string; payload_ref: string }[];
     for (const input of inputs) {
-      if (!side.test(input.source_id) || input.payload_ref !== input.source_id) throw Error("Unsupported internal recovery source");
-      add({ owner: "native-side-input", ref: input.payload_ref, location: "answers" });
+      if(input.payload_ref!==input.source_id)throw Error('Unsupported internal recovery source');
+      if(side.test(input.source_id))add({ owner: "native-side-input", ref: input.payload_ref, location: "answers" });
+      else if(!backgroundRefs.has(input.source_id))throw Error('Unsupported internal recovery source');
     }
   }
   if (present(db, "piclaw_durable_bindings_v1")) {
@@ -77,8 +81,8 @@ export function collectNativeRecoveryReferences(db: Database, submissions: Reado
       if(!Number.isSafeInteger(selected)||selected<1) throw Error("Invalid terminal submission binding");
       add({ owner: "native-answer", ref: `runtime-answer:${binding.incarnation}:${selected}`, location: "answers" });
       if (binding.kind === "internal" && binding.terminal_disposition === "completed") {
-        if (!side.test(binding.source_id)) throw Error("Unsupported internal recovery result");
-        add({ owner: "native-side-result", ref: `side-result:${binding.source_id}`, location: "answers" });
+        if(side.test(binding.source_id))add({ owner: "native-side-result", ref: `side-result:${binding.source_id}`, location: "answers" });
+        else if(!backgroundRefs.has(binding.source_id))throw Error('Unsupported internal recovery result');
       }
     }
   }

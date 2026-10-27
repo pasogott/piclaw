@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { createVerifiedSqliteBackup, verifySqliteBackup, type SqliteBackupManifest } from "../../src/db/backup.js";
+import { verifyBackgroundRecoveryPayload } from '../../durable-engine/src/host-background-context.js';
 import { collectNativeRecoveryReferences, type NativeRecoveryReference } from "./native-recovery-references.js";
 import { assertSchemaInventory, readSchemaInventory, type SchemaContract } from "./schema-ownership.js";
 import { inspectRecoverySubmissions } from "../../durable-engine/src/recovery-submission-inspection.js";
@@ -197,6 +198,7 @@ export async function captureNativeRecoveryUnit(options: RecoveryCaptureOptions)
         const found = files.get(`payloads/${sha(reference.ref)}`);
         if (!found) throw Error("Required native payload missing");
         file = found;
+        if(reference.owner==='native-background-input')verifyBackgroundRecoveryPayload(db,reference.ref,new TextDecoder('utf-8',{fatal:true}).decode(bytes(join(output,file.file))));
       } else if (reference.location === "workspace") file = store(`artifacts/${sha(reference.ref)}`, bytes(join(workspace, reference.ref)));
       else {
         const declared = external.get(reference.ref);
@@ -269,6 +271,7 @@ export async function verifyNativeRecoveryUnit(path: string, environment: Recove
     if (JSON.stringify(actual.map(({ owner,ref,location,redactionClass }) => ({ owner,referenceSha256:sha(ref),location,redactionClass }))) !== JSON.stringify(listed)) throw Error("Incomplete recovery reference closure");
     for (const reference of actual) {
       const stored = manifest.references.find(row => row.owner === reference.owner && row.referenceSha256 === sha(reference.ref))!;
+      if(reference.owner==='native-background-input')verifyBackgroundRecoveryPayload(db,reference.ref,new TextDecoder('utf-8',{fatal:true}).decode(bytes(join(unit,stored.file))));
       if (stored.file !== (reference.location === "answers" ? `payloads/${sha(reference.ref)}` : `artifacts/${sha(reference.ref)}`) ||
         reference.mediaType !== undefined && reference.mediaType !== stored.mediaType ||
         reference.sha256 !== undefined && (reference.sha256 !== stored.sha256 || reference.byteLength !== stored.byteLength)) throw Error("Recovery reference binding mismatch");

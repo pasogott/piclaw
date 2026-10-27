@@ -212,8 +212,27 @@ export interface RetrySettingsProvider {
   getRetrySettings?: SettingsManager["getRetrySettings"];
 }
 
+/** Data-only accepted native identity; no SDK handle or execution permission. */
+export interface PreparedNativeBackgroundInput {
+  incarnation:string;conversationId:number;chatJid:string;branchId:string;operationId:string;sourceSeq:number;
+  sourceId:string;payloadRef:string;requestId:string;requestHash:string;
+}
+
+/** Trusted in-process Dream invocation; the native host creates its identities. */
+export interface NativeDreamRequest {
+  invocationId:string;chatJid:string;mode:'manual'|'auto';days:number;model:string|null;timeoutMs:number;acceptedAt:string;
+  assertCurrent():void;
+}
+
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  dispatchDreamOperation?: (request:NativeDreamRequest)=>Promise<AgentOutput>;
+  /** Host-owned add-on admission; policy is derived from its persisted owner/grant. */
+  prepareAddonOperation?: (operationId:string,signal?:AbortSignal)=>Promise<PreparedNativeBackgroundInput>;
+  /** Trusted persisted owner ID only; never a caller-supplied prompt or grant. */
+  dispatchAddonOperation?: (operationId:string,signal:AbortSignal,expectedInputSequence?:number)=>Promise<AgentOutput>;
+  /** Existing outcome reconciliation; never submits/resumes model/tool work. */
+  reconcileAddonOperation?: (operationId:string,expectedInputSequence?:number)=>Promise<AgentOutput|null>;
   /** Application-owned native slash commands; never constructs a legacy session. */
   dispatchHostCommand?: (chatJid: string, rawText: string) => Promise<import("../agent-control/agent-control-types.js").AgentControlResult>;
   /** Select the durable backend for the entire pool. Captured bindings are exhaustive;
