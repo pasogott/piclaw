@@ -136,6 +136,39 @@ for (const empty of [false, true]) {
   });
 }
 
+test("durable branch discovery stays host-only without legacy session construction", async () => {
+  initDatabase();
+  const chat = "web:durable-known";
+  storeChatMetadata(chat, "2026-10-25T00:00:00.000Z", "durable-known");
+  const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
+  const filesBefore = snapshot();
+  let factoryReads = 0;
+  const options = {
+    ...createAgentPoolModelOptions(),
+    getDurableSession: () => undefined,
+    get createSession(): never { factoryReads++; throw Error("legacy factory accessed"); },
+  };
+  const spies = [
+    ...(["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL forbidden"); })),
+    ...(["ensureSessionDir", "ensureNamedSessionDir", "createDefaultSession", "createSessionInDir", "lightweightPrewarmSession"] as const)
+      .map(name => spyOn(legacySession, name).mockImplementation(() => { throw Error("legacy session setup forbidden"); })),
+  ];
+  let pool: AgentPool | undefined;
+  try {
+    pool = new AgentPool(options);
+    const known = pool.listKnownChats(chat, { includeArchived: true });
+    expect(Array.isArray(known)).toBe(true);
+    expect(known.some(entry => entry.chat_jid === chat)).toBe(true);
+    expect(pool.findChatByAgentName("durable-known")).toEqual({ chat_jid: chat, agent_name: "durable-known" });
+    expect(factoryReads).toBe(0);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(filesBefore);
+  } finally {
+    await pool?.shutdown();
+    for (const spy of spies) spy.mockRestore();
+  }
+});
+
 test("durable pruneChatBranch archives metadata without legacy session construction", async () => {
   initDatabase();
   const chat = "web:native-prune-durable";
