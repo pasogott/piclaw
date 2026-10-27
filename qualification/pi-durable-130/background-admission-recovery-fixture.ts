@@ -7,14 +7,14 @@ import { captureNativeRecoveryUnit,verifyNativeRecoveryUnit,type RecoveryEnviron
 import { qualifyNativeRecoveryUnit } from '../../runtime/durable-engine/src/recovery-unit-qualification.js';
 /** Source is the quiescent isolated native factory, never a production profile.
  * Capture/qualification see selected offline copies only. */
-export async function backgroundAdmissionRecoveryFixture(root:Database,workspace:string,dataDir:string,configuration:string,completed=false,expectedInputs=1,expectedAnswers=completed?1:0){
+export async function backgroundAdmissionRecoveryFixture(root:Database,workspace:string,dataDir:string,configuration:string,completed=false,expectedInputs=1,expectedAnswers=completed?1:0,coreRevision='1f893deeb5f15bb34cbdb3593da5f9171d9ae3e6'){
   const base=join(workspace,'background-admission-recovery');mkdirSync(base,{mode:0o700});
   const source=join(base,'source.sqlite'),answers=join(base,'answers'),files=join(base,'files'),addons=join(base,'addons');
   for(const path of [answers,files,addons])mkdirSync(path,{mode:0o700});
   const sourcePath=(root.query('PRAGMA database_list').all() as {name:string;file:string}[]).find(row=>row.name==='main')!.file;
   createVerifiedSqliteBackup(root,sourcePath,source);cpSync(join(dataDir,'durable-answers'),answers,{recursive:true});
   const config=join(base,'configuration.json');writeFileSync(config,readFileSync(configuration),{mode:0o600});
-  const environment:RecoveryEnvironment={runtime:{coreRevision:'1f893deeb5f15bb34cbdb3593da5f9171d9ae3e6',sdkVersion:'1.4.0',bunVersion:Bun.version},addonWorkspace:addons,
+  const environment:RecoveryEnvironment={runtime:{coreRevision,sdkVersion:'1.4.0',bunVersion:Bun.version},addonWorkspace:addons,
     configurations:[{id:'operation-policy-fixture',path:config}],credentialReferences:[],credentialReferenceAvailable:()=>{throw Error('Keyless fixture has no credential references');}};
   const output=join(base,'unit'),manifest=await captureNativeRecoveryUnit({database:source,answers,workspace:files,output,environment});
   expect(manifest.references.map(row=>row.owner).sort()).toEqual([...Array.from({length:expectedAnswers},()=> 'native-answer' as const),...Array.from({length:expectedInputs},()=> 'native-background-input' as const)]);
