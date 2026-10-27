@@ -396,6 +396,20 @@ export class AgentRuntimeFacade {
       })] as const;
     }));
     const rawDurableLookup = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const validateDurableRuntimeMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+      options: { required?: boolean } = {},
+    ): void => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) {
+        if (options.required) throw new Error(`Durable runtime ${String(method)} must be callable`);
+        return;
+      }
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable runtime ${String(method)} must be callable`);
+      }
+    };
     this.getDurableSession = (chatJid) => {
       const port = rawDurableLookup(chatJid);
       if (port === undefined) return undefined;
@@ -408,9 +422,29 @@ export class AgentRuntimeFacade {
       if (typeof port.branchId !== "string" || !port.branchId.trim()) {
         throw new Error("Durable runtime branchId must be non-empty");
       }
-      if (typeof port.readPosition !== "function") {
-        throw new Error("Durable runtime readPosition must be callable");
-      }
+      validateDurableRuntimeMethod(port, "readPosition", { required: true });
+      validateDurableRuntimeMethod(port, "readContextUsage");
+      validateDurableRuntimeMethod(port, "readModel");
+      validateDurableRuntimeMethod(port, "readThinkingLevel");
+      validateDurableRuntimeMethod(port, "setThinkingLevel");
+      validateDurableRuntimeMethod(port, "setModel");
+      validateDurableRuntimeMethod(port, "reset");
+      validateDurableRuntimeMethod(port, "readAbortScope");
+      validateDurableRuntimeMethod(port, "abort");
+      validateDurableRuntimeMethod(port, "abortRetry");
+      validateDurableRuntimeMethod(port, "restart");
+      validateDurableRuntimeMethod(port, "runBash");
+      validateDurableRuntimeMethod(port, "abortBash");
+      validateDurableRuntimeMethod(port, "readExecutionPolicy");
+      validateDurableRuntimeMethod(port, "setExecutionPolicy");
+      validateDurableRuntimeMethod(port, "requestExit");
+      validateDurableRuntimeMethod(port, "compact");
+      validateDurableRuntimeMethod(port, "reconcileMaintenance");
+      validateDurableRuntimeMethod(port, "readTree");
+      validateDurableRuntimeMethod(port, "readMetadata");
+      validateDurableRuntimeMethod(port, "readReport");
+      validateDurableRuntimeMethod(port, "assertCurrent");
+      validateDurableRuntimeMethod(port, "runOwnedControl");
       if (port.lifetimeSignal !== undefined) {
         const signal = port.lifetimeSignal as unknown as {
           aborted?: unknown;
