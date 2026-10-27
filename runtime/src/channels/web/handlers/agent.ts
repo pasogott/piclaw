@@ -1798,7 +1798,9 @@ async function processAuthorisedChat(
     // Native operations/submissions own recovery. A legacy inflight marker
     // would falsely advertise every live SDK turn as interrupted after reload.
     nativeStatus("intent");
-    let result = await acceptedDispatch().catch(() => "pending" as const);
+    let result = await Promise.resolve()
+      .then(() => acceptedDispatch())
+      .catch(() => "pending" as const);
     if (result !== "settled" && result !== "pending") {
       throw new Error("Accepted dispatch returned invalid status");
     }
