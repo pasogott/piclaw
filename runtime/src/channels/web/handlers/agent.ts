@@ -1755,7 +1755,9 @@ async function processAuthorisedChat(
   const coordinator = channel.dispatchAcceptedInput;
   const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
     rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
-  const waitForPending = coordinator?.waitForPending.bind(coordinator);
+  const waitForPending = typeof coordinator?.waitForPending === "function"
+    ? coordinator.waitForPending.bind(coordinator)
+    : undefined;
   let acceptedDispatch: (() => Promise<"settled" | "pending">) | undefined;
   try {
     acceptedDispatch = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
