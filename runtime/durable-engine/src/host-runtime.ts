@@ -1934,6 +1934,35 @@ export class HostConversationRuntime {
       throw error;
     });
   }
+  /** Capture cleanup while the fresh private Dream source is still owned.
+   * The returned join is deliberately outside detachable observation tracking:
+   * shutdown must be able to close SDK resources before this waiter returns. */
+  captureDreamCleanup(input:AcceptedInput):Promise<()=>Promise<void>>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!copy.chatJid.startsWith('dream:')||!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact private Dream cleanup owner required');
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Fresh ownerless Dream context required');
+      const context=withoutAbortSignal(this.context);
+      let joined:Promise<void>|undefined;
+      return()=>joined??=(async()=>{
+        if(this.closed||this.storageClosing){await this.storageEnded;return;}
+        try{
+          this.options.owner.assert();
+          const conversation=await this.harness.conversation(copy.conversationId,context);
+          if(!conversation)throw Error('Private Dream cleanup context missing');
+          await conversation.abort(context,{background:true});
+        }catch(error){
+          // Do not release Dream's FD lease merely because observation/abort
+          // failed. SDK close owns actual provider/tool resource cleanup.
+          log.warn('Private Dream cleanup awaits confirmed SDK close',{operation:'durable_dream.cleanup_pending',conversationId:copy.conversationId});
+          await this.storageEnded;
+          throw error;
+        }
+      })();
+    });
+  }
   /** Join the private context's SDK-owned compaction work before releasing its
    * accepted source/lease. Observation detaches on close; SDK close still owns
    * the real tasks and provider cleanup. No new scheduler progress is granted. */

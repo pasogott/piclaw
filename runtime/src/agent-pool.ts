@@ -321,6 +321,11 @@ export class AgentPool {
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
+  private readonly dreamDispatch?:AgentPoolOptions['dispatchDreamOperation'];
+  dispatchDreamOperation(request:import('./agent-pool/contracts.js').NativeDreamRequest):Promise<AgentOutput>{
+    if(!this.durableApplication||!this.dreamDispatch)throw Error('Native Dream dispatcher unavailable');
+    return this.dreamDispatch(Object.freeze({...request,assertCurrent:request.assertCurrent.bind(request)}));
+  }
   private readonly addonAdmission?: AgentPoolOptions["prepareAddonOperation"];
   private readonly addonDispatch?: AgentPoolOptions["dispatchAddonOperation"];
   private readonly addonReconcile?:AgentPoolOptions['reconcileAddonOperation'];
@@ -349,6 +354,7 @@ export class AgentPool {
   }
 
   constructor(options: AgentPoolOptions) {
+    this.dreamDispatch=options.dispatchDreamOperation?.bind(options);
     this.addonAdmission = options.prepareAddonOperation?.bind(options);
     this.addonDispatch = options.dispatchAddonOperation?.bind(options);
     this.addonReconcile = options.reconcileAddonOperation?.bind(options);

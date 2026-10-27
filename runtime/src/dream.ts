@@ -554,6 +554,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     }
   }
 
+  const native=options.agentPool.isDurableRuntime?.()===true;
   let shouldCleanupDreamChat = false;
   const dreamChatJid = buildDreamChatJid(chatJid, mode);
   const requestedDreamModel = typeof options.model === "string" && options.model.trim()
@@ -576,7 +577,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     const backupPath = await createDreamBackup(chatJid, mode, days, checkAccess);
     checkAccess();
     const dailyNotesRefreshed = refreshDailyNotes(chatJid, days);
-    if (requestedDreamModel) {
+    if (requestedDreamModel&&!native) {
       const modelError = await applyModelLabel(options.agentPool, dreamChatJid, requestedDreamModel);
       checkAccess();
       if (modelError) {
@@ -604,7 +605,7 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     }
     const execution = await (async () => {
       try {
-        const output = await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
+        const output = native?await options.agentPool.dispatchDreamOperation({invocationId:crypto.randomUUID(),chatJid,mode,days,model:requestedDreamModel,timeoutMs:getDreamAgentTimeoutMs(),acceptedAt:new Date().toISOString(),assertCurrent:checkAccess}):await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
           budgetWorkId: `background:${dreamChatJid}`,
           budgetExecutionKind: "background",
           timeoutMs: getDreamAgentTimeoutMs(),

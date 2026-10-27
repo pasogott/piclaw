@@ -233,3 +233,25 @@ test("missing backend pending observation fails closed instead of settling accep
     .toThrow("Native channel binding method unavailable: dispatchAcceptedInput.waitForPending");
   await backend.close();
 });
+
+test('Dream dispatch facade: preserves original invocation and deadline, joins cleanup and never automatically replays',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('uncertain Dream dispatch');let prepares=0,oldCalls=0,nextCalls=0;
+  const request={invocationId:'00000000-0000-4000-8000-000000000001',chatJid:'web:test',mode:'manual' as const,days:2,model:'fixture/original',timeoutMs:1000,acceptedAt:'2026-01-01T00:00:00.000Z',assertCurrent(){}};
+  old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchDreamOperation:async received=>{expect(received).toBe(request);oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,dispatchDreamOperation:async received=>{expect(received).toBe(request);nextCalls++;return{status:'success',result:'same invocation receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(failure);expect(oldCalls).toBe(1);await tick();expect(nextCalls).toBe(0);
+  let ended=false;const explicit=backend.sessionOptions.dispatchDreamOperation!(request).then(value=>{ended=true;return value;});await tick();expect(ended).toBe(false);expect(prepares).toBe(1);
+  gate.resolve();expect(await explicit).toEqual({status:'success',result:'same invocation receipt'});expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);await backend.close();
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toThrow('Native runtime closing');
+});
+
+test('Dream dispatch facade: unconfirmed cleanup cannot replace or replay an invocation',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('unconfirmed Dream cleanup');let prepares=0,calls=0;old.state.closeError=cleanup;
+  const request={invocationId:'00000000-0000-4000-8000-000000000002',chatJid:'web:test',mode:'manual' as const,days:2,model:null,timeoutMs:1000,acceptedAt:'2026-01-01T00:00:00.000Z',assertCurrent(){}};
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchDreamOperation:async()=>{calls++;old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(cleanup);expect(calls).toBe(1);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});

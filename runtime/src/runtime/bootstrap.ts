@@ -13,7 +13,7 @@ import type { WebChannelOpts } from "../channels/web.js";
 export interface RuntimeBackend {
   /** Resolves only after a failed public SDK session has closed its storage. */
   readonly storageFailure?: Promise<unknown>;
-  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation" | "dispatchAddonOperation" | "reconcileAddonOperation">>;
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation" | "dispatchAddonOperation" | "reconcileAddonOperation" | "dispatchDreamOperation">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
   attachChannel?(channel: NativeTurnViewChannel & { resumePendingChats?(chatJid?: string): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
@@ -90,6 +90,10 @@ export async function createRecoverableRuntimeBackend(prepare: () => Promise<Run
   };
   const sessionOptions: RuntimeBackend["sessionOptions"] = Object.freeze({
     getDurableSession,
+    dispatchDreamOperation:current.sessionOptions.dispatchDreamOperation?async(...args)=>{
+      await ready();if(!current.sessionOptions.dispatchDreamOperation)throw Error('Native Dream dispatcher unavailable');
+      return current.sessionOptions.dispatchDreamOperation(...args); // Never replay an uncertain invocation.
+    }:undefined,
     prepareAddonOperation: current.sessionOptions.prepareAddonOperation ? async (...args) => {
       await ready();
       if(!current.sessionOptions.prepareAddonOperation)throw Error("Native add-on admission unavailable");
