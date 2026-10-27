@@ -1156,7 +1156,7 @@ test("native status publication failures after pending settlement do not block c
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-status-publication-failure-pending-settle";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1192,7 +1192,10 @@ test("native status publication failures after pending settlement do not block c
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, statusCalls, broadcastCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, statusCalls, broadcastCalls, executionMarkers }));
   `;
 
   try {
@@ -1226,6 +1229,19 @@ test("native status publication failures after pending settlement do not block c
     expect(result.resumed).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
+    expect(result.executionMarkers).toEqual({
+      preflight_prev_ts: null,
+      preflight_message_id: null,
+      preflight_started_at: null,
+      inflight_prev_ts: null,
+      inflight_message_id: null,
+      inflight_started_at: null,
+      failed_prev_ts: null,
+      failed_ts: null,
+      failed_message_id: null,
+      failed_thread_root: null,
+      failed_created_at: null,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1245,7 +1261,7 @@ test("native status publication failures do not block settled dispatch or trigge
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-status-publication-failure";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1277,7 +1293,10 @@ test("native status publication failures do not block settled dispatch or trigge
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, resumed, statusCalls, broadcastCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, resumed, statusCalls, broadcastCalls, executionMarkers }));
   `;
 
   try {
@@ -1310,6 +1329,19 @@ test("native status publication failures do not block settled dispatch or trigge
     expect(result.resumed).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
+    expect(result.executionMarkers).toEqual({
+      preflight_prev_ts: null,
+      preflight_message_id: null,
+      preflight_started_at: null,
+      inflight_prev_ts: null,
+      inflight_message_id: null,
+      inflight_started_at: null,
+      failed_prev_ts: null,
+      failed_ts: null,
+      failed_message_id: null,
+      failed_thread_root: null,
+      failed_created_at: null,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1329,7 +1361,7 @@ test("native resume hook failure after pending settlement does not block cursor 
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-resume-failure-post-pending-settle";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1362,7 +1394,10 @@ test("native resume hook failure after pending settlement does not block cursor 
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
   `;
 
   try {
@@ -1396,6 +1431,19 @@ test("native resume hook failure after pending settlement does not block cursor 
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
+    expect(result.executionMarkers).toEqual({
+      preflight_prev_ts: null,
+      preflight_message_id: null,
+      preflight_started_at: null,
+      inflight_prev_ts: null,
+      inflight_message_id: null,
+      inflight_started_at: null,
+      failed_prev_ts: null,
+      failed_ts: null,
+      failed_message_id: null,
+      failed_thread_root: null,
+      failed_created_at: null,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1415,7 +1463,7 @@ test("native pending-settle publication and resume failures together do not bloc
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-pending-settle-publish-resume-failure";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1454,7 +1502,10 @@ test("native pending-settle publication and resume failures together do not bloc
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
   `;
 
   try {
@@ -1488,6 +1539,19 @@ test("native pending-settle publication and resume failures together do not bloc
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
+    expect(result.executionMarkers).toEqual({
+      preflight_prev_ts: null,
+      preflight_message_id: null,
+      preflight_started_at: null,
+      inflight_prev_ts: null,
+      inflight_message_id: null,
+      inflight_started_at: null,
+      failed_prev_ts: null,
+      failed_ts: null,
+      failed_message_id: null,
+      failed_thread_root: null,
+      failed_created_at: null,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1507,7 +1571,7 @@ test("native resume hook failure after settled dispatch does not block cursor ad
       });
     }});
 
-    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor } = await import(source + "/db.js");
+    const { initDatabase, storeChatMetadata, storeMessage, getChatCursor, getDb } = await import(source + "/db.js");
     const { processChat } = await import(source + "/channels/web/handlers/agent.ts");
     const chatJid = "web:native-resume-failure-post-settle";
     const messageTs = "2026-01-01T00:00:01.000Z";
@@ -1536,7 +1600,10 @@ test("native resume hook failure after settled dispatch does not block cursor ad
     };
 
     await processChat(channel, chatJid, "default");
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, statusCalls, broadcastCalls, resumeCalls }));
+    const executionMarkers = getDb().prepare(
+      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    ).get(chatJid);
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
   `;
 
   try {
@@ -1569,6 +1636,19 @@ test("native resume hook failure after settled dispatch does not block cursor ad
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
+    expect(result.executionMarkers).toEqual({
+      preflight_prev_ts: null,
+      preflight_message_id: null,
+      preflight_started_at: null,
+      inflight_prev_ts: null,
+      inflight_message_id: null,
+      inflight_started_at: null,
+      failed_prev_ts: null,
+      failed_ts: null,
+      failed_message_id: null,
+      failed_thread_root: null,
+      failed_created_at: null,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
