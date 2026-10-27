@@ -1755,8 +1755,12 @@ async function processAuthorisedChat(
   const coordinator = channel.dispatchAcceptedInput;
   const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
     rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
-  const waitForPending = typeof coordinator?.waitForPending === "function"
-    ? coordinator.waitForPending.bind(coordinator)
+  const waitForPendingRaw = coordinator?.waitForPending;
+  if (waitForPendingRaw !== undefined && typeof waitForPendingRaw !== "function") {
+    throw new Error("Accepted pending observer must be callable");
+  }
+  const waitForPending = typeof waitForPendingRaw === "function"
+    ? waitForPendingRaw.bind(coordinator)
     : undefined;
   let acceptedDispatchRaw: unknown;
   try {
