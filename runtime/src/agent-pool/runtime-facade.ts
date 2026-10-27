@@ -338,6 +338,15 @@ export class AgentRuntimeFacade {
     };
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) => {
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable compatibility binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable compatibility sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable compatibility branchId must be non-empty");
+      }
       const readPosition = bindCompatibilityMethod(port, "readPosition");
       if (!readPosition) throw new Error("Durable compatibility readPosition must be callable");
       return [chat, Object.freeze({
