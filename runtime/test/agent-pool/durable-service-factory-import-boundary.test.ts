@@ -5,6 +5,9 @@ import { resolve } from "node:path";
 
 const source = resolve(import.meta.dir, "../../src");
 const fixture = resolve(import.meta.dir, "../model-services-fixture.ts");
+// Resolve the frozen repository SDK before entering a scratch cwd; bare eval
+// imports there can trigger Bun auto-install rather than test this dependency.
+const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 
 for (const mode of ["bound", "empty"] as const) {
   test(`durable service-factory ${mode} scope does not evaluate legacy construction modules`, async () => {
@@ -22,7 +25,7 @@ for (const mode of ["bound", "empty"] as const) {
         });
       }});
 
-      const { SettingsManager, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+      const { SettingsManager, ModelRegistry } = await import(${JSON.stringify(sdk)});
       const { createAgentPoolModelOptions } = await import(${JSON.stringify(fixture)});
       const { createAgentPoolServices } = await import(source + "/agent-pool/service-factory.ts");
 
@@ -115,7 +118,7 @@ test("legacy service-factory path reaches legacy construction fence immediately"
       });
     }});
 
-    const { SettingsManager, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+    const { SettingsManager, ModelRegistry } = await import(${JSON.stringify(sdk)});
     const { createAgentPoolModelOptions } = await import(${JSON.stringify(fixture)});
     const { createAgentPoolServices } = await import(source + "/agent-pool/service-factory.ts");
     const model = createAgentPoolModelOptions();
