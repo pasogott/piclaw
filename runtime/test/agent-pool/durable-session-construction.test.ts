@@ -7,7 +7,7 @@ import { AgentSessionManager } from "../../src/agent-pool/session-manager.js";
 import { createAgentPoolServices } from "../../src/agent-pool/service-factory.js";
 import { createAgentPoolModelOptions } from "../model-services-fixture.js";
 import { SESSIONS_DIR } from "../../src/core/config.js";
-import { initDatabase, storeChatMetadata, getChatBranchByChatJid } from "../../src/db.js";
+import { archiveChatBranch, initDatabase, storeChatMetadata, getChatBranchByChatJid } from "../../src/db.js";
 import * as legacySession from "../../src/agent-pool/session.js";
 import { AgentToolFactory } from "../../src/agent-pool/tool-factory.js";
 import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
@@ -162,6 +162,14 @@ test("durable branch discovery stays host-only without legacy session constructi
     expect(pool.findChatByAgentName("durable-known")).toEqual({ chat_jid: chat, agent_name: "durable-known" });
     expect(pool.findActiveChatByAgentName("durable-known")).toBeNull();
     expect(pool.getAgentHandleForChat(chat)).toBe("durable-known");
+
+    const archived = archiveChatBranch(chat);
+    expect(archived.archived_at).toBeTruthy();
+    expect(pool.listKnownChats(chat).some(entry => entry.chat_jid === chat)).toBe(false);
+    const knownWithArchived = pool.listKnownChats(chat, { includeArchived: true });
+    expect(knownWithArchived.some(entry => entry.chat_jid === chat && entry.archived_at !== null)).toBe(true);
+    expect(pool.findChatByAgentName("durable-known")).toBeNull();
+
     expect(factoryReads).toBe(0);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(snapshot()).toEqual(filesBefore);
