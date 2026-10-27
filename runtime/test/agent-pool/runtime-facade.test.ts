@@ -258,6 +258,16 @@ test("durable compatibility branchId must be non-empty", () => {
   })).toThrow("Durable compatibility branchId must be non-empty");
 });
 
+test("durable runtime binding requires non-empty sessionId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "", branchId: "main", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-session-id")).toThrow("Durable runtime sessionId must be non-empty");
+});
+
+test("durable runtime binding requires non-empty branchId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "binding", branchId: "", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-branch-id")).toThrow("Durable runtime branchId must be non-empty");
+});
+
 test("native host-only controls and state never construct a legacy session", async () => {
   let legacy = 0, acquired = 0, released = 0;
   const port = { sessionId: "native-host", branchId: "main", readPosition: async () => "7",

@@ -395,7 +395,21 @@ export class AgentRuntimeFacade {
         runOwnedControl: bindCompatibilityMethod(port, "runOwnedControl"),
       })] as const;
     }));
-    this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const rawDurableLookup = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    this.getDurableSession = (chatJid) => {
+      const port = rawDurableLookup(chatJid);
+      if (port === undefined) return undefined;
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable runtime binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable runtime sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable runtime branchId must be non-empty");
+      }
+      return port;
+    };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
