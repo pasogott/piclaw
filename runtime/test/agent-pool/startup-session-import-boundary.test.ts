@@ -23,18 +23,21 @@ function staticGraph(entry: string): Set<string> {
   return visited;
 }
 
-// Public SDK root imports (including ModelRegistry's SessionManager re-export) are
-// allowed. This fence proves only the LOCAL legacy construction entry points stay
-// unevaluated during actual AgentPool import and durable pool construction.
+// Public SDK definitions/resources remain allowed. Native startup must not
+// evaluate LOCAL retired execution/replay or lifecycle composition modules.
+// Legacy compatibility deliberately retains its separate session load fence.
 for (const mode of ["durable", "legacy"] as const) {
   test(`fresh-process ${mode} AgentPool construction enforces the local load boundary`, async () => {
     const root = mkdtempSync(resolve(tmpdir(), "durable-import-boundary-"));
+    const fence=mode==='durable'
+      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-context|run-agent-attempt-finalization|run-agent-recovery-phase|automatic-recovery|compaction|operation-session-profile|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
+      : /\/agent-pool\/(?:session|session-factory)\.(?:ts|js)$/;
     const script = `
       import { plugin } from "bun";
       const source = ${JSON.stringify(source)};
       const attempts = [];
       plugin({ name: "local-legacy-construction-fence", setup(build) {
-        build.onLoad({ filter: /\\/agent-pool\\/(?:session|session-factory)\\.(?:ts|js)$/ }, args => {
+        build.onLoad({ filter: new RegExp(${JSON.stringify(fence.source)}) }, args => {
           if (!args.path.startsWith(source + "/")) return;
           attempts.push(args.path);
           throw new Error("LOCAL_CONSTRUCTION_FENCE:" + args.path);
@@ -52,6 +55,10 @@ for (const mode of ["durable", "legacy"] as const) {
         if (mode === "durable") {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected durable rejection"); }
           catch (error) { if (!String(error).includes("Durable application does not construct legacy sessions")) throw error; }
+          const runResult = await pool.runAgent("must not load legacy orchestration", "web:load-boundary");
+          if (runResult.status !== "error" || runResult.error !== "Native execution requires an admitted operation") {
+            throw new Error("Unexpected durable runAgent result: " + JSON.stringify(runResult));
+          }
           if (attempts.length) throw new Error("Durable lookup evaluated a forbidden local module");
         } else {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected load fence rejection"); }
@@ -95,6 +102,16 @@ for (const entry of ["index.ts", "runtime.ts", "runtime/bootstrap.ts", "agent-po
     expect(graph.has(resolve(source, "agent-pool/session.ts"))).toBe(false);
     expect(graph.has(resolve(source, "agent-pool/session-factory.ts"))).toBe(false);
     expect(graph.has(resolve(source, "agent-pool/session-affinity-compat.ts"))).toBe(false);
+    if (entry === "agent-pool.ts") {
+      expect(graph.has(resolve(source, "agent-pool/run-agent-orchestrator.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-budget.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-context.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-finalization.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-recovery-phase.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/automatic-recovery.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/compaction.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/operation-session-profile.ts"))).toBe(false);
+    }
     // The real pool remains in the application graph: this must not pass by dropping startup wiring.
     if (entry !== "index.ts") expect(graph.has(resolve(source, "agent-pool/service-factory.ts"))).toBe(true);
   });

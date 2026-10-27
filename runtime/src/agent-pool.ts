@@ -23,7 +23,6 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
-import { captureResidentLegacyUpgradeBindings } from "./agent-pool/legacy-authority-capture.js";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -33,7 +32,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessageEventStream, Context, Model, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 
-import { type AgentControlCommand, type AgentControlResult } from "./agent-control/index.js";
+import type { AgentControlCommand, AgentControlResult } from "./agent-control/index.js";
 import { getNativeCommandCatalogue } from "./agent-control/native-control-capabilities.js";
 import { getPiclawAgentDir } from "./core/agent-dir.js";
 import { SESSIONS_DIR, WORKSPACE_DIR, getAgentLogConfig, getSessionPoolConfig } from "./core/config.js";
@@ -49,10 +48,7 @@ import {
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
-import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
-import { runWithProtectedRecoveryHandoff } from "./agent-pool/protected-recovery-handoff.js";
-import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
-import { rotateSession, type SessionRotationResult } from "./session-rotation.js";
+import type { SessionRotationResult } from "./session-rotation.js";
 import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
@@ -280,7 +276,8 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
 export class AgentPool {
   assertLegacyCaptureIdle(): void { this.sessionManager.assertLegacyCaptureIdle(); }
   /** Explicit read-only resident capture; never selects or constructs a session. */
-  captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+  async captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+    const { captureResidentLegacyUpgradeBindings } = await import("./agent-pool/legacy-authority-capture.js");
     return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());
   }
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
@@ -361,6 +358,9 @@ export class AgentPool {
     this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable session lookup must be callable");
+    }
     this.durableApplication = options.getDurableSession !== undefined;
     this.durableSessionLookup = options.getDurableSession?.bind(options);
     if (!options.credentialStore || !options.modelRuntime) {
@@ -508,6 +508,7 @@ export class AgentPool {
         setBudgetWorkStatus(budgetWorkId, "active", { boundary: "resumed" });
       }
       const observedOutputs: AgentOutput[] = [];
+      const { runAgentPrompt } = await import("./agent-pool/run-agent-orchestrator.js");
       const runPrompt = (nextPrompt: string, nextOptions: RunAgentOptions) => runAgentPrompt(nextPrompt, chatJid, nextOptions, {
         getOrCreateRuntime: (nextChatJid) => this.getOrCreateRuntime(nextChatJid),
         turnCoordinator: this.turnCoordinator,
@@ -523,6 +524,7 @@ export class AgentPool {
         onError: (message, details) => log.error(message, details),
       });
 
+      const { runWithProtectedRecoveryHandoff } = await import("./agent-pool/protected-recovery-handoff.js");
       const output = await withBudgetWorkContext({
         workId: budgetWorkId,
         chatJid,
@@ -729,6 +731,7 @@ export class AgentPool {
 
   async emergencyRotateSession(chatJid: string, emergencyReason: string): Promise<SessionRotationResult> {
     const runtime = await this.getOrCreateRuntime(chatJid);
+    const { rotateSession } = await import("./session-rotation.js");
     const result = await rotateSession(runtime.session, runtime, {
       reason: "automatic",
       skipCompaction: true,
@@ -736,6 +739,7 @@ export class AgentPool {
       chatJid,
     });
     if (result.status === "success") {
+      const { clearCompactionFailureBackoff, resetCompactionSuccessCount } = await import("./agent-pool/compaction.js");
       clearCompactionFailureBackoff(chatJid);
       resetCompactionSuccessCount(chatJid);
       await this.sessionManager.refreshRuntime(chatJid, runtime);
@@ -814,6 +818,9 @@ export class AgentPool {
           ...(options.agentName !== undefined ? { agent_name: options.agentName } : {}) });
         const position = this.durableSessionLookup?.(restored.chat_jid);
         if (!position || position.branchId !== restored.branch_id) throw Error("Exact native restore binding unavailable");
+        if (position.assertCurrent !== undefined && typeof position.assertCurrent !== "function") {
+          throw Error("Exact native restore binding invalid");
+        }
         position.assertCurrent?.();
         return restored;
       }).immediate();
@@ -824,6 +831,7 @@ export class AgentPool {
   async permanentPurgeChatBranch(
     chatJid: string,
   ): Promise<{ branch: ChatBranchRecord; removedSessionArtifacts: string[] }> {
+    if (this.durableApplication) throw new Error("Durable branch purge unavailable");
     return this.branchManager.permanentPurgeChatBranch(chatJid);
   }
 
@@ -831,10 +839,12 @@ export class AgentPool {
     sourceChatJid: string,
     options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable branch fork unavailable");
     return this.branchManager.createForkedChatBranch(sourceChatJid, options);
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable root session creation unavailable");
     return this.branchManager.createRootChatSession(agentName);
   }
 
@@ -927,7 +937,11 @@ export class AgentPool {
   async getDurableSessionMetadata(chatJid: string) {
     if (!this.durableApplication) return undefined;
     const position = this.durableSessionLookup?.(chatJid);
-    if (!position?.readMetadata) return null;
+    if (!position) return null;
+    if (position.readMetadata !== undefined && typeof position.readMetadata !== "function") {
+      throw new Error("Durable metadata reader invalid");
+    }
+    if (!position.readMetadata) return null;
     const metadata = await position.readMetadata();
     return metadata ? { ...metadata, commandCatalogue: getNativeCommandCatalogue(position) } : null;
   }

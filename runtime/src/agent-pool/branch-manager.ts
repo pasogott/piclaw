@@ -28,7 +28,6 @@ import { sanitiseJid } from "./session-paths.js";
 import { existsSync, readdirSync, renameSync, rmSync } from "fs";
 import { join } from "path";
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
-import { createDeferredBranchSeed, writeDeferredBranchSeed } from "./branch-seeding.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { getDb } from "../db/connection.js";
 import { commitOwnedFork, findOwnedFork } from "../db/owned-forks.js";
@@ -568,6 +567,7 @@ export class AgentBranchManager {
     const requestedAgentName = typeof options.agentName === "string" && options.agentName.trim()
       ? options.agentName.trim()
       : sourceBranch.agent_name;
+    const { createDeferredBranchSeed, writeDeferredBranchSeed } = await import("./branch-seeding.js");
     if (owner) {
       const seed = await createDeferredBranchSeed(sourceSession, {
         stableLeafId: stableForkLeafId, sessionName: requestedAgentName, sourceIsActive,

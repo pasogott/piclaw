@@ -11,24 +11,17 @@ import { join } from "node:path";
 import type { AgentSession, AgentSessionRuntime, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 
-import { applyControlCommand, type AgentControlCommand, type AgentControlResult } from "../agent-control/index.js";
-import { handleModel, resolveControlModelSelection } from "../agent-control/handlers/model.js";
-import { applySessionIndependentControlCommand, SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES } from "../agent-control/agent-control-handlers.js";
-import { handleProviderQuota } from "../agent-control/handlers/info.js";
+import type { AgentControlCommand, AgentControlResult } from "../agent-control/index.js";
 import { getNativeCommandCatalogue } from "../agent-control/native-control-capabilities.js";
-import { handleLogin, handleLogout, revokeNativeProviderAuthContext } from "../agent-control/handlers/login.js";
 import type { NativeProviderAuthContext } from "../agent-control/provider-auth-context.js";
 import type { DurableSessionPositionPort } from "./durable-runtime-adapter.js";
-import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } from "../agent-control/agent-control-helpers.js";
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
-import { renderSessionTreeWidget } from "../agent-control/handlers/tree.js";
 import { getLatestTokenUsageModel } from "../db.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { getSessionThinkingPolicy } from './thinking-policy.js';
 
 import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
-import { executeSlashCommand } from "./slash-command.js";
 import { peekProviderUsage, peekProviderUsageForRuntime, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
@@ -312,8 +305,8 @@ export interface AgentRuntimeFacadeOptions {
   onProviderUsageRefresh?: (event: ProviderUsageRefreshEvent) => void;
   onWarn?: (message: string, details: Record<string, unknown>) => void;
   onError?: (message: string, details: Record<string, unknown>) => void;
-  applyControlCommandFn?: typeof applyControlCommand;
-  executeSlashCommandFn?: typeof executeSlashCommand;
+  applyControlCommandFn?: (runtime: AgentSessionRuntime, modelRegistry: ModelRegistry, command: AgentControlCommand) => Promise<AgentControlResult>;
+  executeSlashCommandFn?: (session: AgentSession, chatJid: string, rawText: string) => Promise<AgentControlResult>;
 }
 
 /**
@@ -328,16 +321,148 @@ export class AgentRuntimeFacade {
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
+    if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+      throw new Error("Durable runtime lookup must be callable");
+    }
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
+    const bindCompatibilityMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+    ): ((...args: any[]) => any) | undefined => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) return undefined;
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable compatibility ${String(method)} must be callable`);
+      }
+      return candidate.bind(port) as (...args: any[]) => any;
+    };
     // Capture routing before any session factory is entered. Never fall back on port failure.
-    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port),
-        readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port),
-        setModel: port.setModel?.bind(port), reset: port.reset?.bind(port), abort: port.abort?.bind(port),
-        compact: port.compact?.bind(port), reconcileMaintenance: port.reconcileMaintenance?.bind(port),
-        readTree: port.readTree?.bind(port), readMetadata: port.readMetadata?.bind(port), readReport: port.readReport?.bind(port),
-        assertCurrent: port.assertCurrent?.bind(port), runOwnedControl: port.runOwnedControl?.bind(port) })]));
-    this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) => {
+      if (typeof chat !== "string" || !chat.trim()) {
+        throw new Error("Durable compatibility chat key must be non-empty");
+      }
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable compatibility binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable compatibility sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable compatibility branchId must be non-empty");
+      }
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
+          throw new Error("Durable compatibility lifetimeSignal must be AbortSignal-like");
+        }
+      }
+      const readPosition = bindCompatibilityMethod(port, "readPosition");
+      if (!readPosition) throw new Error("Durable compatibility readPosition must be callable");
+      return [chat, Object.freeze({
+        ...port,
+        readPosition,
+        readContextUsage: bindCompatibilityMethod(port, "readContextUsage"),
+        readModel: bindCompatibilityMethod(port, "readModel"),
+        readThinkingLevel: bindCompatibilityMethod(port, "readThinkingLevel"),
+        setThinkingLevel: bindCompatibilityMethod(port, "setThinkingLevel"),
+        setModel: bindCompatibilityMethod(port, "setModel"),
+        reset: bindCompatibilityMethod(port, "reset"),
+        readAbortScope: bindCompatibilityMethod(port, "readAbortScope"),
+        abort: bindCompatibilityMethod(port, "abort"),
+        abortRetry: bindCompatibilityMethod(port, "abortRetry"),
+        restart: bindCompatibilityMethod(port, "restart"),
+        runBash: bindCompatibilityMethod(port, "runBash"),
+        abortBash: bindCompatibilityMethod(port, "abortBash"),
+        readExecutionPolicy: bindCompatibilityMethod(port, "readExecutionPolicy"),
+        setExecutionPolicy: bindCompatibilityMethod(port, "setExecutionPolicy"),
+        requestExit: bindCompatibilityMethod(port, "requestExit"),
+        compact: bindCompatibilityMethod(port, "compact"),
+        reconcileMaintenance: bindCompatibilityMethod(port, "reconcileMaintenance"),
+        readTree: bindCompatibilityMethod(port, "readTree"),
+        readMetadata: bindCompatibilityMethod(port, "readMetadata"),
+        readReport: bindCompatibilityMethod(port, "readReport"),
+        assertCurrent: bindCompatibilityMethod(port, "assertCurrent"),
+        runOwnedControl: bindCompatibilityMethod(port, "runOwnedControl"),
+      })] as const;
+    }));
+    const rawDurableLookup = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
+    const validateDurableRuntimeMethod = (
+      port: DurableSessionPositionPort,
+      method: keyof DurableSessionPositionPort,
+      options: { required?: boolean } = {},
+    ): void => {
+      const candidate = port[method] as unknown;
+      if (candidate === undefined) {
+        if (options.required) throw new Error(`Durable runtime ${String(method)} must be callable`);
+        return;
+      }
+      if (typeof candidate !== "function") {
+        throw new Error(`Durable runtime ${String(method)} must be callable`);
+      }
+    };
+    this.getDurableSession = (chatJid) => {
+      const port = rawDurableLookup(chatJid);
+      if (port === undefined) return undefined;
+      if (!port || typeof port !== "object") {
+        throw new Error("Durable runtime binding must be an object");
+      }
+      if (typeof port.sessionId !== "string" || !port.sessionId.trim()) {
+        throw new Error("Durable runtime sessionId must be non-empty");
+      }
+      if (typeof port.branchId !== "string" || !port.branchId.trim()) {
+        throw new Error("Durable runtime branchId must be non-empty");
+      }
+      validateDurableRuntimeMethod(port, "readPosition", { required: true });
+      validateDurableRuntimeMethod(port, "readContextUsage");
+      validateDurableRuntimeMethod(port, "readModel");
+      validateDurableRuntimeMethod(port, "readThinkingLevel");
+      validateDurableRuntimeMethod(port, "setThinkingLevel");
+      validateDurableRuntimeMethod(port, "setModel");
+      validateDurableRuntimeMethod(port, "reset");
+      validateDurableRuntimeMethod(port, "readAbortScope");
+      validateDurableRuntimeMethod(port, "abort");
+      validateDurableRuntimeMethod(port, "abortRetry");
+      validateDurableRuntimeMethod(port, "restart");
+      validateDurableRuntimeMethod(port, "runBash");
+      validateDurableRuntimeMethod(port, "abortBash");
+      validateDurableRuntimeMethod(port, "readExecutionPolicy");
+      validateDurableRuntimeMethod(port, "setExecutionPolicy");
+      validateDurableRuntimeMethod(port, "requestExit");
+      validateDurableRuntimeMethod(port, "compact");
+      validateDurableRuntimeMethod(port, "reconcileMaintenance");
+      validateDurableRuntimeMethod(port, "readTree");
+      validateDurableRuntimeMethod(port, "readMetadata");
+      validateDurableRuntimeMethod(port, "readReport");
+      validateDurableRuntimeMethod(port, "assertCurrent");
+      validateDurableRuntimeMethod(port, "runOwnedControl");
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
+          throw new Error("Durable runtime lifetimeSignal must be AbortSignal-like");
+        }
+      }
+      return port;
+    };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
@@ -346,11 +471,14 @@ export class AgentRuntimeFacade {
     } };
   }
 
-  private nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): NativeProviderAuthContext {
+  private async nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): Promise<NativeProviderAuthContext> {
     if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal || port.lifetimeSignal.aborted) throw Error("Native authentication lifetime unavailable");
     const existing = this.nativeProviderAuthContexts.get(chatJid);
     if (existing && existing.bindingId === port.sessionId && existing.signal === port.lifetimeSignal) { existing.assertCurrent(); return existing; }
-    if (existing) revokeNativeProviderAuthContext(existing);
+    if (existing) {
+      const { revokeNativeProviderAuthContext } = await import("../agent-control/handlers/login.js");
+      revokeNativeProviderAuthContext(existing);
+    }
     const assertCurrent = port.assertCurrent.bind(port), runOwned = port.runOwnedControl.bind(port);
     const context: NativeProviderAuthContext = Object.freeze({
       kind: "native-provider-auth", chatJid, bindingId: port.sessionId, runtime: this.options.modelRuntime, signal: port.lifetimeSignal,
@@ -392,6 +520,7 @@ export class AgentRuntimeFacade {
     const port = this.getDurableSession(chatJid);
     if (port) {
       requireSingleUserDirectExecution("Native control commands");
+      const { applySessionIndependentControlCommand, SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES } = await import("../agent-control/agent-control-handlers.js");
       if (SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES.has(command.type)) {
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
@@ -434,11 +563,15 @@ export class AgentRuntimeFacade {
       }
       if (command.type === "login" || command.type === "logout") {
         if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal) return { status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." };
-        const context = this.nativeProviderAuthContext(chatJid, port);
+        const context = await this.nativeProviderAuthContext(chatJid, port);
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
-        try { return await withChatContext(chatJid, chatJid.startsWith("web:") ? "web" : "unknown", () => command.type === "login"
-          ? handleLogin(context, this.options.modelRegistry, command) : handleLogout(context, this.options.modelRegistry, command)); }
+        try { return await withChatContext(chatJid, chatJid.startsWith("web:") ? "web" : "unknown", async () => {
+          const { handleLogin, handleLogout } = await import("../agent-control/handlers/login.js");
+          return command.type === "login"
+            ? handleLogin(context, this.options.modelRegistry, command)
+            : handleLogout(context, this.options.modelRegistry, command);
+        }); }
         finally { release?.(); }
       }
       if (command.type === "commands") {
@@ -467,6 +600,7 @@ export class AgentRuntimeFacade {
           `Recorded cost: $${report.usage.cost.toFixed(6)}`].join("\n") };
       }
       if (command.type === "quota") {
+        const { handleProviderQuota } = await import("../agent-control/handlers/info.js");
         const label = await port.readModel?.();
         const split = label?.indexOf("/") ?? -1;
         return handleProviderQuota(this.options.modelRuntime, label && split > 0
@@ -488,6 +622,7 @@ export class AgentRuntimeFacade {
         return this.applyControlCommand(chatJid, { type: "model", provider: models[next]!.provider, modelId: models[next]!.id, raw: command.raw });
       }
       if (command.type === "cycle_thinking") {
+        const { getAvailableThinkingLevelsForModel } = await import("../agent-control/agent-control-helpers.js");
         const label = await port.readModel?.();
         const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === label);
         if (!model) return { status: "error", message: "No available native thinking model." };
@@ -517,7 +652,10 @@ export class AgentRuntimeFacade {
           await port.reset();
           const auth = this.nativeProviderAuthContexts.get(chatJid);
           this.nativeProviderAuthContexts.delete(chatJid);
-          if (auth) revokeNativeProviderAuthContext(auth);
+          if (auth) {
+            const { revokeNativeProviderAuthContext } = await import("../agent-control/handlers/login.js");
+            revokeNativeProviderAuthContext(auth);
+          }
           return { status: "success", message: "Started a new durable context. Previous history is retained.",
             sessionGeneration: port.sessionId, sessionGenerationChanged: false,
             contextUsage: { ...await this.readDurableControlContextUsage(port), source: "durable-reset" } };
@@ -552,6 +690,7 @@ export class AgentRuntimeFacade {
         }
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
+        const { resolveControlModelSelection } = await import("../agent-control/handlers/model.js");
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);
         if ("status" in selected) return selected;
         revokeAddonLocalAgent(chatJid);
@@ -564,6 +703,7 @@ export class AgentRuntimeFacade {
         } finally { release?.(); }
       }
       if (command.type === "thinking") {
+        const { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } = await import("../agent-control/agent-control-helpers.js");
         requireSingleUserDirectExecution("Direct thinking commands");
         if (command.level !== undefined && !port.setThinkingLevel) throw new Error("Durable thinking mutation unavailable");
         if (!port.readModel || !port.readThinkingLevel) throw new Error("Durable thinking reader unavailable");
@@ -597,6 +737,7 @@ export class AgentRuntimeFacade {
       if (command.type !== "tree" || command.targetId) return { status: "error", message: `Native command '${command.type}' is unavailable. No legacy session was opened.` };
       if (!port.readTree) throw new Error("Durable session tree unavailable");
       const tree = await port.readTree();
+      const { renderSessionTreeWidget } = await import("../agent-control/handlers/tree.js");
       return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length
         ? ["Session tree:", ...tree.nodes.slice(command.mode === "head" ? command.offset ?? 0 : -(command.limit ?? 10), command.mode === "head" ? (command.offset ?? 0) + (command.limit ?? 10) : undefined).map(node => `${node.active ? "→ " : ""}${node.id} ${node.preview}`)].join("\n")
         : "Tree is empty." };
@@ -609,7 +750,10 @@ export class AgentRuntimeFacade {
     const session = runtime.session;
     const previousSessionGeneration = typeof session.sessionId === "string" ? session.sessionId : null;
     const channel = detectChannel(chatJid);
-    const apply = this.options.applyControlCommandFn ?? applyControlCommand;
+    const { applyControlCommand: applyDefaultControlCommand } = await import("../agent-control/index.js") as {
+      applyControlCommand: NonNullable<AgentRuntimeFacadeOptions["applyControlCommandFn"]>;
+    };
+    const apply = this.options.applyControlCommandFn ?? applyDefaultControlCommand;
     const result = await withChatContext(chatJid, channel, () => apply(runtime, this.options.modelRegistry, command));
     if (result.refresh_runtime || runtime.session !== session) {
       await this.options.refreshRuntime(chatJid, runtime);
@@ -647,6 +791,7 @@ export class AgentRuntimeFacade {
     chatJid: string,
     options: { includeProviderUsage?: boolean; includeProviderDiagnostics?: boolean; includeCatalogue?: boolean } = {},
   ): Promise<AvailableModelsResult> {
+    const { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel } = await import("../agent-control/agent-control-helpers.js");
     // Passive UI refreshes should not hydrate a cold runtime just to render
     // model state for the picker.
     const session = this.options.getDurableSession === undefined ? this.options.pool.get(chatJid)?.runtime.session ?? null : null;
@@ -898,7 +1043,10 @@ export class AgentRuntimeFacade {
     const runtime = await this.options.getOrCreateRuntime(chatJid);
     const session = runtime.session;
     const channel = detectChannel(chatJid);
-    const exec = this.options.executeSlashCommandFn ?? executeSlashCommand;
+    const { executeSlashCommand: executeDefaultSlashCommand } = await import("./slash-command.js") as {
+      executeSlashCommand: NonNullable<AgentRuntimeFacadeOptions["executeSlashCommandFn"]>;
+    };
+    const exec = this.options.executeSlashCommandFn ?? executeDefaultSlashCommand;
     const result = await withChatContext(chatJid, channel, () => exec(session, chatJid, rawText));
     if (result.refresh_runtime || runtime.session !== session) {
       await this.options.refreshRuntime(chatJid, runtime);

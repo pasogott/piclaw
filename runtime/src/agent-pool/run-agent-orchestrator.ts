@@ -67,6 +67,8 @@ import {
   type PromptAttemptResult,
 } from "./run-agent-recovery-phase.js";
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
+
+type TurnCoordinatorPort = Pick<AgentTurnCoordinator, "createTracker" | "subscribe" | "startPromptTimeout">;
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions, TurnOutput } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { getRememberedActiveToolSubset, rememberActiveToolSubset } from "./active-tool-subset-memory.js";
@@ -95,7 +97,7 @@ const log = createLogger("agent-pool.run-orchestrator");
 /** Dependencies required to run a main agent prompt. */
 export interface RunAgentOrchestratorOptions {
   getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
-  turnCoordinator: AgentTurnCoordinator;
+  turnCoordinator: TurnCoordinatorPort;
   clearAttachments: (chatJid: string) => void;
   takeAttachments: (chatJid: string) => AttachmentInfo[];
   logsDir: string;
