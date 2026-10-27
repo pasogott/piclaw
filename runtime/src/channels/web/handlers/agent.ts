@@ -1758,13 +1758,17 @@ async function processAuthorisedChat(
   const waitForPending = typeof coordinator?.waitForPending === "function"
     ? coordinator.waitForPending.bind(coordinator)
     : undefined;
-  let acceptedDispatch: (() => Promise<"settled" | "pending">) | undefined;
+  let acceptedDispatchRaw: unknown;
   try {
-    acceptedDispatch = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
+    acceptedDispatchRaw = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
   } catch {
     // A fenced or unreadable persisted selection is not evidence of legacy ownership.
-    acceptedDispatch = async () => "pending";
+    acceptedDispatchRaw = async () => "pending";
   }
+  if (acceptedDispatchRaw !== undefined && typeof acceptedDispatchRaw !== "function") {
+    throw new Error("Accepted dispatch must be callable");
+  }
+  const acceptedDispatch = acceptedDispatchRaw as (() => Promise<"settled" | "pending">) | undefined;
   if (acceptedDispatch) {
     const { setChatCursor } = await import("../../../db/chat-cursors.js");
     const startedAt = new Date().toISOString();
