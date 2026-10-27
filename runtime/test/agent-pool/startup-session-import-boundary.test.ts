@@ -30,7 +30,7 @@ for (const mode of ["durable", "legacy"] as const) {
   test(`fresh-process ${mode} AgentPool construction enforces the local load boundary`, async () => {
     const root = mkdtempSync(resolve(tmpdir(), "durable-import-boundary-"));
     const fence=mode==='durable'
-      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-finalization|run-agent-recovery-phase|operation-session-profile|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
+      ? /\/(?:agent-pool\/(?:session|session-factory|session-binder|session-manager|tool-factory|turn-coordinator|run-agent-orchestrator|run-agent-attempt-budget|run-agent-attempt-context|run-agent-attempt-finalization|run-agent-recovery-phase|automatic-recovery|compaction|operation-session-profile|protected-recovery-handoff|legacy-authority-capture))\.(?:ts|js)$/
       : /\/agent-pool\/(?:session|session-factory)\.(?:ts|js)$/;
     const script = `
       import { plugin } from "bun";
@@ -105,8 +105,11 @@ for (const entry of ["index.ts", "runtime.ts", "runtime/bootstrap.ts", "agent-po
     if (entry === "agent-pool.ts") {
       expect(graph.has(resolve(source, "agent-pool/run-agent-orchestrator.ts"))).toBe(false);
       expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-budget.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-context.ts"))).toBe(false);
       expect(graph.has(resolve(source, "agent-pool/run-agent-attempt-finalization.ts"))).toBe(false);
       expect(graph.has(resolve(source, "agent-pool/run-agent-recovery-phase.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/automatic-recovery.ts"))).toBe(false);
+      expect(graph.has(resolve(source, "agent-pool/compaction.ts"))).toBe(false);
       expect(graph.has(resolve(source, "agent-pool/operation-session-profile.ts"))).toBe(false);
     }
     // The real pool remains in the application graph: this must not pass by dropping startup wiring.
