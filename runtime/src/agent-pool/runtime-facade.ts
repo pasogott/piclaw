@@ -411,6 +411,22 @@ export class AgentRuntimeFacade {
       if (typeof port.readPosition !== "function") {
         throw new Error("Durable runtime readPosition must be callable");
       }
+      if (port.lifetimeSignal !== undefined) {
+        const signal = port.lifetimeSignal as unknown as {
+          aborted?: unknown;
+          addEventListener?: unknown;
+          removeEventListener?: unknown;
+        };
+        if (
+          !signal ||
+          typeof signal !== "object" ||
+          typeof signal.aborted !== "boolean" ||
+          typeof signal.addEventListener !== "function" ||
+          typeof signal.removeEventListener !== "function"
+        ) {
+          throw new Error("Durable runtime lifetimeSignal must be AbortSignal-like");
+        }
+      }
       return port;
     };
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };

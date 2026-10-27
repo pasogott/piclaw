@@ -278,6 +278,30 @@ test("durable runtime binding requires callable readPosition", () => {
   expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-position")).toThrow("Durable runtime readPosition must be callable");
 });
 
+test("durable runtime lifetimeSignal must be AbortSignal-like", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: "invalid-runtime-signal-shape",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable runtime lifetimeSignal requires removeEventListener", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal-shape")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
 test("native host-only controls and state never construct a legacy session", async () => {
   let legacy = 0, acquired = 0, released = 0;
   const port = { sessionId: "native-host", branchId: "main", readPosition: async () => "7",
