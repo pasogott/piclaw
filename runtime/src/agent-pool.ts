@@ -23,6 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
+import { createRequire } from "node:module";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -88,6 +89,7 @@ import { admitBudgetBoundary } from "./budget/admission.js";
 import { resolveProviderUsageAccountRef } from "./agent-pool/provider-usage.js";
 
 const log = createLogger("agent-pool");
+const requireLegacyCapture = createRequire(import.meta.url);
 
 export type {
   AgentOutput,
@@ -277,7 +279,10 @@ export class AgentPool {
   assertLegacyCaptureIdle(): void { this.sessionManager.assertLegacyCaptureIdle(); }
   /** Explicit read-only resident capture; never selects or constructs a session. */
   async captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
-    const { captureResidentLegacyUpgradeBindings } = await import("./agent-pool/legacy-authority-capture.js");
+    // Capture must detach resident authority before its first filesystem await.
+    // Load only at this explicit migration boundary, but without an import await
+    // that would let caller mutations become the new baseline before capture.
+    const { captureResidentLegacyUpgradeBindings } = requireLegacyCapture("./agent-pool/legacy-authority-capture.js") as typeof import("./agent-pool/legacy-authority-capture.js");
     return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());
   }
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
