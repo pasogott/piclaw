@@ -93,7 +93,7 @@ import {
   protectedRecoveryHandoffContentBlockFields,
   type ProtectedRecoveryHandoffMetadata,
 } from "../../../agent-pool/protected-recovery-handoff-reason.js";
-import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
+import { classifyOpaqueAgentFailure } from "../../../agent-pool/recovery-classification.js";
 import { cancelScheduledIdleAutoCompaction } from "../../../agent-pool/compaction.js";
 import { DEFAULT_BASE_RETRY_MS, getRetryAtIso } from "../../../queue/retry-policy.js";
 import { formatProviderError, sanitizeProviderErrorDetail } from "./provider-error-format.js";

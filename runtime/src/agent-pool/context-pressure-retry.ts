@@ -10,7 +10,7 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { getChatJid } from "../core/chat-context.js";
-import { isContextPressureFailure } from "./automatic-recovery.js";
+import { isContextPressureFailure } from "./recovery-classification.js";
 import { finalizeRecoveryCompactionOutcome, runCompactionWithTimeout } from "./compaction.js";
 
 export type DirectPromptOptions = { streamingBehavior?: "steer" | "followUp" };

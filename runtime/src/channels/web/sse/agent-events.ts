@@ -13,7 +13,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { buildPreview, createToolTitleTracker, resolveMcpToolStatusIdentity, type AgentProfileBuilder } from "../agent/agent-utils.js";
 import { formatProviderError, sanitizeProviderErrorDetail } from "../handlers/provider-error-format.js";
-import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
+import { classifyOpaqueAgentFailure } from "../../../agent-pool/recovery-classification.js";
 import { createDisplayUpdateCoalescer } from "./display-update-coalescer.js";
 
 /** Interface for broadcasting agent events to SSE clients. */
