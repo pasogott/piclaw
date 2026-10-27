@@ -36,7 +36,7 @@ import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "..
 import { getSearchMatchMode } from "../core/config.js";
 import { sanitizeModelPostedContentBlocks } from "../channels/web/messaging/content-block-safety.js";
 
-const MessagesSchema = Type.Object({
+export const MessagesSchema = Type.Object({
   action: Type.Optional(
     Type.Union([
       Type.Literal("search"),

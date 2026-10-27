@@ -95,6 +95,12 @@ The initial dispatcher joins native cancellation before settlement and persists 
 
 Complete recovery-unit capture includes `native-background-input` references from policy families, even for staged contexts without an accepted source. It validates the policy/hash/owner/content binding; missing or modified input fails without a published manifest. No private source or payload is inferred from a filename alone.
 
+## Dream tool integration in progress
+
+`host-dream-tools.ts` provides private `messages` and `search_workspace` registrations using the existing shared schemas and implementations. Message effects follow the synchronous accepted-source fence. Workspace search captures an invocation fence in each index-access snapshot; stale-index refresh runs inline and is joined before returning. Ordinary search keeps its existing non-blocking refresh behavior. Revocation after an actual traversal await prevents the file commit.
+
+These registrations are not yet installed in the production factory or Dream dispatcher. Their component tests use an injected source guard and do not establish native admission or full Dream execution. The actual native default/override Dream regressions remain failing while caller/owner integration is unfinished.
+
 ## Required execution integration
 
 Before marking #1670 complete:
