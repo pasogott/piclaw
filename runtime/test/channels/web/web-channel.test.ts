@@ -2386,13 +2386,7 @@ test("processChat broadcasts context usage after deferred compact command materi
 
   expect(runCount).toBe(0);
   expect(applyCalls).toEqual([{ chatJid: "web:default", type: "compact" }]);
-  expect(web.getContextUsage("web:default")).toEqual({
-    tokens: 222,
-    contextWindow: 1000,
-    percent: 22.2,
-    sessionGeneration: "session-compact",
-    contextUpdate: "replace",
-  });
+  expect(web).not.toHaveProperty("getContextUsage");
   expect(broadcasts).toContainEqual(expect.objectContaining({
     event: "agent_status",
     payload: expect.objectContaining({
@@ -2402,6 +2396,8 @@ test("processChat broadcasts context usage after deferred compact command materi
         tokens: 222,
         contextWindow: 1000,
         percent: 22.2,
+        sessionGeneration: "session-compact",
+        contextUpdate: "replace",
         estimated: true,
         source: "compact_command",
         phase: "after_manual_compaction",
@@ -2457,13 +2453,7 @@ test("processChat replaces a null-token compact result with live pool usage", as
   web.enqueueQueuedFollowupItem("web:default", 0, "/compact now");
   await web.processChat("web:default", "default");
 
-  expect(web.getContextUsage("web:default")).toEqual({
-    tokens: 21703,
-    contextWindow: 200000,
-    percent: 10.8515,
-    sessionGeneration: "session-compact-live",
-    contextUpdate: "replace",
-  });
+  expect(web).not.toHaveProperty("getContextUsage");
   expect(broadcasts).toContainEqual(expect.objectContaining({
     event: "agent_status",
     payload: expect.objectContaining({
@@ -2472,6 +2462,8 @@ test("processChat replaces a null-token compact result with live pool usage", as
         tokens: 21703,
         contextWindow: 200000,
         percent: 10.8515,
+        sessionGeneration: "session-compact-live",
+        contextUpdate: "replace",
         source: "agent_pool",
         phase: "after_command",
       }),

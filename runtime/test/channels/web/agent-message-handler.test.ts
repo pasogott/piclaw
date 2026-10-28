@@ -501,7 +501,7 @@ describe("web agent message handler", () => {
     expect(applyCalls).toBe(1);
     expect(storeMessageCalls).toBe(1);
     expect(sentMessages[0]?.content).toBe("Compaction requested immediately.");
-    expect(contextUsages).toEqual([{ chatJid: "web:default", usage: { tokens: 321, contextWindow: 1000, percent: 32.1, contextUpdate: "replace" } }]);
+    expect(contextUsages).toEqual([]); // Existing SSE below owns the projection; no host context copy.
     expect(statusUpdates.map(entry => entry.status.type)).toEqual(["intent", "done"]);
     expect(broadcasts).toContainEqual(expect.objectContaining({
       event: "agent_status",
@@ -512,6 +512,7 @@ describe("web agent message handler", () => {
           tokens: 321,
           contextWindow: 1000,
           percent: 32.1,
+          contextUpdate: "replace",
           estimated: true,
           source: "compact_command",
           phase: "after_manual_compaction",
@@ -929,14 +930,7 @@ describe("web agent message handler", () => {
         contextUpdate: "replace",
       },
     }));
-    expect(contextUsages).toContainEqual({
-      tokens: null,
-      contextWindow: null,
-      percent: null,
-      sessionGeneration: "session-after-rotate",
-      contextUpdate: "replace",
-      reset: true,
-    });
+    expect(contextUsages).toEqual([]); // Exact reset envelope is asserted on SSE above.
     expect(broadcasts).toContainEqual(expect.objectContaining({
       event: "model_changed",
       payload: expect.objectContaining({ chat_jid: "web:default", model: "github-copilot/gpt-5.4" }),

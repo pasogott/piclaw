@@ -48,6 +48,22 @@ describe("web agent status store", () => {
     expect((store as any).terminalStatusTimers.size).toBe(0);
   });
 
+  test("capacity eviction releases terminal expiry resources without discarding newer observations", () => {
+    const store = new AgentStatusStore(15000, 2);
+    try {
+      store.update("old-terminal", { type: "done" });
+      store.update("new-terminal", { type: "error" });
+      expect((store as any).terminalStatusTimers.size).toBe(2);
+      store.update("active", { type: "tool_call" });
+      expect(store.get("old-terminal")).toBeNull();
+      expect((store as any).terminalStatusTimers.has("old-terminal")).toBe(false);
+      expect((store as any).terminalStatusExpiresAt.has("old-terminal")).toBe(false);
+      expect((store as any).terminalStatusTimers.size).toBe(1);
+      expect(store.get("new-terminal")).toMatchObject({ type: "error" });
+      expect(store.get("active")).toMatchObject({ type: "tool_call" });
+    } finally { store.dispose(); }
+  });
+
   test("dispose clears only process-local observations and their actual expiry timers", () => {
     const store=new AgentStatusStore();store.update("web:1",{type:"thinking"});store.update("web:2",{type:"done"});
     expect((store as any).terminalStatusTimers.size).toBe(1);store.dispose();
