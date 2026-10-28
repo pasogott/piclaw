@@ -69,7 +69,12 @@ export interface QueuedFollowupStateItem {
   queued_by?: Record<string, string>;
 }
 
-export interface RemoveQueuedFollowupForActionOptions {
+export interface QueuedFollowupWriteOptions {
+  authorise?: (phase: 'before' | 'after') => void;
+  signal?: AbortSignal;
+}
+
+export interface RemoveQueuedFollowupForActionOptions extends QueuedFollowupWriteOptions {
   /** Host-selected, explicit DELETE action only. Never supplied by steer/drain. */
   withdrawAcceptedSource?: QueuedInputSourceAdmission;
 }
@@ -81,6 +86,17 @@ export interface RemoveQueuedFollowupForActionResult {
 
 function toDeferredQueuedFollowupRecord(item: QueuedFollowupItem): DeferredQueuedFollowupRecord {
   return projectPersistedQueuedFollowupItem(item) as DeferredQueuedFollowupRecord;
+}
+
+function captureQueueBinding(database: ReturnType<typeof getDb>): () => void {
+  const binding = getDatabaseBinding();
+  const paths = JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]);
+  const assertBinding = () => {
+    if (getDb() !== database || JSON.stringify(getDatabaseBinding()) !== JSON.stringify(binding)
+      || JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]) !== paths) throw Error('Queue database binding changed.');
+    if (binding) { const stat=statSync(binding.path); if(`${stat.dev}:${stat.ino}` !== binding.identity) throw Error('Queue database file changed.'); }
+  };
+  return assertBinding;
 }
 
 export class QueuedFollowupLifecycleService {
@@ -188,13 +204,7 @@ export class QueuedFollowupLifecycleService {
     acceptSource?: QueuedInputSourceAdmission,
   ): Promise<number> {
     const database = getDb();
-    const binding = getDatabaseBinding();
-    const paths = JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]);
-    const assertBinding = () => {
-      if (getDb() !== database || JSON.stringify(getDatabaseBinding()) !== JSON.stringify(binding)
-        || JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]) !== paths) throw Error('Queue database binding changed.');
-      if (binding) { const stat=statSync(binding.path); if(`${stat.dev}:${stat.ino}` !== binding.identity) throw Error('Queue database file changed.'); }
-    };
+    const assertBinding = captureQueueBinding(database);
     const check = (phase: 'before' | 'after') => { assertBinding(); authorise(phase); };
     let attempted = false;
     let previousSeed: number | undefined;
@@ -313,44 +323,50 @@ export class QueuedFollowupLifecycleService {
     rowId: number,
     options: RemoveQueuedFollowupForActionOptions = {}
   ): Promise<RemoveQueuedFollowupForActionResult> {
+    options.signal?.throwIfAborted();
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
-    const queuedIndex = queued.findIndex((item) => item.rowId === rowId);
-    if (queuedIndex >= 0 && queued[queuedIndex]!.source_accepted) {
-      const withdraw = options.withdrawAcceptedSource;
-      if (!withdraw) throw new Error('Accepted input requires host cancellation');
-      const database = getDb();
-      // No await between the authoritative read, host transition, and queue removal.
-      return database.transaction(() => {
+    const observed = queued.find(item => item.rowId === rowId);
+    const database = getDb(), assertBinding = captureQueueBinding(database);
+    const authorise = options.authorise, withdraw = options.withdrawAcceptedSource;
+    const check = (phase: 'before' | 'after') => { assertBinding(); authorise?.(phase); };
+    if (observed) {
+      return admitSqliteWrite(database, () => {
         const current = this.getDeferredQueuedFollowupItems(chatJid);
         const index = current.findIndex(item => item.rowId === rowId);
         const item = current[index];
-        if (!item?.source_accepted || !item.source_id) throw new Error('Accepted queue item is unavailable.');
-        const result: unknown = withdraw({ chatJid, item: { ...cloneQueuedFollowupItem(item), source_id: item.source_id }, database });
-        if (result !== undefined) {
-          void Promise.resolve(result).then(() => undefined, () => undefined);
-          throw new Error('Queued source withdrawal callback must be synchronous.');
+        if (!item || item.source_id !== observed.source_id || (!item.source_id && !isDeepStrictEqual(item, observed)))
+          throw Error('Queued input is unavailable: identity changed.');
+        if (item.source_accepted) {
+          if (!withdraw || !item.source_id) throw Error('Accepted input requires host cancellation');
+          const result: unknown = withdraw({ chatJid, item: { ...cloneQueuedFollowupItem(item), source_id: item.source_id }, database });
+          if (result !== undefined) {
+            void Promise.resolve(result).then(() => undefined, () => undefined);
+            throw Error('Queued source withdrawal callback must be synchronous.');
+          }
         }
-        current.splice(index, 1);
-        this.setDeferredQueuedFollowupItems(chatJid, current);
+        current.splice(index, 1); this.setDeferredQueuedFollowupItems(chatJid, current);
         if (item.rowId > 0) deleteMessageByRowId(chatJid, item.rowId);
         return { removed: cloneQueuedFollowupItem(item), source: 'deferred' as const };
-      }).immediate();
+      }, check, options.signal, 5000, assertBinding);
     }
-    const removedQueued = queuedIndex >= 0 ? (queued.splice(queuedIndex, 1)[0] ?? null) : null;
-    if (queuedIndex >= 0) {
-      this.setDeferredQueuedFollowupItems(chatJid, queued);
-    }
-
-    const removedPlaceholder = removedQueued ? null : this.placeholderStore.remove(chatJid, rowId);
-    const removed = removedQueued ?? removedPlaceholder;
-    const source = removedQueued ? "deferred" : removedPlaceholder ? "placeholder" : null;
-    if (!removed || !source) return { removed: null, source: null };
-
-    if (removed.rowId > 0) {
-      deleteMessageByRowId(chatJid, removed.rowId);
-    }
-
-    return { removed: cloneQueuedFollowupItem(removed), source };
+    const placeholder = this.placeholderStore.peek(chatJid).find(item => item.rowId === rowId);
+    if (!placeholder) return { removed: null, source: null };
+    // Legacy placeholder memory and its timeline row share rollback, without
+    // moving a failed middle-item removal to the front of the queue.
+    let previous: QueuedFollowupItem[] | undefined;
+    return admitSqliteWrite(database, () => {
+      const current = this.placeholderStore.peek(chatJid).find(item => item.rowId === rowId);
+      if (!isDeepStrictEqual(current, placeholder)) throw Error('Queued placeholder identity changed.');
+      previous = this.placeholderStore.peek(chatJid);
+      const removed = this.placeholderStore.remove(chatJid, rowId)!;
+      if (removed.rowId > 0) deleteMessageByRowId(chatJid, removed.rowId);
+      return { removed, source: 'placeholder' as const };
+    }, check, options.signal, 5000, assertBinding, () => {
+      if (!previous) return;
+      this.placeholderStore.drain(chatJid);
+      for (const item of previous.slice().reverse()) this.placeholderStore.prepend(chatJid, item);
+      previous = undefined;
+    });
   }
 
   private getDeferredQueuedFollowupItems(chatJid: string): QueuedFollowupItem[] {
@@ -373,8 +389,12 @@ export class QueuedFollowupLifecycleService {
     return order;
   }
 
-  reorderQueuedFollowupItems(chatJid: string, fromIndex: number, toIndex: number): boolean {
-    return getDb().transaction(() => this.reorderQueuedFollowupItemsInTransaction(chatJid, fromIndex, toIndex)).immediate();
+  async reorderQueuedFollowupItems(chatJid: string, fromIndex: number, toIndex: number, options: QueuedFollowupWriteOptions = {}): Promise<boolean> {
+    const database = getDb();
+    const assertBinding = captureQueueBinding(database);
+    const check = (phase: 'before' | 'after') => { assertBinding(); options.authorise?.(phase); };
+    return await admitSqliteWrite(database, () => this.reorderQueuedFollowupItemsInTransaction(chatJid, fromIndex, toIndex),
+      check, options.signal, 5000, assertBinding);
   }
 
   private reorderQueuedFollowupItemsInTransaction(chatJid: string, fromIndex: number, toIndex: number): boolean {

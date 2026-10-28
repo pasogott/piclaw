@@ -129,7 +129,7 @@ test("autonomous stable follow-up yields to pending sources and legacy queue ite
   expect(f.db.query('SELECT source_id FROM service_effect_s01_sources').all()).toEqual([{ source_id: 'goal:first' }]);
 });
 
-for (const busyOnce of [false, true]) test(`accepted stable dispatch retries only its exact source; busy=${busyOnce}`, async () => {
+for (const busyOnce of [false, true]) test(`accepted stable dispatch never replays an uncertain submission; busy=${busyOnce}`, async () => {
   const f = fixture(undefined, () => true), chatJid = 'web:stable-dispatch';
   const service = new QueuedFollowupLifecycleService(), messageId = 'goal-continuation:operation-1';
   f.db.transaction(() => service.enqueueAcceptedFollowupOnce(messageId, chatJid, 'Continue Goal', '2026-10-19T00:00:00.000Z',
@@ -147,8 +147,8 @@ for (const busyOnce of [false, true]) test(`accepted stable dispatch retries onl
       },
       async wait() {}, async settle() { return {}; },
     } as any });
-  expect(await dispatch(chatJid, messageId, rowId)!()).toBe('settled');
-  expect(submissions).toBe(busyOnce ? 2 : 1);
+  expect(await dispatch(chatJid, messageId, rowId)!()).toBe(busyOnce ? 'pending' : 'settled');
+  expect(submissions).toBe(1);
   expect(f.db.query('SELECT operation_id FROM service_effect_s01_operations').all()).toHaveLength(1);
   expect(dispatch(chatJid, 'goal-continuation:foreign', rowId)).toBeUndefined();
   f.db.query('UPDATE service_effect_s01_sources SET payload_ref=? WHERE chat_jid=? AND source_id=?').run('queued-source:foreign', chatJid, messageId);
@@ -1191,7 +1191,7 @@ test.skipIf(!hasEngine)('reordered native queue executes second accepted source 
     await queueService.admitQueuedFollowupItem(['web:default',0,'second accepted'],()=>{},signal,f.acceptQueued);
     f.expectSources(2);
     const before=f.db.query('SELECT source_id,source_seq,payload_ref,source_hash FROM service_effect_s01_sources ORDER BY source_seq').all();
-    expect(queueService.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
+    expect(await queueService.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
     const selected=queueService.peekQueuedFollowupItem('web:default')!;
     expect(selected.queuedContent).toBe('second accepted');
     let index=0;

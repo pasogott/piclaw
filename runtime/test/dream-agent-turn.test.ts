@@ -2,19 +2,25 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, linkSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { importFresh } from "./helpers.js";
+import { importFresh, setEnv } from "./helpers.js";
 import { assertPathWithinTestFilesystemIsolation } from "../scripts/test-filesystem-isolation.js";
 
 // Capture once, before any fixture freezes the global clock. A timed-out test
 // can finish late while the next fixture is already running.
 const realDateNow = Date.now;
+let restoreFixturePaths: (() => void) | undefined;
 afterEach(() => {
   Date.now = realDateNow;
+  restoreFixturePaths?.(); restoreFixturePaths = undefined;
 });
 
 const acceptModelChange = async () => ({ status: "success", message: "ok" } as const);
 
 function resetDreamDestructiveFixture(config: typeof import("../src/core/config.js")): void {
+  // Dream and its database are bootstrap-bound; index traversal resolves live paths.
+  // Earlier fixtures may have bootstrapped another disposable workspace.
+  restoreFixturePaths?.();
+  restoreFixturePaths = setEnv({PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_STORE:config.STORE_DIR,PICLAW_DATA:config.DATA_DIR});
   const notesDir = join(config.WORKSPACE_DIR, "notes");
   assertPathWithinTestFilesystemIsolation(config.WORKSPACE_DIR);
   assertPathWithinTestFilesystemIsolation(notesDir, process.env, { allowRoot: false });
@@ -25,6 +31,10 @@ function resetDreamDestructiveFixture(config: typeof import("../src/core/config.
 }
 
 function resetDreamNotesFixture(config: typeof import("../src/core/config.js")): void {
+  // Dream and its database are bootstrap-bound; index traversal resolves live paths.
+  // Earlier fixtures may have bootstrapped another disposable workspace.
+  restoreFixturePaths?.();
+  restoreFixturePaths = setEnv({PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_STORE:config.STORE_DIR,PICLAW_DATA:config.DATA_DIR});
   const notesDir = join(config.WORKSPACE_DIR, "notes");
   assertPathWithinTestFilesystemIsolation(config.WORKSPACE_DIR);
   assertPathWithinTestFilesystemIsolation(notesDir, process.env, { allowRoot: false });

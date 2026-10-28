@@ -81,7 +81,7 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
   const queueLifecycle: QueueLifecycleStub = {
     getQueuedFollowupCount: () => 0,
     listQueuedStateItems: () => [],
-    reorderQueuedFollowupItems: () => false,
+    reorderQueuedFollowupItems: async () => false,
     removeQueuedFollowupForAction: async () => ({ removed: null, source: null }),
   };
 
@@ -239,7 +239,7 @@ describe("WebAgentControlPlaneService", () => {
     const queueLifecycle: QueueLifecycleStub = {
       getQueuedFollowupCount: (chatJid: string) => (chatJid === "web:branch" ? 1 : 0),
       listQueuedStateItems: () => [{ row_id: 7, content: "queued followup", timestamp: "2024-01-01T00:00:00.000Z", thread_id: 11 }],
-      reorderQueuedFollowupItems: () => false,
+      reorderQueuedFollowupItems: async () => false,
       removeQueuedFollowupForAction: async () => ({
         removed: {
           rowId: 7,
@@ -443,7 +443,7 @@ describe("WebAgentControlPlaneService", () => {
           getQueuedFollowupCount: jid => f.lifecycle.getQueuedFollowupCount(jid),
           // Public state has no source_accepted; order both local rows ahead of it.
           listQueuedStateItems: () => [manual, placeholder, accepted].map(row_id => ({ row_id, content: "public", timestamp: "now", thread_id: null })),
-          removeQueuedFollowupForAction: forbidden, reorderQueuedFollowupItems: () => false,
+          removeQueuedFollowupForAction: forbidden, reorderQueuedFollowupItems: async () => false,
         }, getQueuedInputSourceWithdrawal: forbidden, broadcastEvent: forbidden,
       });
       const response = await service.handleAgentRunDrainQueue(abortRequest({ chat_jid: chat }));
@@ -471,7 +471,7 @@ describe("WebAgentControlPlaneService", () => {
         { rowId: 41, content: "first" },
         { row_id: 42, content: "second" },
       ],
-      reorderQueuedFollowupItems: () => false,
+      reorderQueuedFollowupItems: async () => false,
       removeQueuedFollowupForAction: async (_chatJid, rowId) => {
         removedRows.push(rowId);
         return {

@@ -1,3 +1,4 @@
+import { admitSqliteWrite, isSqliteContention as isBusy } from '../../db/sqlite-async-admission.js';
 import { getQueuedInputIntent } from "./queued-input-intent.js";
 import { assertProcessAdmission } from "../../runtime/process-admission.js";
 import {
@@ -1053,9 +1054,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       );
 
     try {
-      const outcome = this.database
-        .transaction(() => this.applyMutationWithinTransaction(method, request, apply))
-        .immediate();
+      const outcome = await admitSqliteWrite(this.database, () => this.applyMutationWithinTransaction(method, request, apply));
       if (!outcome.ok) return this.fail(method, effect, outcome.error);
 
       const acknowledgementFault = this.fault(
@@ -1790,20 +1789,6 @@ function serviceError(
       ? { conflictingOperationId: details.conflictingOperationId }
       : {}),
   });
-}
-
-function isBusy(cause: unknown): boolean {
-  if (cause === null || typeof cause !== "object") return false;
-  try {
-    const code = Object.getOwnPropertyDescriptor(cause, "code")?.value;
-    const errno = Object.getOwnPropertyDescriptor(cause, "errno")?.value;
-    return (
-      code === "SQLITE_BUSY" || code === "SQLITE_BUSY_SNAPSHOT" || errno === 5
-    );
-  } catch (caught) {
-    void caught;
-    return false;
-  }
 }
 function requiredText(value: unknown): string {
   if (

@@ -4,13 +4,13 @@ export const installedAddonProfiles = {
   "proxmox": {
     "label": "proxmox",
     "name": "@rcarmo/piclaw-addon-proxmox",
-    "version": "0.1.11",
+    "version": "0.1.12",
     "entry": "index.ts",
     "files": {
       "client.ts": "f8834669f9a7174c5a123602ce17569a9d7f2d7c3f0d3c585d3eb6cd4dffdffc",
       "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
       "compat/config.ts": "b6b5f488fc7c537185d0144de8fa58029a56c8de33ab2972683556eb989e0768",
-      "compat/extension-kv.ts": "5ee5d2928d62cf6722bec1de28c1648213c58de22512af6e76de34c412532137",
+      "compat/extension-kv.ts": "eb2171fec1fe78f1112b039c6462b067cfd5908f3c757b6d799953361ed5b6cb",
       "compat/index.ts": "57faf01f14e01eff716251bbff7c5085b138a71b1540078828f93bdf348720d6",
       "compat/keychain.ts": "c0244956fb55985588e5f1f00752162e5cc9d9db943a7e4116689ced39170f3e",
       "compat/logger.ts": "de0fddbd49d7b4d48e3b4ae8c0cf1ab188b4ba542f77c87d57ccb510318f85fa",
@@ -19,10 +19,10 @@ export const installedAddonProfiles = {
       "compat/tool-output.ts": "e2015897deb0131496084e47f4efae60f98ad0c6bac02d960a99773003a93565",
       "compat/tool-status-hints.ts": "fc9175a3c97250d79b67e92716ea0a6519922684f01a1898b960d5feed6a7054",
       "compat/types.ts": "2e9186a4757069f5e249f78652858b5e62f4b2f486229eaebbc429c8ce2364ab",
-      "extension.ts": "9d5f28e9b8b0df768eaa4995aba46878617f659c3831a0bfab5af985bb3556c2",
+      "extension.ts": "f675919ca2bf25facc42640e3cab90e395469c083eb5408147711569a2febe58",
       "index.ts": "8c1b2a79fe2d1017455d10d9050374bb4d5fe58b8652996947b7c86a350e88cc",
       "invocation.ts": "ef0271b4d74816c2637ceb0f849910670e0a901d20a952bb66ac9592e97e1a09",
-      "package.json": "5987cffd61125092c7cc3b9ebe84ea9d78b0de3fe0fab9e537dadb377443f428"
+      "package.json": "170aa49ebbb9ec04d8208a2d8166485ed1adbf4fd492a5d2e549a09d865a7aca"
     },
     "shadows": [
       "client.js",
@@ -104,13 +104,13 @@ export const installedAddonProfiles = {
   "portainer": {
     "label": "portainer",
     "name": "@rcarmo/piclaw-addon-portainer",
-    "version": "0.1.10",
+    "version": "0.1.11",
     "entry": "index.ts",
     "files": {
       "client.ts": "b1a18991223dbd0c7c44cc0f608a4ea8831f5be6902408d77939910b7a20c402",
       "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
       "compat/config.ts": "b6b5f488fc7c537185d0144de8fa58029a56c8de33ab2972683556eb989e0768",
-      "compat/extension-kv.ts": "5ee5d2928d62cf6722bec1de28c1648213c58de22512af6e76de34c412532137",
+      "compat/extension-kv.ts": "eb2171fec1fe78f1112b039c6462b067cfd5908f3c757b6d799953361ed5b6cb",
       "compat/index.ts": "57faf01f14e01eff716251bbff7c5085b138a71b1540078828f93bdf348720d6",
       "compat/keychain.ts": "264b305e9e34d0d3bbeb6b46d073d93bb54c20fead2998d2616212fca25109c5",
       "compat/logger.ts": "de0fddbd49d7b4d48e3b4ae8c0cf1ab188b4ba542f77c87d57ccb510318f85fa",
@@ -119,10 +119,10 @@ export const installedAddonProfiles = {
       "compat/tool-output.ts": "e2015897deb0131496084e47f4efae60f98ad0c6bac02d960a99773003a93565",
       "compat/tool-status-hints.ts": "fc9175a3c97250d79b67e92716ea0a6519922684f01a1898b960d5feed6a7054",
       "compat/types.ts": "ee882ffefedd84489580e013e7cc27737bf2ecc085dfcfed6120aab323d03082",
-      "extension.ts": "b80af02faf2bbb6e0cc416015933466a05eba688e119388b25b70408331e8131",
+      "extension.ts": "2aaa88e7da33fedbe30d08a08c8d84a17d95edcc04c3361dec579c813852d6c7",
       "index.ts": "16a997a40cd6298be30cac2e1f27590481eb5865a4917fcc9951ad5686970179",
       "invocation.ts": "c3635112b6d8f1e67f62662cdf61627a214ecec1df232b0670a37eea9ee7e0ed",
-      "package.json": "5715f869edd956f28b461adbe6e0735399bcfc7ff3e149757559b37cda473187"
+      "package.json": "0dd1b70416bf9fbbef561d1154cfcebb32cf16bab15631e45f5e5b6a8ca51733"
     },
     "shadows": [
       "client.js",
@@ -204,7 +204,7 @@ export const installedAddonProfiles = {
   "remote-peer": {
     "label": "remote-peer",
     "name": "@rcarmo/piclaw-addon-remote-peer",
-    "version": "0.3.7",
+    "version": "0.3.8",
     "entry": "index.ts",
     "files": {
       "actions.ts": "19fcadd0dfee0898c58b17433636cb3d80c8fa3b882ef8af59abc27ebb646cae",
@@ -216,8 +216,8 @@ export const installedAddonProfiles = {
       "fixture-ownership.ts": "64c128386b9faa39ca349062e05dcf1f265736992e842829331f3ed3287ee197",
       "index.ts": "b343cb79d715a814d539c9a594b8acd42cd7b4e2ed8e767203cb3a7f3846733a",
       "native-authority.ts": "8b4562f61bb19fb8b5be6b92b6df92688f3e46f3014a2500ef1fc36081fc31b3",
-      "native.ts": "5c04fbf5af226d6005bd005f15a7ee10bb3ceffaa30f53b4dbbe05558885b063",
-      "package.json": "2d59923bdd42c3384def425c38a458d42f8221a5c8edb39e7794aac772608549",
+      "native.ts": "9c5b8681c05fed6b7418e31194d63445b3a36db8bb5c7f4bf5654479d1aa67c6",
+      "package.json": "9a8e6be1188f16e365a2cc3d3575b714a36cd545944572432985b9b703958fa9",
       "runtime-service.ts": "9ce7bfb0eb9f83c19e2227c15cd492dd83131b01ea2784ba24f98954d7e9c86a",
       "runtime.ts": "d932f5bc5dcd2f0f8d7826e2b98db50c9b47d6307e4a00e00e0876437cea5fbe",
       "service.ts": "42d3a45609d3abed94bd7b7dd0bb174e1c7a51e7e41520fb078eb4b5eb412d6a",
@@ -334,16 +334,16 @@ export const installedAddonProfiles = {
   "imap": {
     "label": "imap",
     "name": "@rcarmo/piclaw-addon-imap",
-    "version": "0.1.12",
+    "version": "0.1.13",
     "entry": "index.ts",
     "files": {
-      "account-store.ts": "9f8bf5ba01b6602d1f1ac83ca6f4b5a0b15f746cc81a873d0e7a5f1f997c5c13",
-      "compat/extension-kv.ts": "d6e648868c0ee433707029d7385a245909c8d909fa23f5015de9842278719fe1",
+      "account-store.ts": "10208e5dc06bce674353a4b041804303f271068a68c6299a7ab3e21aa88c7278",
+      "compat/extension-kv.ts": "5c674b51695ec9b50abd76fa41e29119159f64dac1fe412288f67dd238a405fe",
       "compat/keychain.ts": "767ea9e1b92102d9df08935837b0fc97cbad9c987f5667c507291a7bce8c4863",
       "imap-client.ts": "6a7ade8f6f6cbe0a6484f0076886c67bc9dcfef9b69779059d8211e34d7d1ec9",
-      "index.ts": "c3a695deb40caadb4125ba508bc544d94188a8ec8a9d674875bcf3663b17ec63",
+      "index.ts": "2ca7ffcaffc27d432537dd91bf5d3f5641a62eebdd43aa3bcbb9cd9dcf34c5bc",
       "mime.ts": "806ece4445952a597147f3917c599d44112259e3f8b4740b30e2113fa776b9ab",
-      "package.json": "702f6ba761d3e3afcfd14767d82734bde44f77a0bf6b19de46da8d41116cf5ca"
+      "package.json": "47f5cc865c388364e267afc3e6d1507b2ca004732862955f7a923323f81eaf17"
     },
     "shadows": [
       "account-store.js",
@@ -387,7 +387,7 @@ export const installedAddonProfiles = {
   "late-night-regrets": {
     "label": "late-night-regrets",
     "name": "@rcarmo/piclaw-addon-late-night-regrets",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "entry": "index.ts",
     "files": {
       "access.ts": "8ff2ddb8e493acfdd38eb6ad971f9d9d2ecd1c251344e807977d92e28eebf575",
@@ -395,8 +395,8 @@ export const installedAddonProfiles = {
       "config.ts": "2792db7e786c313bff5080bcd9bdc8c546631a924bc9c294fc61bcbb96987bc9",
       "decision.ts": "9e23deebea9508ac49bd7172f81134420336a0734cc99757d3524a5993b58f96",
       "index.ts": "fda811e0b9ebb6f7ca514fb4d65474488ed66230d89df64477ea9c09d09b11fa",
-      "native.ts": "cc11b4c209456ed93d8d890e7e096865908cd9a4110e4b2e942749339d7be2e4",
-      "package.json": "f37144f98c1b1b25b1beb48762205700e57c67f384c973109c76525973c099ca",
+      "native.ts": "facdec734b4d8185465d197c9db1cda742c549075703c6b238bd8099397db293",
+      "package.json": "993afa80055b23b82c690860648572bdb47997909e5a4cd589f5f49ad3f4f18c",
       "ranker.ts": "3d1cdcfa6b3d09e89b95086c707427bed4630716fb884b99dc76c6ed9a2235d4",
       "reflection-prompt.ts": "ec4913d6c91baeb144178d3469d2a6065b3546bfa2bba513bfd9e667ff769711",
       "review.ts": "a85a2715cdc24d94a75eaa6c800a42fb15ea7d770cd6cc633d893b22a34c29ec",

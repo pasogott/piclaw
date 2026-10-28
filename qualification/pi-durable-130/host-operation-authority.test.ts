@@ -82,14 +82,15 @@ test("host writes use root IMMEDIATE transaction and roll back callback work whe
   let allowed = true;
   try {
     const authority = createHostOperationAuthority(root, captured, () => { if (!allowed) throw Error("Owner revoked"); });
-    expect(authority.write(() => { expect(root.inTransaction).toBe(true); root.exec("INSERT INTO authority_probe VALUES ('kept')"); return 7; })).toBe(7);
-    expect(() => authority.write(() => {
+    expect(() => authority.write(() => {})).toThrow('Admitted host write transaction required');
+    expect(await authority.admitWrite(() => authority.write(() => { expect(root.inTransaction).toBe(true); root.exec("INSERT INTO authority_probe VALUES ('kept')"); return 7; }))).toBe(7);
+    await expect(authority.admitWrite(() => {
       root.exec("INSERT INTO authority_probe VALUES ('rollback'); UPDATE service_effect_s01_operations SET version=version+1");
-    })).toThrow("Stale host operation authority");
+    })).rejects.toThrow("Stale host operation authority");
     authority.assertCurrent();
-    expect(() => authority.write(() => { root.exec("INSERT INTO authority_probe VALUES ('owner')"); allowed = false; })).toThrow("Owner revoked");
+    await expect(authority.admitWrite(() => { root.exec("INSERT INTO authority_probe VALUES ('owner')"); allowed = false; })).rejects.toThrow("Owner revoked");
     allowed = true;
-    expect(() => authority.write(() => { root.exec("INSERT INTO authority_probe VALUES ('throw')"); throw Error("Callback failed"); })).toThrow("Callback failed");
+    await expect(authority.admitWrite(() => { root.exec("INSERT INTO authority_probe VALUES ('throw')"); throw Error("Callback failed"); })).rejects.toThrow("Callback failed");
     expect(root.query("SELECT * FROM authority_probe").all()).toEqual([{ value: "kept" }]);
     allowed = false;
     expect(() => authority.assertCurrent()).toThrow("Owner revoked");

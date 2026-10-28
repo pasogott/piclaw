@@ -42,8 +42,12 @@ export function createCodeReviewTool() {}\n`);
     }, { requestId: "create" });
     const thread = current.createThread(who, review.reviewId, { fileId: review.files[0], side: "source", body: "Concern" }, { requestId: "comment" });
     const dispatch = current.submit(who, review.reviewId, { target, items: [{ threadId: thread.threadId, version: 1 }] }, { requestId: "send" });
-    let settle!: (value: any) => void;
-    const pending = current.deliver(who, dispatch.dispatchId, { enqueue() { return new Promise(resolve => { settle = resolve; }); } });
+    let settle!: (value: any) => void, entered!: () => void;
+    const enqueuing = new Promise<void>(resolve => { entered = resolve; });
+    const pending = current.deliver(who, dispatch.dispatchId, { enqueue() {
+      const receipt = new Promise(resolve => { settle = resolve; }); entered(); return receipt;
+    } });
+    await enqueuing;
     release(); release();
     expect(() => service.database.get("SELECT 1")).toThrow("closed");
     const releaseNext = q!.addon.setReviewDatabaseSource({ database: db, assertOwner() {} });

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,7 +89,9 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
       owner.seedOperation(terminalOperation());
       contender.database.exec("PRAGMA busy_timeout=0");
       owner.database.exec("BEGIN IMMEDIATE");
-      const blocked = await contender.store.commitTerminal(terminalRequest());
+      const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(5001);
+      let blocked: Awaited<ReturnType<typeof contender.store.commitTerminal>>;
+      try { blocked = await contender.store.commitTerminal(terminalRequest()); } finally { clock.mockRestore(); }
       expect(blocked.ok).toBeFalse();
       if (!blocked.ok) {
         expect(blocked.error._tag).toBe("storage_unavailable");

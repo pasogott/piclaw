@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from '../db/sqlite-async-admission.js';
 import type Database from "bun:sqlite";
 import { getDb } from "../db/connection.js";
 import { markBudgetDecisionNotified } from "../db/budget-limits.js";
@@ -76,7 +77,9 @@ async function drainOnce(deps: ScheduledBudgetNotificationDeps): Promise<void> {
       if (!allowed()) return;
       // A successful send followed by a lost acknowledgement/DB failure can
       // duplicate the notice. This is at-least-once, never an agent-task replay.
-      markBudgetDecisionNotified(notice.decision_id, database);
+      await admitSqliteWrite(database, () => markBudgetDecisionNotified(notice.decision_id, database), () => {
+        if (!allowed()) throw Error("Budget notification acknowledgement revoked");
+      });
     } catch {
       if (!allowed()) return;
       log.warn("Scheduled budget notification delivery failed", {

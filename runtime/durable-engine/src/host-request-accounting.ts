@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type Database from "bun:sqlite";
 import type { AssistantMessage, Api, Model } from "../../src/durable-legacy-sdk.js";
 import { modelRequestAccounting } from "../../src/budget/model-request-accounting.js";
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { boundHostRequestCost } from "../../src/budget/request-cost-bound.js";
 import { ensureBudgetWork, getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
@@ -15,18 +16,18 @@ export function sidePromptSourceId(chatJid: string, retryId: string): string {
 }
 
 /** Reconcile only already-committed host terminals. Never clear uncertain holds. */
-export function completeMaintenanceBudgetWork(database: Database, workId: string): void {
-  database.transaction(() => {
+export async function completeMaintenanceBudgetWork(database: Database, workId: string): Promise<void> {
+  await admitSqliteWrite(database, () => {
     const work = getBudgetWork(workId, database);
     if (work?.status !== "active" || work.execution_kind !== "side_prompt" || work.parent_work_id !== null || database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
       WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(workId)) return;
     setBudgetWorkStatus(workId, "completed", { boundary: "maintenance_settled" }, database);
-  }).immediate();
+  });
 }
 
-export function reconcileOperationBudgetWork(database: Database, operationId?: string): void {
-  const terminals = database.query("SELECT operation_id FROM service_effect_s02_commits WHERE (? IS NULL OR operation_id=?)").all(operationId ?? null, operationId ?? null) as { operation_id: string }[];
-  database.transaction(() => {
+export async function reconcileOperationBudgetWork(database: Database, operationId?: string): Promise<void> {
+  await admitSqliteWrite(database, () => {
+    const terminals = database.query("SELECT operation_id FROM service_effect_s02_commits WHERE (? IS NULL OR operation_id=?)").all(operationId ?? null, operationId ?? null) as { operation_id: string }[];
     for (const terminal of terminals) {
       const id = operationBudgetWorkId(terminal.operation_id);
       if (getBudgetWork(id, database)?.status !== "active") continue;
@@ -45,7 +46,7 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
           setBudgetWorkStatus(parent.id, "completed", { boundary: "side_prompt_settled" }, database);
       }
     }
-  }).immediate();
+  });
 }
 
 /** Stored-identity host model requests. Exact background input policy supports
@@ -93,17 +94,19 @@ export async function reserveHostRequest(options: {
   }
   const id = randomUUID();
   const workId = `durable-request:${id}`;
-  const sidePrompt = database.query(`SELECT 1 FROM service_effect_s01_operations o
-    JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
-    WHERE o.operation_id=? AND o.chat_jid=? AND s.kind='internal' AND s.source_id LIKE 'side-prompt:%'`).get(options.operationId, options.chatJid);
-  const existingSide = sidePrompt ? getBudgetWork(operationWork, database) : null;
-  if(!background)ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId || sidePrompt ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
-    parentWorkId: existingSide?.parent_work_id, scheduledTaskId: options.scheduledTaskId }, database);
-  ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind === "delegate" ? "delegate" : sidePrompt ? "side_prompt" : options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {
     assertCurrent();assertBackground(); signal.throwIfAborted();
     if (readStoredProviderUsageAccountRef(model.provider, options.authPath) !== accountRef) throw Error("Native request account changed");
   };
+  await admitSqliteWrite(database, () => {
+    const sidePrompt = database.query(`SELECT 1 FROM service_effect_s01_operations o
+      JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+      WHERE o.operation_id=? AND o.chat_jid=? AND s.kind='internal' AND s.source_id LIKE 'side-prompt:%'`).get(options.operationId, options.chatJid);
+    const existingSide = sidePrompt ? getBudgetWork(operationWork, database) : null;
+    if (!background) ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId || sidePrompt ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
+      parentWorkId: existingSide?.parent_work_id, scheduledTaskId: options.scheduledTaskId }, database);
+    ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind === "delegate" ? "delegate" : sidePrompt ? "side_prompt" : options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
+  }, current, signal);
   const accounting = modelRequestAccounting({ authorise: current, documentedFree: false, usageSource: options.usageSource ?? (options.maintenanceWorkId ? "compaction" : "assistant") }, database);
   const binding = { id, workId, chatJid: options.chatJid, providerId: model.provider, modelId: model.id, accountRef, amountMicros: amount.amountMicros };
   let dispatchStarted = false;
@@ -114,7 +117,7 @@ export async function reserveHostRequest(options: {
   try{await accounting.reserve(binding, signal);}
   catch(error){
     if(background&&error instanceof BudgetRequestError&&error.code==='budget_denied'){
-      try{if(!getBudgetRequest(binding.id,database))setBudgetWorkStatus(workId,'stopped',{boundary:'request_budget_blocked'},database);}
+      try{await admitSqliteWrite(database,()=>{if(!getBudgetRequest(binding.id,database))setBudgetWorkStatus(workId,'stopped',{boundary:'request_budget_blocked'},database);});}
       catch(cleanup){throw new AggregateError([error,cleanup],'Background budget rejection cleanup is uncertain',{cause:error});}
     }
     throw error;
@@ -134,14 +137,15 @@ export async function reserveHostRequest(options: {
       if (settled) { if (hash !== settlementHash) throw Error("Native request terminal changed"); return; }
       const row = await accounting.settle(binding, message);
       if (row.state !== "settled") throw Error("Native request settlement unresolved");
-      setBudgetWorkStatus(workId, "completed", { boundary: "request_settled" }, database);
+      await admitSqliteWrite(database, () => setBudgetWorkStatus(workId, "completed", { boundary: "request_settled" }, database));
       settled = true; settlementHash = hash;
     },
     async abandon() {
       if (settled) return;
       const row = await accounting.abandon(binding);
-      if (row?.state === "released") setBudgetWorkStatus(workId, "stopped", { boundary: "request_not_sent" }, database);
-      if (row?.state === "settled") setBudgetWorkStatus(workId, "completed", { boundary: "request_settled" }, database);
+      if (row?.state === "released" || row?.state === "settled") await admitSqliteWrite(database, () =>
+        setBudgetWorkStatus(workId, row.state === "released" ? "stopped" : "completed",
+          { boundary: row.state === "released" ? "request_not_sent" : "request_settled" }, database));
     },
   };
 }

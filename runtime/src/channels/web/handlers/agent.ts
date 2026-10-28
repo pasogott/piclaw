@@ -1,3 +1,5 @@
+import { admitSqliteWrite } from "../../../db/sqlite-async-admission.js";
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 /**
  * web/handlers/agent.ts – HTTP handlers for agent-related API endpoints.
  *
@@ -30,7 +32,7 @@ import {
 } from "../messaging/agent-message-service.js";
 import { handleUiThemeCommand } from "../theming/ui-theme-commands.js";
 import { handleUiMetersCommand } from "../ui-meters-commands.js";
-import { getServerUiMetersConfig, setServerUiMetersConfig, setServerUiThemeConfig } from "../ui-state.js";
+import { getServerUiMetersConfig, admitServerUiMetersConfig, admitServerUiThemeConfig } from "../ui-state.js";
 import { getChatCursor, getMessageRowIdById, getDb, setChatCursor } from "../../../db.js";
 import { formatOutbound } from "../../../router.js";
 import { isSqliteContention } from '../../../db/sqlite-async-admission.js';
@@ -184,22 +186,8 @@ function fallbackAgentHandle(chatJid: string): string {
 // Only in-process forwarding can share the original guarded request authority.
 // No request body/header can supply or replace this capability.
 function captureInputAuthority(channel: WebChannelLike, req: Request): () => void {
-  const gateway = channel.authGateway;
-  const authEnabled = gateway?.isAuthEnabled?.() === true;
-  const principal = gateway?.getPrincipal?.(req, true) ?? null;
-  const key = (value: typeof principal) => JSON.stringify(value && [value.kind, value.userId, value.mode, value.role, value.authentication]);
-  const principalKey = key(principal);
-  const internal = !principal && gateway?.isInternalSecretEnabled?.() === true && gateway.verifyInternalSecret(req);
-  if (authEnabled && !principal && !internal) throw Error('Incoming request has no verified authority.');
-  return () => {
-    req.signal.throwIfAborted();
-    if (!isSingleUserAccess() || (gateway?.isAuthEnabled?.() === true) !== authEnabled) throw Error('Incoming request authority changed.');
-    if (internal) {
-      if (!gateway.isInternalSecretEnabled() || !gateway.verifyInternalSecret(req)) throw Error('Internal request authority changed.');
-    } else if (key(gateway?.getPrincipal?.(req, true) ?? null) !== principalKey) {
-      throw Error('Incoming request principal changed.');
-    }
-  };
+  const check = captureWebRequestAuthority(channel.authGateway, req);
+  return () => { if (!isSingleUserAccess()) throw Error("Incoming request authority changed."); check(); };
 }
 
 /**
@@ -407,7 +395,7 @@ async function handleAgentMessageInScope(
     if (!sourceInteraction) return channel.json({ error: "Failed to store message" }, 500);
 
     channel.broadcastEvent("new_post", sourceInteraction);
-    setChatCursor(chatJid, sourceInteraction.timestamp);
+    await admitSqliteWrite(getDb(), () => setChatCursor(chatJid, sourceInteraction!.timestamp), revalidateInputAuthority, req.signal);
 
     const sourceAgentName = typeof (channel.agentPool as { getAgentHandleForChat?: (chatJid: string) => string }).getAgentHandleForChat === "function"
       ? (channel.agentPool as { getAgentHandleForChat: (chatJid: string) => string }).getAgentHandleForChat(chatJid)
@@ -565,7 +553,7 @@ async function handleAgentMessageInScope(
 
   if (themeCommand) {
     if (themeCommand.payload) {
-      const uiTheme = setServerUiThemeConfig({ theme: themeCommand.payload.theme, tint: themeCommand.payload.tint ?? null });
+      const uiTheme = await admitServerUiThemeConfig({ theme: themeCommand.payload.theme, tint: themeCommand.payload.tint ?? null }, revalidateInputAuthority, req.signal);
       channel.broadcastEvent("ui_theme", { ...uiTheme });
     }
 
@@ -595,11 +583,11 @@ async function handleAgentMessageInScope(
   if (metersCommand) {
     if (metersCommand.payload) {
       const currentMeters = getServerUiMetersConfig();
-      const nextMeters = metersCommand.payload.mode === "toggle"
-        ? setServerUiMetersConfig({ enabled: !currentMeters.enabled })
+      const nextMeters = await (metersCommand.payload.mode === "toggle"
+        ? admitServerUiMetersConfig({ enabled: !currentMeters.enabled }, revalidateInputAuthority, req.signal)
         : metersCommand.payload.mode === "set"
-          ? setServerUiMetersConfig({ enabled: metersCommand.payload.enabled })
-          : setServerUiMetersConfig({ collapsed: metersCommand.payload.collapsed });
+          ? admitServerUiMetersConfig({ enabled: metersCommand.payload.enabled }, revalidateInputAuthority, req.signal)
+          : admitServerUiMetersConfig({ collapsed: metersCommand.payload.collapsed }, revalidateInputAuthority, req.signal));
       channel.broadcastEvent("ui_meters", { chat_jid: chatJid, mode: "set", ...nextMeters });
     }
 
@@ -1320,7 +1308,7 @@ export async function processChat(
       }
       if (result === "pending") return;
     }
-    setChatCursor(chatJid, currentMessage.timestamp);
+    await admitSqliteWrite(getDb(), () => setChatCursor(chatJid, currentMessage.timestamp));
     nativeStatus("done");
     try {
       channel.resumeChat(chatJid);

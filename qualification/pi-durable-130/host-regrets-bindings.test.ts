@@ -20,11 +20,11 @@ function fixture(revokeDuringWrite = false) {
 }
 test("owned SQLite scoped history, explicit all-chat opt-in and RootKV settings", async () => {
   const f = fixture(); try {
-    f.native.setConfig({ review_scope: "current" });
+    await f.native.setConfig({ review_scope: "current" });
     const result = await f.native.tool.execute("call", {});
     expect(JSON.stringify(result)).toContain("Please be concise"); expect(JSON.stringify(result)).not.toContain("Foreign fixture");
     expect(f.native.settings.config.get().config.review_scope).toBe("current");
-    f.native.settings.config.set({ review_scope: "all" });
+    await f.native.settings.config.set({ review_scope: "all" });
     await expect(f.native.tool.execute("call", {})).rejects.toThrow("scope denied");
     f.all(true); expect(JSON.stringify(await f.native.tool.execute("call", {}))).toContain("Foreign fixture");
     expect(f.root.query("SELECT count(*) n FROM extension_kv").get()).toEqual({ n: 1 });
@@ -35,7 +35,7 @@ test("single-user and revoked direct settings deny effects", async () => {
     f.mode("multi-user"); await expect(f.native.tool.execute("call", {})).rejects.toThrow("single-user");
     expect(f.counts().files).toBe(0); f.revoke();
     expect(() => f.native.settings.config.get()).toThrow("revoked");
-    expect(() => f.native.settings.config.set({ enabled: false })).toThrow("revoked");
+    await expect(f.native.settings.config.set({ enabled: false })).rejects.toThrow("revoked");
     expect(() => f.native.settings.models.get()).toThrow("revoked");
     await expect(f.native.command()).rejects.toThrow("revoked"); expect(f.counts().admissions).toBe(0);
     expect(f.root.query("SELECT count(*) n FROM extension_kv").get()).toEqual({ n: 0 });
@@ -43,7 +43,7 @@ test("single-user and revoked direct settings deny effects", async () => {
 });
 for (const boundary of ["history", "file", "model", "admission"] as const) test(`independent revocation after awaited ${boundary}`, async () => {
   const f = fixture(); try {
-    f.native.setConfig({ review_scope: "current" });
+    await f.native.setConfig({ review_scope: "current" });
     let later = 0;
     const ports = { ...f.ports,
       history: async (...args: Parameters<typeof f.ports.history>) => { const r = await f.ports.history(...args); if (boundary === "history") f.revoke(); return r; },
@@ -54,7 +54,7 @@ for (const boundary of ["history", "file", "model", "admission"] as const) test(
     const native = createLateNightRegrets(ports);
     if (boundary === "admission") await expect(native.command()).rejects.toThrow("revoked");
     else {
-      if (boundary === "model") native.setConfig({ decision_model: "fixture/model" });
+      if (boundary === "model") await native.setConfig({ decision_model: "fixture/model" });
       await expect(native.tool.execute("call", {})).rejects.toThrow("revoked");
       expect(later).toBe(boundary === "history" ? 0 : boundary === "file" ? 1 : 2);
     }
@@ -66,8 +66,8 @@ test("normal input callback and prompt/resource/config parity", async () => {
     expect(f.native.resources.skillPaths[0]).toEndWith("skills/late-night-regrets/SKILL.md");
     expect(f.native.prompt("base")).toContain("30 2 * * *");
     expect(f.native.models()).toEqual([]);
-    expect(() => f.native.setConfig({ decision_model: "unaccounted/model" })).toThrow("available");
-    f.native.setConfig({ enabled: false }); expect(f.native.prompt("base")).toBe("base");
+    await expect(f.native.setConfig({ decision_model: "unaccounted/model" })).rejects.toThrow("available");
+    await f.native.setConfig({ enabled: false }); expect(f.native.prompt("base")).toBe("base");
     expect(await f.native.command()).toEqual({ disabled: true }); expect(f.counts().admissions).toBe(1);
   } finally { f.root.close(); }
 });
@@ -101,12 +101,12 @@ test("SDK 1.3 request section rebinds current chat/config; accepted command uses
   } finally { f.root.close(); }
 });
 
-test("config mutation and post-write authority check share a rollback boundary", () => {
+test("config mutation and post-write authority check share a rollback boundary", async () => {
   const f = fixture(true);
   try {
-    f.native.setConfig({ enabled: true });
+    await f.native.setConfig({ enabled: true });
     const before = f.root.query("SELECT value FROM extension_kv").get();
-    expect(() => f.native.setConfig({ enabled: false })).toThrow("revoked");
+    await expect(f.native.setConfig({ enabled: false })).rejects.toThrow("revoked");
     expect(f.root.query("SELECT value FROM extension_kv").get()).toEqual(before);
   } finally { f.root.close(); }
 });

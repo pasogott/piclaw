@@ -145,7 +145,7 @@ test("attach_file reports missing file", async () => {
   expect(result.content[0].text).toContain("File not found");
 });
 
-test("web processChat stores attachment content blocks", async () => {
+test("web admits attachment blocks without reviving the retired runAgent path", async () => {
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
@@ -173,28 +173,16 @@ test("web processChat stores attachment content blocks", async () => {
   });
 
   const webMod = await import("../../src/channels/web.js");
-  const web = new (webMod.WebChannel as any)({
+  let legacyCalls = 0;
+  const web = new webMod.WebChannel({
     queue: { enqueue: () => {} },
-    agentPool: {
-      runAgent: async () => ({
-        status: "success",
-        result: "Here is the report.",
-        attachments: [
-          {
-            id: mediaId,
-            name: "report.txt",
-            contentType: "text/plain",
-            size: 6,
-            kind: "file",
-            sourcePath: "/tmp/report.txt",
-          },
-        ],
-      }),
-      getContextUsageForChat: async () => null,
-    },
-  });
-
-  await (web as any).processChat("web:default", "default");
+    agentPool: { runAgent: async () => { legacyCalls++; throw Error("retired runner must not execute"); }, getContextUsageForChat: async () => null },
+  } as any);
+  await expect(web.processChat("web:default", "default")).rejects.toThrow("Native input dispatch is unavailable");
+  expect(legacyCalls).toBe(0);
+  await web.admitMessage("web:default", "Here is the report.", true, [mediaId], [
+    {type:"file", name:"report.txt", mime_type:"text/plain", size:6},
+  ], () => {});
 
   const timeline = db.getTimeline("web:default", 10);
   const last = timeline[timeline.length - 1];

@@ -36,14 +36,14 @@ type Hook = (event: { systemPrompt: string }, ctx: { sessionManager: { getSessio
 // public dispatch await-gap remains an activation blocker for real providers.
 test("vertical: copied existing chat -> host 1.2 models + actual Plan + guarded local bash -> EF terminal; cancelled auth admits no further effects", async () => {
   const addonRoot = process.env.DURABLE_ADDONS_ROOT;
-  if (!addonRoot) throw new Error("DURABLE_ADDONS_ROOT required (pinned Plan 0.1.25 checkout)");
+  if (!addonRoot) throw new Error("DURABLE_ADDONS_ROOT required (pinned Plan 0.1.27 checkout)");
   const addon = resolve(addonRoot, "addons/plan-sidebar");
   for (const [file, hash] of Object.entries({
-    "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+    "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
     "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-    "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+    "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c",
   })) expect(createHash("sha256").update(await Bun.file(resolve(addon, file)).bytes()).digest("hex")).toBe(hash);
-  expect((await Bun.file(resolve(addon, "package.json")).json()).version).toBe("0.1.25");
+  expect((await Bun.file(resolve(addon, "package.json")).json()).version).toBe("0.1.27");
   const dir = await mkdtemp(resolve(process.env.PICLAW_WORKSPACE!, "vertical-"));
   process.env.PICLAW_DB_IN_MEMORY = "1";
   initDatabase(); getDb().query("VACUUM INTO ?").run(resolve(dir, "host.sqlite")); closeDatabase();

@@ -10,6 +10,7 @@ import type { CodeReviewNativeExports } from "./host-code-review-tool.js";
 import type { EditableTableNativeExports } from "./host-editable-table-tool.js";
 import type { DrawioNativeExports } from "./host-drawio-tool.js";
 export interface PlanPromptExports {
+  createPlanTool(write?: <T>(body: () => T) => Promise<T>): ToolDefinition<any, any, any>;
   parsePlanMarkdown(markdown: string): { plan: { step: string; status: "pending" | "in_progress" | "completed" }[] };
   loadSessionPlan(chatJid: string): { chat_jid: string; markdown: string; updated_at: string | null };
   buildPlanSystemPrompt(plan: ReturnType<PlanPromptExports["loadSessionPlan"]>): string;
@@ -19,30 +20,30 @@ export interface PlanPromptExports {
 // Core policy for the effect proof in qualification/plan.test.ts. This is not
 // an add-on lockfile: other installed content still loads, but gets no exemption.
 const approvedPlanFiles = Object.freeze({
-  "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+  "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
   "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+  "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c"
 });
 const approvedDelegateFiles = Object.freeze({
   "index.ts": "73563d26795cbab5cd92e8d5f8dabe3d7477fa11dff35e0ed8b21d9ec3f5ab51",
-  "delegate.ts": "5466936c43f79c4159d75179c9f6a3f1d8d3439000e388902b321d8e7de9c923",
-  "compat/extension-kv.ts": "20408155132b8b86975100f0df7fe03a57ad74d2e4bb8d30f13e2a893441d651",
+  "delegate.ts": "b0e3fd1d2edcd95cecedff84ac3204fba8bfdadaa70854e6009713e44ba8a402",
+  "compat/extension-kv.ts": "3e86c21a9bf94d43151311fe29a3de1778d7a0a2ae32b81bb634e9fd1b2de4ab"
 });
 // Candidate source profile; qualification tests exercise every backend import.
 const approvedCodeReviewFiles = Object.freeze({
-  "index.ts": "9816235d0418bb6f94f9dd0b99edc37f757cc3a72c50506d014cf267c90c0381",
-  "tool.ts": "4573abb088c0ccdc46dc159f12ed5467c8a54d87b271ca0829a94d2fcf7e5ca3",
-  "runtime.ts": "284b88d0e3466ddc710d228969f7cb23a34d1cdc059f5169c3c39754c6710127",
+  "index.ts": "e7b5acf09dcf9bbb2f1cad2e9d4dc5d52fff2606d18254d42470051b3dfb0558",
+  "tool.ts": "6432109f40bc37858bbcc71038a92bf9d8d6904804259a3a17bbc96d7e859d53",
+  "runtime.ts": "82531a50fbaec5adc9f353d8b623c3542d81db932bb30c4bd8239296f3c68f9c",
   "anchors.ts": "0c1504ff42fdd49b1d320fae4d8eafbf969a5dadb7d867cdc8fb81d737242453",
   "contracts.ts": "f1a6eaf8ad1d4b532ccb509b287991668ce8368a0167cd9e8bf83c2dea727f10",
-  "database.ts": "18ea9fa1d0a5f7e215429d5fc563dcd166314e1ce8f96fe6a0350c93dabe6558",
-  "dispatch.ts": "1d4a07bfc627840b125c7eca6ed8f04ee433a39cb3de29728950b34c29c3bc40",
+  "database.ts": "b0b2c9fe4f547a6be5bdffca90a1f4e328701bd6a5fe6e96ea496d44edaa3a58",
+  "dispatch.ts": "637dd8f2ac750b9065fb0a482c8d66de507a1fe8b6a44d9e5a346bc971010a2f",
   "host.ts": "5d8db59386fabeda32bb65b4db97e13aa03d5bf98adf7d91b67077d37dd618a2",
   "markdown.ts": "ab04e2573e426cbb0aad7975eafbb058db1a5e29355c35df485253ebd6a7520b",
   "render-source.ts": "200645c447550f5a33b472f4c6962a272b574ee23a2a74f59572d8a69c9cd2d0",
-  "source.ts": "0e36085e06fa41f3dd5107e13ce7a5296cb037ddc2c009c7228adec226e76a60",
+  "source.ts": "67ded478500c6b51d4344e86c1d68d6f0b2b50f1aa2f92aa5478c5981567157e",
   "store.ts": "f8a2977d1376c43c3e576c8c471433c1c77083bc40ebd79a1f663162d4a2d5ff",
-  "validation.ts": "6520c981ea388f70e0278cf73583e0c80871aa346b2abd50dab3003d90c9d1a8",
+  "validation.ts": "6520c981ea388f70e0278cf73583e0c80871aa346b2abd50dab3003d90c9d1a8"
 });
 const approvedEditableTableFiles = Object.freeze({
   "package.json": "4810df9f1d7d8f5f34cf21eaccb398c574f0b7e8b5f4ee5511a1e01a26eb9e4c",
@@ -54,24 +55,24 @@ const approvedEditableTableFiles = Object.freeze({
 // registration is approved; vendor browser assets are not an execution proof.
 const approvedOfficeViewerFiles = Object.freeze({
   "package.json": "fe62110bc5f59674973065afee279f34f7e0ff1cfc078718f8fad14a5973b155",
-  "index.ts": "c6d302ab289c6ce97967da40d97aac14f70b04aeb6a8be77c63bcde7e7d97565",
+  "index.ts": "c6d302ab289c6ce97967da40d97aac14f70b04aeb6a8be77c63bcde7e7d97565"
 });
 // Execution source only. Installed vendor assets remain trusted installation
 // content, not integrity-qualified source or a filesystem sandbox.
 const approvedDrawioFiles = Object.freeze({
   "package.json": "2942b1e169541326fd83c9bec29f3365c2f1efabfd13511667da503e7cde67d8",
   "index.ts": "ab1ffba287828ed37db87288c7f1feb47a12efb2c66aa983941643575bdf2790",
-  "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
+  "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b"
 });
 const approvedGoalFiles = Object.freeze({
-  "index.ts": "89ea7ace829da201950eb57fd19bfbab7bb58ba0950eb212bb5fd373256da03c",
+  "index.ts": "887fd5457c104940a4e1ce132a621a16ef3ab4026f187fb4a576cae6ca86ec62",
   "deadline-checkpoint.ts": "e94f7cb065f321b06de33bfd7963011f03714c73437eedab634bce69f199c1db",
   "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
-  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c"
 });
 const approvedObservabilityFiles = Object.freeze({
   "usage-telemetry.ts": "1714e4f6b24450315940d960e0d971ca2c66c27453b399427b677d1fb807b705",
-  "package.json": "bf6824c92bf70e6533f4cdb38dd37af06c7d17f0bcaf38d80e9c1610b4e4115e",
+  "package.json": "c890f655eab2b8a55306dbb1d2a3b7110d54c6697a14ea69c860966d59fe8b5c",
   "model-speed-telemetry.ts": "a6b46ba29c71f459880c560575851312779f84163427ace6d7b1abd9e53a4b81",
   "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
   "compat/log-sink.ts": "b7f04b776dc33ec8a2bbe4d803b2d7c2783b8d16b5fa4a1b54c85fb30d1ee19e",
@@ -79,7 +80,7 @@ const approvedObservabilityFiles = Object.freeze({
   "compat/logger.ts": "de0fddbd49d7b4d48e3b4ae8c0cf1ab188b4ba542f77c87d57ccb510318f85fa",
   "compat/keychain.ts": "db449b3c8fb9d0008d85b05c9f7717da0b728e0f9c033bac7b86f9e17eb93bb6",
   "compaction-telemetry.ts": "d6e51e6c04c38e97e04508c27f589089c55e3fd8c86e9ca9422a89ecd22c6697",
-  "index.ts": "4af1d9207efacf71bf597d590daccd34a75a22932e3be0eea44cc8b2607dcb0d"
+  "index.ts": "7ee12cf6aa95f1f9aae277ba4bf4085232718824a83ea139aab7ff20d41a642e"
 });
 const approvedResticFiles = Object.freeze({
   "binary.ts": "ff426c8c97d6e7873fce405d948db9e89138f16a948885cd6f97cce77ca9c082",
@@ -98,21 +99,21 @@ const approvedResticFiles = Object.freeze({
   "contracts.ts": "d73eea35af0c00b1dc36a98c352389804147447b5228c18cee807110fbddb27c"
 });
 const profiles = {
-  observability: { label: "Observability", name: "@rcarmo/piclaw-addon-observability", version: "0.1.18", files: approvedObservabilityFiles,
+  observability: { label: "Observability", name: "@rcarmo/piclaw-addon-observability", version: "0.1.19", files: approvedObservabilityFiles,
     shadows: [...Object.keys(approvedObservabilityFiles).filter(file => file.endsWith(".ts")).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), "compat/package.json"],
     events: ["resources_discover", "session_start", "before_agent_start"] },
   restic: { label: "Restic", name: "@rcarmo/piclaw-addon-restic", version: "0.1.5", files: approvedResticFiles,
     shadows: Object.keys(approvedResticFiles).filter(file => file.endsWith(".ts")).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), events: [] as readonly string[] },
-  goal: { label: "Goal", name: "@rcarmo/piclaw-addon-goal", version: "0.1.49", files: approvedGoalFiles,
+  goal: { label: "Goal", name: "@rcarmo/piclaw-addon-goal", version: "0.1.50", files: approvedGoalFiles,
     shadows: [...Object.keys(approvedGoalFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), "compat/package.json"],
     events: ["before_agent_start", "tool_execution_end", "session_compact", "input", "message_end", "agent_end"] },
   open_drawio_editor: { label: "Draw.io", name: "@rcarmo/piclaw-addon-drawio-editor", version: "31.4.4", files: approvedDrawioFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json"], events: [] as readonly string[] },
   open_office_viewer: { label: "Office Viewer", name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
   editable_table: { label: "Editable Table", name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
-  plan: { label: "Plan", name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
-  code_review: { label: "Code Review", name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
+  plan: { label: "Plan", name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
+  code_review: { label: "Code Review", name: "@rcarmo/piclaw-addon-code-review", version: "0.1.11", files: approvedCodeReviewFiles,
     shadows: [...Object.keys(approvedCodeReviewFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")])], events: ["resources_discover"] },
-  delegate: { label: "Delegate", name: "@rcarmo/piclaw-addon-delegate", version: "0.2.20", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
+  delegate: { label: "Delegate", name: "@rcarmo/piclaw-addon-delegate", version: "0.2.21", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
 } as const;
 type Profile = keyof typeof profiles;
 export const applicationAddonSourceProfiles = { ...profiles, ...installedAddonProfiles };
@@ -248,8 +249,8 @@ export async function qualifyInstalledPlan(catalog: LoadExtensionsResult, cwd: s
   const { source, assertCurrent } = qualified;
   const exports = await import(pathToFileURL(source.entry).href) as Partial<PlanPromptExports>;
   assertCurrent();
-  if (typeof exports.parsePlanMarkdown !== "function" || typeof exports.loadSessionPlan !== "function" || typeof exports.buildPlanSystemPrompt !== "function" || typeof exports.buildPlanTurnMessage !== "function") throw Error("Installed Plan prompt exports required");
-  const addon: PlanPromptExports = Object.freeze({ parsePlanMarkdown: exports.parsePlanMarkdown, loadSessionPlan: exports.loadSessionPlan, buildPlanSystemPrompt: exports.buildPlanSystemPrompt, buildPlanTurnMessage: exports.buildPlanTurnMessage });
+  if (typeof exports.parsePlanMarkdown !== "function" || typeof exports.loadSessionPlan !== "function" || typeof exports.buildPlanSystemPrompt !== "function" || typeof exports.buildPlanTurnMessage !== "function" || typeof exports.createPlanTool !== "function") throw Error("Installed Plan prompt exports required");
+  const addon: PlanPromptExports = Object.freeze({ createPlanTool: exports.createPlanTool, parsePlanMarkdown: exports.parsePlanMarkdown, loadSessionPlan: exports.loadSessionPlan, buildPlanSystemPrompt: exports.buildPlanSystemPrompt, buildPlanTurnMessage: exports.buildPlanTurnMessage });
   return Object.freeze({ ...qualified, addon });
 }
 
@@ -273,7 +274,7 @@ export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, 
   // direct add-on API. Legacy loader execute is never called by the native port.
   const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<CodeReviewNativeExports>;
   qualified.assertCurrent();
-  const names = ["createCodeReviewTool", "reviewService", "setReviewDatabaseSource", "closeReviewServices"] as const;
+  const names = ["createCodeReviewTool", "reviewService", "prepareReviewService", "setReviewDatabaseSource", "closeReviewServices"] as const;
   if (names.some(name => typeof exports[name] !== "function")) throw Error("Code Review public native exports required");
   const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]]))) as unknown as CodeReviewNativeExports;
   const native = addon.createCodeReviewTool({ async resolve() { throw Error("Invocation-local review scope required"); } });

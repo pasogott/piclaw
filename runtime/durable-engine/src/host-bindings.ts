@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from '../../src/db/sqlite-async-admission.js';
 // INACTIVE application-owned correlation store. No database opens or automatic migrations.
 import type { Database } from "bun:sqlite";
 import { listBudgetCaps } from "../../src/db/budget-limits.js";
@@ -157,7 +158,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
         .get(domain, incarnation, i.conversationId, i.requestId, i.chatJid, i.sourceSeq)) throw conflict();
       assertOwner(); return { binding: existing, content };
     }
-    const binding = db.transaction(() => {
+    const binding = await admitSqliteWrite(db, () => {
       assertOwner(); verifySource(i);
       if (db.query(`SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND ((conversation_id=? AND request_id=?) OR (chat_jid=? AND source_seq=?))`)
         .get(domain, incarnation, i.conversationId, i.requestId, i.chatJid, i.sourceSeq)) throw conflict();
@@ -168,7 +169,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       const bound = read(i);
       if (!bound) throw conflict();
       assertOwner(); return bound;
-    }).immediate();
+    }, assertOwner);
     return { binding, content };
   }
   return Object.freeze({
@@ -196,7 +197,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     async recordSubmission(input: AcceptedInput, submissionId: SubmissionId) {
       const i = capture(input);
       if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new TypeError("Invalid submission identity");
-      db.transaction(() => {
+      await admitSqliteWrite(db, () => {
         assertOwner(); verifySource(i);
         const prior = read(i);
         if (!prior || (prior.submissionId !== null && prior.submissionId !== submissionId)) throw conflict();
@@ -210,7 +211,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
           .run(submissionId, domain, incarnation, i.conversationId, i.requestId);
         if (read(i)?.submissionId !== submissionId) throw conflict();
         assertOwner();
-      }).immediate();
+      }, assertOwner);
     },
   });
   }

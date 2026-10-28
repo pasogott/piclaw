@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createNativeTurnView, type NativeTurnViewChannel } from "../../src/channels/web/agent/native-turn-view.js";
 import { createLogger } from "../../src/utils/logger.js";
@@ -315,7 +316,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const regretsAddon = regrets?.nativeExports["native.ts"] as any;
   const assertRegrets = () => { assert(); lifetime.signal.throwIfAborted(); regrets?.assertCurrent();
     if (readAccessConfig().mode !== "single-user") throw Error("Regrets requires single-user mode"); };
-  const configWrite = <T>(body: () => T): T => root.transaction(() => { assertRegrets(); const value = body(); assertRegrets(); return value; }).immediate();
+  const configWrite = <T>(body: () => T): Promise<T> => admitSqliteWrite(root, body, assertRegrets);
   const regretsPorts = (chat: string, assertCurrent = assertRegrets, transactionalWrite = configWrite, accountedDecision?: any) => createHostRegretsBindings({
     root, historyDatabase: root, cwd: WORKSPACE_DIR, chat, assertCurrent, transactionalWrite,
     accessMode: () => readAccessConfig().mode, allowAllChats: () => true,
@@ -339,7 +340,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let regretsDecision: ((captured: Awaited<ReturnType<HostConversationRuntime["captureToolSource"]>>, authority: ReturnType<typeof createHostOperationAuthority>) => any) | undefined;
   const regretsTool = regrets ? createHostRegretsTool(regretsAddon, { root, runtime: () => runtime(), assertOwner: assertRegrets,
     definition: regrets.extension!.tools.get("regrets_review")!.definition as Parameters<typeof createHostRegretsTool>[1]["definition"],
-    bind(captured, authority) { return regretsPorts(captured.operation.chatJid, authority.assertCurrent, authority.write, regretsDecision!(captured, authority)); },
+    bind(captured, authority) { return regretsPorts(captured.operation.chatJid, authority.assertCurrent, body => admitSqliteWrite(root, body, authority.assertCurrent), regretsDecision!(captured, authority)); },
   }) : undefined;
   const regretsPrompt = regrets ? createHostRegretsPromptExtension(regretsAddon, { async bindBeforeModelRequest(input) {
     assertRegrets();
@@ -483,7 +484,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       accountBindings.set(operation, { turnId, accountRef, provider: accountProvider });
       if (captured) outputBindings.set(operation, createHostCodexArtifactStore(root, operation, {
         hostOperationId: captured.operation.operationId, chatJid: captured.operation.chatJid, assertCurrent: current,
-        write(body) { return root.transaction(() => { current(); const value = body(); current(); return value; }).immediate(); },
+        write(body) { return admitSqliteWrite(root, body, current, signal); },
       }));
       return operation;
     },
@@ -675,7 +676,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let sandbox: CodemodeSandbox | undefined;
   let sandboxClose: Promise<void> | undefined;
   const closeSandbox = () => sandboxClose ??= sandbox?.close() ?? Promise.resolve();
-  const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
+  const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert,
+    admitWrite: body => admitSqliteWrite(root, body, () => { assert(); codeReview!.assertCurrent(); }) });
+  if (codeReview) await codeReview.addon.prepareReviewService();
   const assertObservability = () => { assert(); lifetime.signal.throwIfAborted(); observability?.assertCurrent(); };
   let releaseObservabilityConfiguration: (() => void) | undefined;
   let releaseAdminKv: (() => void) | undefined;
@@ -686,7 +689,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       ["goal", goal], ["observability", observability], ["plan-sidebar", plan],
       ["delegate", delegate], ["code-review", codeReview],
     ]);
-    releaseAdminKv = registerAddonConfigKvAuthority((extensionId, chatJid) => {
+    releaseAdminKv = registerAddonConfigKvAuthority((extensionId, chatJid, signal) => {
       const qualified = infrastructure.find(item => item.kind === extensionId) ?? resourceQualifications.find(item => item.kind === extensionId) ?? (regrets?.kind === extensionId ? regrets : undefined)
         ?? nativeConfigOwners.get(extensionId);
       if (!qualified) throw Error("Addon configuration namespace denied");
@@ -694,11 +697,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         if (readAccessConfig().mode !== "single-user") throw Error("Configuration requires single-user policy"); };
       assertCurrent();
       return { extensionId, chatJid, globalRead: extensionId !== "session-dashboard", globalWrite: extensionId !== "session-dashboard", assertCurrent,
-        write: body => root.transaction(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }).immediate() };
+        admitWrite: body => admitSqliteWrite(root, body, assertCurrent, signal),
+        write: body => {
+          assertCurrent(); if (!root.inTransaction) throw Error("Admitted configuration write transaction required");
+          const result = body(); assertCurrent(); return result;
+        } };
     });
   if (observability) releaseObservabilityConfiguration = observability.addon.bindObservabilityConfiguration({
     assertCurrent: assertObservability, read: readObservabilityConfiguration,
-    write(config) { root.transaction(() => { assertObservability(); extensionKvSet("observability", "config", config, "global"); assertObservability(); }).immediate(); },
+    write(config) { return admitSqliteWrite(root, () => extensionKvSet("observability", "config", config, "global"), assertObservability); },
   });
   mcp = await createHostMcp({ offlineMaintenance, assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
@@ -957,7 +964,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (goal) tools.push(...createHostGoalTools(goal.addon.createGoalTools, { root, runtime, assertOwner: assertGoal, resolveGoalInput: goal.addon.resolveGoalInput }));
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
-  }, runtime }));
+  }, runtime, createTool: plan.addon.createPlanTool }));
   if (codeReview) tools.push(createHostCodeReviewTool(codeReview.addon, { root, cwd: WORKSPACE_DIR, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); codeReview.assertCurrent(); } }));
   if (officeViewer) tools.push(createHostOfficeViewerTool(officeViewer.definition as Parameters<typeof createHostOfficeViewerTool>[0], { root, runtime, workspace: WORKSPACE_DIR,
@@ -1152,7 +1159,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const entry = await harness.commit(tx => tx.entry(entryId as import("@earendil-works/pi-durable").EntryId), context);
       assert();
       if (entry?.kind === "pi.compaction" && entry.conversationId === task.conversationId)
-        completeMaintenanceBudgetWork(root, work.id);
+        await completeMaintenanceBudgetWork(root, work.id);
     }
     if (toolUpgrades.length || instructionUpgrades.size) {
       // Same-file BEGIN IMMEDIATE fences host admissions for the whole public
@@ -1189,7 +1196,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (failed) throw primary;
   assert();
   installTerminalSettlementCompositionSchema(root);
-  assert(); reconcileOperationBudgetWork(root);
+  assert(); await reconcileOperationBudgetWork(root);
   const payloadDir = join(DATA_DIR, "durable-answers");
   const payloadPath = (ref: string) => join(payloadDir, createHash("sha256").update(ref).digest("hex"));
   const answers = { put(ref: string, text: string) {
@@ -1248,19 +1255,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         assertAdmission: input => processControls!.assertAdmission(input),
         assertInputAdmission(chat) { assertAdmission(); ensureLiveWatch(chat); },
         materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
-    onMaintenanceSettled(workId) { codexServices?.releaseTurn(workId); assert(); completeMaintenanceBudgetWork(root, workId); },
-    onOperationSettled(operationId, processExit) {
+    async onMaintenanceSettled(workId) { codexServices?.releaseTurn(workId); assert(); await completeMaintenanceBudgetWork(root, workId); },
+    async onOperationSettled(operationId, processExit) {
       codexServices?.releaseTurn(operationId);
       assert();
       if (processExit || processControls!.ownsOperation(operationId)) {
-        try { reconcileOperationBudgetWork(root, operationId); }
+        try { await reconcileOperationBudgetWork(root, operationId); assert(); }
         finally {
           publishTerminal(operationId);
         }
         processControls!.onOperationSettled(operationId, processExit);
         return; // No Goal or queue continuation after a committed exit receipt.
       }
-      try { reconcileOperationBudgetWork(root, operationId); }
+      try { await reconcileOperationBudgetWork(root, operationId); assert(); }
       finally {
         publishTerminal(operationId);
         const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
@@ -1318,13 +1325,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle: { sessionTargets: { list: () => bundle.sessionTargets.list().map(canonical), resolve: (target: any) => canonical(bundle.sessionTargets.resolve(target)) },
         admitApplicationInput: (input: any) => { assertAdmission(); return bundle.admitApplicationInput(input); },
         steerApplicationInput: (input: any) => { assertAdmission(); return bundle.steerApplicationInput(input); } },
-      scopedRoot: <T>(assertCurrent: () => void, body: () => T) => withExtensionKvAuthority({ extensionId: "remote-peer", chatJid: "", globalRead: true, globalWrite: true,
-        assertCurrent() { assertCurrent(); },
-        write<R>(body: () => R): R { return root.transaction(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }).immediate(); } }, () => {
+      scopedRoot: <T>(assertCurrent: () => void, body: () => T) => {
         assertCurrent(); const result = body();
         if (result instanceof Promise) return result.then(value => { assertCurrent(); return value; }) as T;
         assertCurrent(); return result;
-      }),
+      },
       registerChatTransport,
     });
     for (const action of ["config", "dashboard"] as const) {
@@ -1356,9 +1361,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     };
     registerAddonConfigApi("goal", "goal", {
       get(payload, request) { return config.get(chatFrom(payload, request)); },
-      set(payload, request) {
+      async set(payload, request) {
         const chat = chatFrom(payload, request);
-        const result = config.set(chat, payload && typeof payload === "object" ? payload as Record<string, unknown> : {});
+        const result = await config.set(chat, payload && typeof payload === "object" ? payload as Record<string, unknown> : {});
         wakeGoalFollowups(chat); return result;
       },
     }, goal.source.packageDir);
@@ -1380,10 +1385,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const identity=nativeBackgroundIdentity(payload.policy);checkInvocation();assertNativeBackgroundDeadline(payload.policy,Date.now());
     if(dreamOwners.has(payload.policy.sourceId))throw Error('Dream invocation already has a live owner');
     if(root.query('SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(identity.chatJid,identity.sourceId))throw Error('Dream invocation already accepted; replay is not authorised');
-    ensureBudgetWork({id:payload.policy.workId,chatJid:identity.chatJid,executionKind:'background',parentWorkId:parent},root);
+    await admitSqliteWrite(root,()=>{
+      if(dreamOwners.has(payload.policy.sourceId))throw Error('Dream invocation already has a live owner');
+      if(root.query('SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(identity.chatJid,identity.sourceId))throw Error('Dream invocation already accepted; replay is not authorised');
+      ensureBudgetWork({id:payload.policy.workId,chatJid:identity.chatJid,executionKind:'background',parentWorkId:parent},root);
+    },()=>{assertAdmission();checkInvocation();assertNativeBackgroundDeadline(payload.policy,Date.now());},lifetime.signal);
+    if(dreamOwners.has(payload.policy.sourceId))throw Error('Dream invocation already has a live owner');
     dreamOwners.set(payload.policy.sourceId,{payload,assertCurrent:checkInvocation});
     try{assertDreamCurrent(payload);return await bundle.dispatchDreamPayload(payload,new AbortController().signal);}
-    finally{dreamOwners.delete(payload.policy.sourceId);if(getBudgetWork(operationBudgetWorkId(identity.operationId),root)?.status==='completed')setBudgetWorkStatus(payload.policy.workId,'completed',{boundary:'dream_native_settled'},root);}
+    finally{dreamOwners.delete(payload.policy.sourceId);await admitSqliteWrite(root,()=>{if(getBudgetWork(operationBudgetWorkId(identity.operationId),root)?.status==='completed')setBudgetWorkStatus(payload.policy.workId,'completed',{boundary:'dream_native_settled'},root);});}
   };
   let closing: Promise<void> | undefined;
   const backend: RuntimeBackend = { storageFailure, sessionOptions: offlineMaintenance ? { getDurableSession(chat) {

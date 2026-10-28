@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../db/sqlite-async-admission.js";
 /**
  * messages-crud – unified message CRUD tool for internal agent operations.
  */
@@ -1270,11 +1271,7 @@ function executeAdd(params: MessagesParams, defaultChat: string): AgentToolResul
   };
 }
 
-function executePost(
-  params: MessagesParams,
-  defaultChat: string,
-  postFn?: (chatJid: string, content: string, isBot: boolean, mediaIds: number[], contentBlocks?: unknown[]) => number | null,
-): AgentToolResult<Record<string, unknown>> {
+function preparePost(params: MessagesParams, defaultChat: string): AgentToolResult<Record<string, unknown>> | { isBot: boolean; content: string; chatJid: string; mediaIds: number[]; contentBlocks: unknown[] | undefined } {
   const isBot = params.type === "agent";
   const rawContent = params.content?.trim() ?? "";
   const content = sanitizeMessageToolContent(params.content, isBot);
@@ -1295,6 +1292,18 @@ function executePost(
 
   const mediaIds = Array.from(new Set((params.media_ids ?? []).filter((id) => Number.isInteger(id) && id > 0)));
   const contentBlocks = sanitizeModelPostedContentBlocks(params.content_blocks);
+
+  return { isBot, content, chatJid, mediaIds, contentBlocks };
+}
+
+function executePost(
+  params: MessagesParams,
+  defaultChat: string,
+  postFn?: (chatJid: string, content: string, isBot: boolean, mediaIds: number[], contentBlocks?: unknown[]) => number | null,
+): AgentToolResult<Record<string, unknown>> {
+  const prepared = preparePost(params, defaultChat);
+  if (!("chatJid" in prepared)) return prepared;
+  const { isBot, content, chatJid, mediaIds, contentBlocks } = prepared;
 
   if (postFn) {
     const rowId = postFn(chatJid, content, isBot, mediaIds, contentBlocks);
@@ -1433,8 +1442,7 @@ function moveMessageRowsToChat(rowIds: number[], targetChatJid: string): {
   const movedTimestamps = rows.map((row) => row.timestamp).filter(Boolean).sort();
   const latestTargetTimestamp = movedTimestamps[movedTimestamps.length - 1] || new Date().toISOString();
 
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     storeChatMetadata(targetChatJid, latestTargetTimestamp, getChatDisplayName(targetChatJid));
 
     const updateStmt = db.prepare("UPDATE messages SET chat_jid = ?, id = ?, thread_id = ? WHERE rowid = ?");
@@ -1453,11 +1461,7 @@ function moveMessageRowsToChat(rowIds: number[], targetChatJid: string): {
       refreshChatLastMessageTime(sourceChatJid);
     }
 
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
 
   return {
     movedRowIds: rows.map((row) => row.rowid),
@@ -1765,15 +1769,38 @@ export type MessagePostFn = (
 
 /** Optional post function injected by the web channel for broadcast support. */
 let registeredPostFn: MessagePostFn | undefined;
+type MessagePostAdmissionFn = (chatJid: string, content: string, isBot: boolean, mediaIds: number[], contentBlocks: unknown[] | undefined,
+  authorise: () => void, signal?: AbortSignal) => Promise<number | null>;
+let registeredPostAdmission: MessagePostAdmissionFn | undefined;
 
 /** Set the post function for the messages tool. Called by web channel wiring. */
-export function setMessagesPostFn(fn: MessagePostFn | undefined): void {
-  registeredPostFn = fn;
+export function setMessagesPostFn(fn: MessagePostFn | undefined, admission?: MessagePostAdmissionFn): void {
+  registeredPostFn = fn; registeredPostAdmission = admission;
 }
 
 /** Shared execution entry retains the current synchronous post/broadcast port. */
 export function runRegisteredMessagesTool(params:MessagesParams,defaultChat:string){
   return runMessagesTool(params,defaultChat,registeredPostFn);
+}
+
+/** Async tool boundary: reserve the writer only for mutations; publish posts after commit. */
+export async function admitRegisteredMessagesTool(params: MessagesParams, defaultChat: string, authorise: () => void, signal?: AbortSignal): Promise<AgentToolResult<Record<string, unknown>>> {
+  const captured = structuredClone(params), action = captured.action || "search", post = registeredPostAdmission;
+  authorise(); signal?.throwIfAborted();
+  if (action === "post" && readAccessConfig().mode !== "single-user") return deniedMessages();
+  if (action === "post" && post) {
+    const prepared = preparePost(captured, defaultChat);
+    if (!("chatJid" in prepared)) return prepared;
+    const {chatJid,content,isBot,mediaIds,contentBlocks} = prepared;
+    const rowId = await post(chatJid,content,isBot,mediaIds,contentBlocks,authorise,signal);
+    if (!rowId) return {content:[{type:"text" as const,text:"Failed to post message."}],details:{action:"post",posted:0}};
+    return {content:[{type:"text" as const,text:`Posted message ${rowId} to ${chatJid} (broadcast).`}],details:{action:"post",posted:1,row_id:rowId,chat_jid:chatJid,broadcast:true}};
+  }
+  if (action === "post" && registeredPostFn) throw Error("Asynchronous message post admission unavailable");
+  const run = () => { authorise(); const result = runMessagesTool(captured,defaultChat); authorise(); return result; };
+  if (!["add","post","delete","move"].includes(action) || (captured.dry_run === true && ["delete","move"].includes(action))) return run();
+  const database = getDb();
+  return admitSqliteWrite(database,run,authorise,signal,undefined,()=>{if(getDb()!==database)throw Error("Messages database changed");});
 }
 
 export const messagesCrud: ExtensionFactory = (pi: ExtensionAPI) => {
@@ -1789,7 +1816,7 @@ export const messagesCrud: ExtensionFactory = (pi: ExtensionAPI) => {
     parameters: MessagesSchema,
     async execute(_toolCallId, params) {
       const defaultChat = getChatJid("web:default");
-      return runRegisteredMessagesTool(params, defaultChat);
+      return admitRegisteredMessagesTool(params, defaultChat, () => {});
     },
   });
 };

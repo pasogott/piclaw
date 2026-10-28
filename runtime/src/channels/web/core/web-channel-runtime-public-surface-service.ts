@@ -46,7 +46,7 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
 
 type WebChannelRuntimePublicSurfaceStorage = Pick<
   WebMessageProcessingStorageService,
-  "processChat" | "storeMessage" | "admitUserMessage"
+  "processChat" | "storeMessage" | "admitUserMessage" | "admitMessage"
 >;
 
 type WebChannelRuntimePublicSurfaceBroadcast = Pick<
@@ -533,6 +533,10 @@ export class WebChannelRuntimePublicSurfaceService {
 
   async processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void> {
     return this.channel.messageProcessingStorageService.processChat(chatJid, agentId, threadRootId);
+  }
+
+  admitMessage(...args: Parameters<WebMessageProcessingStorageService["admitMessage"]>): Promise<InteractionRow | null> {
+    return this.channel.messageProcessingStorageService.admitMessage(...args);
   }
 
   admitUserMessage(...args: Parameters<WebMessageProcessingStorageService['admitUserMessage']>): Promise<InteractionRow | null> {

@@ -500,7 +500,7 @@ describe("queued follow-up lifecycle service", () => {
       await service.admitQueuedFollowupItem(['web:default',0,'first'],()=>{},signal,()=>{});
       await service.admitQueuedFollowupItem(['web:default',0,'second'],()=>{},signal,()=>{});
       const before = service.getQueuedFollowupItems('web:default');
-      expect(service.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
+      expect(await service.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
       expect(service.getQueuedFollowupItems('web:default')).toEqual([before[1],before[0]]);
       expect(service.getPendingQueuedSourceOrder('web:default')).toEqual([before[1]!.source_id!,before[0]!.source_id!]);
       expect(service.consumeQueuedFollowupItem('web:default')).toEqual(before[1]);
@@ -509,8 +509,8 @@ describe("queued follow-up lifecycle service", () => {
       const reopened = new QueuedFollowupLifecycleService();
       expect(reopened.getPendingQueuedSourceOrder('web:default')).toEqual([before[1]!.source_id!,before[0]!.source_id!]);
       expect(reopened.getQueuedFollowupItems('web:default')).toEqual([before[0]]);
-      expect(reopened.reorderQueuedFollowupItems('web:default',0,0)).toBe(false);
-      expect(reopened.reorderQueuedFollowupItems('web:default',-1,0)).toBe(false);
+      expect(await reopened.reorderQueuedFollowupItems('web:default',0,0)).toBe(false);
+      expect(await reopened.reorderQueuedFollowupItems('web:default',-1,0)).toBe(false);
     } finally { db.closeDatabase(); }
   });
 
@@ -523,7 +523,7 @@ describe("queued follow-up lifecycle service", () => {
     });
     service.enqueueQueuedFollowupItem("web:default", 0, "ordinary", 10, "2024-01-01T00:00:01.000Z");
 
-    expect(service.reorderQueuedFollowupItems("web:default", 1, 0)).toBe(false);
+    expect(await service.reorderQueuedFollowupItems("web:default", 1, 0)).toBe(false);
     expect(service.getQueuedFollowupItems("web:default").map((item) => item.queuedContent)).toEqual([
       "protected",
       "ordinary",

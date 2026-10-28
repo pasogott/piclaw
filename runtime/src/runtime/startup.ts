@@ -564,6 +564,11 @@ export async function startWebChannel(
     if (!interaction) return null;
     web.broadcastEvent(isBot ? "agent_response" : "new_post", interaction);
     return interaction.id;
+  }, async (chatJid, content, isBot, mediaIds, contentBlocks, authorise, signal) => {
+    const interaction = await web.admitMessage(chatJid,content,isBot,mediaIds,contentBlocks,authorise,signal);
+    if (!interaction) return null;
+    web.broadcastEvent(isBot ? "agent_response" : "new_post", interaction);
+    return interaction.id;
   });
 
   // Wire the cross-session chat tool directly to the target chat message route.

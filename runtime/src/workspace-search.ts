@@ -15,6 +15,7 @@ import { workspaceIndexPolicySnapshot, workspaceIndexPathDecision, workspaceInde
 import {
   getWorkspaceIndexStatus,
   markWorkspaceIndexCoreStale,
+  type WorkspaceIndexStaleAdmission,
   normalizeWorkspaceSearchScope,
   refreshWorkspaceIndex,
   type WorkspaceIndexBackgroundRefreshParams,
@@ -91,10 +92,10 @@ export function setBackgroundWorkspaceIndexRefreshRequesterForTests(
   requestBackgroundWorkspaceIndexRefreshImpl = requester ?? defaultBackgroundRefresh;
 }
 
-export function markWorkspaceIndexStale(params?: { scope?: WorkspaceSearchScope | string; paths?: string[] }): void {
-  for (const scope of markWorkspaceIndexCoreStale(params)) {
-    requestBackgroundWorkspaceIndexRefresh({ scope });
-  }
+export function markWorkspaceIndexStale(params?: { scope?: WorkspaceSearchScope | string; paths?: string[] }, admission?: WorkspaceIndexStaleAdmission): Promise<void> {
+  return markWorkspaceIndexCoreStale(params, admission).then(scopes => {
+    for (const scope of scopes) requestBackgroundWorkspaceIndexRefresh({ scope });
+  });
 }
 
 /** Full-text search across indexed workspace files. */

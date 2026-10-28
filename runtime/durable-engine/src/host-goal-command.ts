@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { compactGoalInput } from "./host-goal-input.js";
 import type Database from "bun:sqlite";
 import type { AgentControlResult } from "../../src/agent-control/index.js";
@@ -21,9 +22,11 @@ export function createHostGoalCommand(addon: {
     if (!match) return { status: "error", message: "Native slash command unavailable" };
     const authority = { extensionId: "goal", chatJid, assertCurrent() { options.assertAdmission(chatJid); },
       write<T>(body: () => T): T {
-        return options.root.transaction(() => { this.assertCurrent(); const value = body(); this.assertCurrent(); return value; }).immediate();
+        this.assertCurrent();
+        if (!options.root.inTransaction) throw Error("Admitted Goal write transaction required");
+        const value = body(); this.assertCurrent(); return value;
       } };
-    return authority.write(() => withExtensionKvAuthority(authority, () => {
+    return admitSqliteWrite(options.root, () => withExtensionKvAuthority(authority, () => {
       const result = addon.applyGoalCommand(chatJid, match[1] ?? "");
       if (result.continuation) {
         if (!result.goal) throw Error("Goal command continuation identity required");
@@ -35,6 +38,6 @@ export function createHostGoalCommand(addon: {
       }
       authority.assertCurrent();
       return { status: "success", message: result.text + (result.continuation ? " — continuation queued" : "") };
-    }));
+    }), authority.assertCurrent);
   };
 }

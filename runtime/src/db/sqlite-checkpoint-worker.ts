@@ -1,3 +1,4 @@
+import { isSqliteContention } from './sqlite-async-admission.js';
 import { Database } from "bun:sqlite";
 import { realpathSync, statSync } from "node:fs";
 
@@ -33,7 +34,7 @@ self.addEventListener("message", event => {
           assertFile();
           return;
         }
-        if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+        if (isSqliteContention(error)) {
           self.postMessage({ type: "checkpoint", result: { busy: 1, log: -1, checkpointed: -1 }, error: code });
           return;
         }

@@ -2289,6 +2289,9 @@ test("processChat can materialize a deferred queued follow-up when resumed idle"
 
   expect(runCount).toBe(1);
   expect(web.getQueuedFollowupCount("web:default")).toBe(0);
+  // Idle resume schedules its own queue task; join the persisted outcome,
+  // rather than relying on how many synchronous verifier microtasks ran.
+  await waitFor(() => db.getTimeline("web:default", 10).some((item: any) => item.data.content === "reply after materialize"));
   const timeline = db.getTimeline("web:default", 10);
   const contents = timeline.map((item: any) => item.data.content);
   expect(contents).toContain("queued idle item");
@@ -3308,6 +3311,25 @@ test("web channel commits TOTP setup only after successful same-card confirmatio
     body: JSON.stringify({ code: totpCode(fixture.parsed.state.secret) }),
   }));
   expect(verifyRes.status).toBe(200);
+});
+
+test("concurrent TOTP confirmations commit one card and issue one surviving login", async () => {
+  const fixture = await createStoredTotpCardFixture({ command: { type: "totp", action: "enrol" } });
+  expect(fixture.parsed.ok).toBe(true);
+  if (!fixture.parsed.ok) return;
+  const secret = fixture.parsed.state.secret;
+  const request = () => new Request("http://test/agent/card-action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ post_id: fixture.sourceRowId, thread_id: fixture.sourceRowId, card_id: fixture.cardId,
+      action: { type: "Action.Submit", title: "Confirm setup", data: { intent: "totp-confirm", __totp_token: fixture.token, confirmation_code: totpCode(secret) } } }),
+  });
+  const outcomes = await Promise.allSettled([fixture.web.handleRequest(request()), fixture.web.handleRequest(request())]);
+  const accepted = outcomes.filter((entry): entry is PromiseFulfilledResult<Response> => entry.status === "fulfilled" && entry.value.status === 200);
+  expect(accepted).toHaveLength(1);
+  expect(accepted[0]!.value.headers.get("Set-Cookie")).toContain("piclaw_session=");
+  expect(fixture.db.getDb().query("SELECT count(*) n FROM web_sessions WHERE auth_method='totp'").get()).toEqual({ n: 1 });
+  expect(fixture.config.WEB_RUNTIME_CONFIG.totpSecret).toBe(secret);
+  expect((fixture.db.getMessageByRowId("web:default", fixture.sourceRowId)?.data.content_blocks?.[0] as any)?.state).toBe("completed");
 });
 
 test("web channel invalidates existing sessions when TOTP setup is first confirmed", async () => {

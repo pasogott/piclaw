@@ -1,3 +1,4 @@
+import { admitSqliteWrite, isSqliteContention as isBusy } from '../../db/sqlite-async-admission.js';
 import { Result, type Result as ResultValue } from "../contracts/result.js";
 import type Database from "bun:sqlite";
 import { computeClosedSourceFrontier } from "./source-frontier.js";
@@ -343,10 +344,9 @@ class CurrentPiclawTerminalSettlementStore
       );
     }
 
-    this.checkpointOccurrence = 0;
     try {
-      const outcome = this.database
-        .transaction(() => {
+      const outcome = await admitSqliteWrite(this.database, () => {
+          this.checkpointOccurrence = 0;
           const reconciled = this.reconcile(request);
           if (reconciled) {
             if (reconciled.kind === "replay") return reconciled.commit;
@@ -368,8 +368,7 @@ class CurrentPiclawTerminalSettlementStore
           }
           this.validateOwnership();
           return commit;
-        })
-        .immediate();
+        });
 
       if (lostAcknowledgement(this.runtime)) {
         return this.failure(
@@ -1606,12 +1605,6 @@ function lostAcknowledgement(runtime: TerminalSettlementAdapterRuntime): boolean
 // must report exactly one direct row; trigger work is validated independently.
 function changedExactlyOne(changes: number): boolean {
   return Number.isSafeInteger(changes) && changes === 1;
-}
-
-function isBusy(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = (error as { code?: unknown }).code;
-  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
 }
 
 function nullableDiagnostic(input: unknown): string | null {

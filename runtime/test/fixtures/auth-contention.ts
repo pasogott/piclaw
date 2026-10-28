@@ -59,7 +59,7 @@ if(mode==="writer") {
     const tick=new Promise<void>(resolve=>setTimeout(()=>{timerMs=performance.now()-start;resolve();},0));
     if(writer)writeFileSync(go,"go");
     let allowed:boolean|null=null,errorCode:string|null=null;
-    try { if(mode==="maintenance")pruneExpiredAuthState(db);else allowed=gateway.isAuthenticated(request()); }
+    try { if(mode==="maintenance")pruneExpiredAuthState(db);else {const req=request();await gateway.preparePrincipal(req);allowed=gateway.isAuthenticated(req);} }
     catch(error){errorCode=(error as {code?:string}).code??"non-sqlite-error";}
     const workMs=performance.now()-start,cpuUsed=process.cpuUsage(cpu),writerReleasedAtReturn=existsSync(released);
     db.prepare=originals.prepare;db.query=originals.query;db.run=originals.run;await tick;await Bun.sleep(5);loop.disable();
@@ -73,7 +73,7 @@ if(mode==="writer") {
     if(holdMs&&!writePath)assert.equal(writerReleasedAtReturn,false,"WAL read should finish before held writer commits");
     // Once the writer ends the same branch returns its correct auth decision.
     if(mode==="maintenance")pruneExpiredAuthState(db);
-    else assert.equal(gateway.isAuthenticated(request()),["modern","legacy-token","legacy-id"].includes(mode));
+    else {const req=request();await gateway.preparePrincipal(req);assert.equal(gateway.isAuthenticated(req),["modern","legacy-token","legacy-id"].includes(mode));}
     if(mode==="modern")assert.equal((db.query("SELECT session_id FROM web_sessions").get() as any).session_id,login.session_id);
     if(invalid&&!expectBaseline){
       assert.equal((db.query("SELECT count(*) AS n FROM web_sessions").get() as {n:number}).n,1,"read-only denial must not delete or migrate");
@@ -81,6 +81,6 @@ if(mode==="writer") {
       pruneExpiredAuthState(db);assert.equal((db.query("SELECT count(*) AS n FROM web_sessions").get() as {n:number}).n,0);
     }
     assert.deepEqual(db.query("PRAGMA quick_check").get(),{quick_check:"ok"});assert.equal(network,0);
-    console.log(JSON.stringify({mode,holdMs,instrument,expectBaseline,settings,workMs,timerMs,cpu:cpuUsed,eventLoop:{resolutionMs:1,samples:loop.count,maxMs:loop.max/1e6},allowed,errorCode,writerReleasedAtReturn,writer:writerReceipt,metrics:instrument?metrics:null,network,afterReleaseCorrect:true,scope:"Actual gateway.isAuthenticated or maintenance function, synthetic state; no HTTP socket; writer locks unrelated user update. Timer delay spans synchronous work; CPU profiles include startup."}));
+    console.log(JSON.stringify({mode,holdMs,instrument,expectBaseline,settings,workMs,timerMs,cpu:cpuUsed,eventLoop:{resolutionMs:1,samples:loop.count,maxMs:loop.max/1e6},allowed,errorCode,writerReleasedAtReturn,writer:writerReceipt,metrics:instrument?metrics:null,network,afterReleaseCorrect:true,scope:"Actual initial gateway.preparePrincipal plus read-only isAuthenticated, or maintenance function, synthetic state; no HTTP socket; writer locks unrelated user update. Timer delay spans synchronous work; CPU profiles include startup."}));
   }finally{if(writer&&writer.exitCode===null){writer.kill("SIGKILL");await writer.exited;}globalThis.fetch=fetchOriginal;closeDatabase();}
 }

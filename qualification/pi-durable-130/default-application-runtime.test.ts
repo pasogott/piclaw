@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../runtime/src/db/sqlite-async-admission.js";
 import { resolveRequestPrincipal } from "../../runtime/src/channels/web/auth/principal.js";
 import "./src/test-guard.js";
 import { hydrateMcpKeychainCredentials } from "../../runtime/src/secure/mcp-keychain.js";
@@ -48,7 +49,7 @@ import { qualifyNativeRecoveryUnitFixture } from "./native-recovery-unit-fixture
 import { installOfficeViewerFixture } from "./office-viewer-fixture.ts";
 import { installEditableTableFixture } from "./editable-table-fixture.ts";
 import { installDrawioFixture } from "./drawio-fixture.ts";
-import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
+import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, bindAddonLocalMessage, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
 import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
@@ -381,16 +382,16 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-plan-sidebar");
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const [file, hash] of Object.entries({
-      "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+      "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
       "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-      "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+      "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c",
     })) {
       const path = join(source, "addons/plan-sidebar", file);
       expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
       copyFileSync(path, join(pkg, file));
     }
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: planInitiallyEmpty ? "" : "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
     toolSequence = planClear ? [{ name: "plan", arguments: { action: "write", markdown: "" } }] : codemodePlan ? [{ name: "codemode", arguments: { code: codemodePlanCancelled
       ? 'try { await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");'
@@ -430,8 +431,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const [file, hash] of Object.entries({
       "index.ts": "73563d26795cbab5cd92e8d5f8dabe3d7477fa11dff35e0ed8b21d9ec3f5ab51",
-      "delegate.ts": "5466936c43f79c4159d75179c9f6a3f1d8d3439000e388902b321d8e7de9c923",
-      "compat/extension-kv.ts": "20408155132b8b86975100f0df7fe03a57ad74d2e4bb8d30f13e2a893441d651",
+      "delegate.ts": "b0e3fd1d2edcd95cecedff84ac3204fba8bfdadaa70854e6009713e44ba8a402",
+      "compat/extension-kv.ts": "3e86c21a9bf94d43151311fe29a3de1778d7a0a2ae32b81bb634e9fd1b2de4ab",
     })) {
       const path = join(source, "addons/delegate", file);
       expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
@@ -439,7 +440,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     }
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
     const manifest = JSON.parse(readFileSync(join(source, "addons/delegate/package.json"), "utf8"));
-    expect(manifest.name).toBe("@rcarmo/piclaw-addon-delegate"); expect(manifest.version).toBe("0.2.20");
+    expect(manifest.name).toBe("@rcarmo/piclaw-addon-delegate"); expect(manifest.version).toBe("0.2.21");
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     model.id = "gpt-6.1-sol";
     extensionKvSet("delegate", "config", { searchable_providers: scenario !== "native-delegate-denied" ? [model.provider] : [],
@@ -2157,8 +2158,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
         const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
         const marked = { ...message, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
-        expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(submitted.dispatchId);
-        row = root.transaction(() => { const id = storeMessage(marked); const admit = bound.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
+        row = await admitSqliteWrite(root, () => { const id = storeMessage(marked); bindAddonLocalMessage(target.chatId, marked, root); const admit = bound.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; });
+        expect((await verifyAddonLocalMessage(target.chatId, marked))?.reference?.intentId).toBe(submitted.dispatchId);
       });
       return { status: "accepted", rowId: row };
     } });
@@ -2307,8 +2308,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
           const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
           const marked = { ...freshMessage, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
-          expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(freshDispatch.dispatchId);
-          freshRow = root.transaction(() => { const id = storeMessage(marked); const admit = reopened.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
+          freshRow = await admitSqliteWrite(root, () => { const id = storeMessage(marked); bindAddonLocalMessage(target.chatId, marked, root); const admit = reopened.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; });
+          expect((await verifyAddonLocalMessage(target.chatId, marked))?.reference?.intentId).toBe(freshDispatch.dispatchId);
         });
         return { status: "accepted", rowId: freshRow };
       } });

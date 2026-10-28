@@ -29,10 +29,9 @@ async function child(fixture: string, args: string[], offline: boolean) {
   }
 }
 
-test('scheduler uses actual AgentPool and restores the real SDK branch without outbound authority', async () => {
+test('retired AgentPool and unadmitted schedules cannot revive public-session execution', async () => {
   const result = await child('pi103-scheduler-agent.ts', [], true);
-  expect(result).toMatchObject({ providerCalls: 2, deliveries: 1, realAgentPool: true, realSessionConstruction: true, realLeafRestored: true, scheduledBranchPersisted: true, scheduledBranchExcludedFromActiveContext: true, durableSourceSettled: true, recurrenceVerified: true, networkAttempts: 0, childProcessAttempts: 0 });
-  expect(result.entriesAfter).toBeGreaterThan(result.entriesBefore);
+  expect(result).toMatchObject({retiredRunnerDenied:true,unadmittedScheduleDenied:true,providerCalls:0,networkAttempts:0,childProcessAttempts:0});
 }, 25000);
 
 for (const shape of ['linear', 'branched', 'tools']) test(`public history soak checks ${shape} context and held controls without forced GC`, async () => {

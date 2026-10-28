@@ -23,7 +23,7 @@ export function createHostProxmoxTool(addon: ProxmoxNativeExports, options: {
       const params = structuredClone(args) as Record<string, unknown>;
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
       const readonly = ["get", "discover", "contract", "capabilities", "recommend", "workflow_help", "request_help"].includes(String(params.action));
-      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, readonly);
+      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, readonly, call.signal);
       authority.assertCurrent();
       const chatJid = captured.operation.chatJid;
       if (params.chat_jid && params.chat_jid !== chatJid) throw Error("Foreign chat profile denied");

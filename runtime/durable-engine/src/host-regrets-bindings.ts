@@ -20,8 +20,8 @@ export interface HostRegretsBindingOptions<E> {
   cwd: string;
   chat: string;
   assertCurrent(): void;
-  /** Required synchronous Root transaction; checks and mutation must roll back together. */
-  transactionalWrite<T>(body: () => T): T;
+  /** Awaited Root write admission; checks and SQL mutation roll back together. */
+  transactionalWrite<T>(body: () => T): T | Promise<T>;
   accessMode(): string;
   allowAllChats(): boolean;
   readExchanges(db: Database, window: Window): { exchanges: E[]; excluded: Record<string, number> };
@@ -41,8 +41,9 @@ export function createHostRegretsBindings<E>(options: HostRegretsBindingOptions<
         const row = options.root.query("SELECT value FROM extension_kv WHERE extension_id='late-night-regrets' AND scope='global' AND scope_key='' AND key='config'").get() as { value: string } | null;
         check(); return row ? JSON.parse(row.value) : {};
       },
-      set(value: Config) {
-        options.transactionalWrite(() => {
+      async set(value: Config) {
+        value = structuredClone(value);
+        await options.transactionalWrite(() => {
         check();
         options.root.query(`INSERT INTO extension_kv(extension_id,scope,scope_key,key,value) VALUES('late-night-regrets','global','','config',?)
           ON CONFLICT(extension_id,scope,scope_key,key) DO UPDATE SET value=excluded.value,updated_at=datetime('now')`).run(JSON.stringify(value));

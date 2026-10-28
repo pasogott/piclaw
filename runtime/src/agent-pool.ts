@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "./db/sqlite-async-admission.js";
 /**
  * Host facade for admitted native dispatch, models/auth, metadata and resources.
  * SDK tasks/submissions and host accepted-source/terminal records own execution.
@@ -635,9 +636,11 @@ export class AgentPool {
   ): Promise<ChatBranchRecord> {
     if (this.durableApplication) {
       if (readAccessConfig().mode !== "single-user") throw Error("Native restore requires single-user policy");
-      return getDb().transaction(() => {
+      const database = getDb();
+      const agentName = options.agentName;
+      return admitSqliteWrite(database, () => {
         const restored = restoreChatBranchIdentity({ chat_jid: chatJid,
-          ...(options.agentName !== undefined ? { agent_name: options.agentName } : {}) });
+          ...(agentName !== undefined ? { agent_name: agentName } : {}) });
         const position = this.durableSessionLookup?.(restored.chat_jid);
         if (!position || position.branchId !== restored.branch_id) throw Error("Exact native restore binding unavailable");
         if (position.assertCurrent !== undefined && typeof position.assertCurrent !== "function") {
@@ -645,7 +648,7 @@ export class AgentPool {
         }
         position.assertCurrent?.();
         return restored;
-      }).immediate();
+      }, () => { if (readAccessConfig().mode !== "single-user" || getDb() !== database) throw Error("Native restore authority changed"); });
     }
     return this.branchManager.restoreChatBranch(chatJid, options);
   }

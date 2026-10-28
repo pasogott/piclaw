@@ -19,6 +19,8 @@
  *   - The AgentQueue (queue.ts) serialises task execution with user messages per chat lane while allowing unrelated chats to progress in parallel.
  */
 
+import { statSync } from "node:fs";
+import { admitSqliteWrite } from "./db/sqlite-async-admission.js";
 import { randomUUID,createHash } from "node:crypto";
 import { withBudgetWorkContext } from './budget/context.js';
 import { ensureBudgetWork,getBudgetWork,setBudgetWorkStatus } from './db/budget-limits.js';
@@ -386,7 +388,8 @@ async function executeScheduledTask(
             allowed=false;throw Error('Scheduled Dream occurrence authority changed');
           }
         }};
-        nativeAuthority.assertCurrent();ensureBudgetWork({id:budgetWorkId,chatJid:task.chat_jid,executionKind:'scheduled',scheduledTaskId:task.id});
+        const authority = nativeAuthority;
+        await scheduledSourceWrite(db, () => { authority.assertCurrent(); ensureBudgetWork({id:budgetWorkId,chatJid:task.chat_jid,executionKind:'scheduled',scheduledTaskId:task.id}); }, () => { authority.assertCurrent(); return true; });
       }
       // Native Dream owns its exact private model; never switch the public chat.
       const savedModel = !nativeDream&&task.model ? await deps.agentPool.getCurrentModelLabel(task.chat_jid) : null;
@@ -496,20 +499,27 @@ async function executeScheduledTask(
   const effectiveResult = loggedResult ?? result;
   const effectiveError = loggedError ?? error;
   const durationMs = Date.now() - start;
-  const taskRunLogId = options.deferHistory ? null : logTaskRun({
-    task_id: task.id,
-    run_at: new Date().toISOString(),
-    duration_ms: durationMs,
-    status: error ? "error" : "success",
-    result: effectiveResult,
-    error: effectiveError,
-  });
+  let taskRunLogId: ReturnType<typeof logTaskRun> | null = null;
+  if (!options.deferHistory || options.advanceTask !== false) {
+    taskRunLogId = await scheduledSourceWrite(getDb(), () => {
+      const taskRunLogId = options.deferHistory ? null : logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: durationMs,
+        status: error ? "error" : "success",
+        result: effectiveResult,
+        error: effectiveError,
+      });
 
-  if (options.advanceTask !== false) {
-    const nextRun = computeNextRun(task.schedule_type, task.schedule_value, {
-      currentDate: task.next_run,
-    });
-    updateTaskAfterRun(task.id, nextRun, error ? `Error: ${effectiveError || error}` : ((effectiveResult || result)?.slice(0, 200) || "Completed"), task.revision);
+      if (options.advanceTask !== false) {
+        const nextRun = computeNextRun(task.schedule_type, task.schedule_value, {
+          currentDate: task.next_run,
+        });
+        updateTaskAfterRun(task.id, nextRun, error ? `Error: ${effectiveError || error}` : ((effectiveResult || result)?.slice(0, 200) || "Completed"), task.revision);
+      }
+
+      return taskRunLogId;
+    }, mayContinue);
   }
 
   if (budgetBlocked && !options.deferHistory) await drainScheduledBudgetNotifications(deps);
@@ -598,6 +608,18 @@ function productionScheduledRunStore(): { store: ScheduledRunStore & Interrupted
   }
 }
 
+/** Recheck the captured scheduler/database before and after the SQL-only body. */
+async function scheduledSourceWrite<T>(database: Database, operation: () => T, mayWrite: () => boolean = canRunLegacyScheduledWork): Promise<T> {
+  const binding = getDatabaseBinding();
+  return admitSqliteWrite(database, operation, () => {
+    if (getDb() !== database || !mayWrite()) throw Error("Scheduled source write revoked");
+    if (binding) {
+      const current = statSync(binding.path);
+      if (`${current.dev}:${current.ino}` !== binding.identity) throw Error("Scheduled source database file changed");
+    }
+  });
+}
+
 /** Repair only exact canonical completion receipts; never reclaim/execute work
  * or fabricate a lease. Native-owned/cancelled operations keep their own owner. */
 async function reconcileCompletedScheduledAgentSources(store: ScheduledRunStore, mayPoll: () => boolean): Promise<void> {
@@ -619,18 +641,18 @@ async function reconcileCompletedScheduledAgentSources(store: ScheduledRunStore,
       || (observed.value.status !== "success" && observed.value.status !== "error")
       || observed.value.operationId !== row.operation_id || observed.value.acceptedSourceSeq !== row.primary_source_seq) continue;
     const record = observed.value;
-    db.transaction(() => {
+    await scheduledSourceWrite(db, () => {
       if (!db.query(`SELECT 1 ${proof} AND o.operation_id=? AND o.version=? AND r.run_id=? AND r.result_status=? AND r.settled_at=?`)
         .get(row.operation_id, row.version, row.run_id, record.status, record.settledAt)) return;
       settleScheduledAgentSource(row.chat_jid, { operationId: row.operation_id, sourceSeq: row.primary_source_seq },
         record.status!, record.settledAt!, record.errorCode ?? "scheduled_task_failed");
-    }).immediate();
+    }, mayPoll);
   }
 }
 
-function reconcileExpiredScheduledAgentSources(now: string): void {
+async function reconcileExpiredScheduledAgentSources(now: string, mayPoll: () => boolean): Promise<void> {
   const db = getDb();
-  db.transaction(() => {
+  await scheduledSourceWrite(db, () => {
     const rows = db.query(
       `SELECT o.operation_id,o.chat_jid,o.primary_source_seq,r.state,r.lease_expires_at
        FROM service_effect_s01_operations o
@@ -657,7 +679,7 @@ function reconcileExpiredScheduledAgentSources(now: string): void {
          WHERE chat_jid=? AND source_seq=? AND state NOT IN ('consumed','disposed')`,
       ).run(row.chat_jid, row.primary_source_seq);
     }
-  }).immediate();
+  }, mayPoll);
 }
 
 /** Settle proven interrupted sources without reclaiming them or replaying cron backlog. */
@@ -886,8 +908,12 @@ async function abandonClaimedRun(
   });
   const abandoned = await store.abandon(abandonRequest);
   if (!canRunLegacyScheduledWork()) return;
-  if (source) settleScheduledAgentSource(lease.task.chatJid, source, "error", now);
-  if (abandoned.ok) applyScheduledRunToTask(abandoned.value, `Skipped: ${reasonTag}`);
+  if (abandoned.ok) {
+    await scheduledSourceWrite(getDb(), () => {
+      if (source) settleScheduledAgentSource(lease.task.chatJid, source, "error", now);
+      applyScheduledRunToTask(abandoned.value, `Skipped: ${reasonTag}`);
+    });
+  }
   else log.error("Failed to abandon scheduled run", { operation: "abandon_scheduled_run", runId: lease.record.runId, errorTag: abandoned.error._tag });
 }
 
@@ -917,8 +943,14 @@ async function runClaimedScheduledTask(
     }
 
     if (lease.task.kind === "agent") {
-      const acceptedAt = new Date().toISOString();
-      source = acceptScheduledAgentSource(lease, acceptedAt);
+      let acceptedAt = "";
+      source = await scheduledSourceWrite(getDb(), () => {
+        const head = getTaskById(lease.record.taskId);
+        if (!head || head.status !== "active" || head.revision !== lease.record.taskRevision || head.next_run !== lease.record.scheduledFor)
+          throw Error("Scheduled task head changed before source allocation");
+        acceptedAt = new Date().toISOString();
+        return acceptScheduledAgentSource(lease, acceptedAt);
+      }, () => mayContinueClaim(controller));
       const effect = scheduledEffect(`bind:${lease.record.runId}:attempt:${lease.record.attempt}`, source.operationId, source.sourceSeq, `scheduled_run:${lease.record.runId}`);
       const bindRequest = sealScheduledEffect({
         effect,
@@ -1000,18 +1032,21 @@ async function runClaimedScheduledTask(
         errorTag: completed.error._tag,
         certainty: completionMayHaveCommitted ? "unknown" : completed.error.certainty,
       });
-      if (source && !completionMayHaveCommitted) settleScheduledAgentSource(finalLease.task.chatJid, source, "error", completedAt);
+      if (source && !completionMayHaveCommitted) await scheduledSourceWrite(getDb(), () => settleScheduledAgentSource(finalLease.task.chatJid, source!, "error", completedAt));
       return;
     }
     const summary = outcome.status === "error"
       ? `Error: ${outcome.error || "Unknown"}`
       : (outcome.result?.slice(0, 200) || "Completed");
-    applyScheduledRunToTask(completed.value, summary);
-    if(task.id===DREAM_TASK_ID&&lease.task.kind==='internal'&&deps.agentPool.isDurableRuntime?.()===true){
-      const workId='scheduled:'+lease.record.runId,db=getDb();
-      if(getBudgetWork(workId,db)?.status==='active'&&!db.query("SELECT 1 FROM budget_work WHERE parent_work_id=? AND status IN ('active','paused') LIMIT 1").get(workId))setBudgetWorkStatus(workId,'completed',{boundary:'scheduled_dream_settled'},db);
-    }
-    if (source) settleScheduledAgentSource(finalLease.task.chatJid, source, outcome.status, completedAt);
+    const terminalSource = source, terminalStatus = outcome.status;
+    await scheduledSourceWrite(getDb(), () => {
+      applyScheduledRunToTask(completed.value, summary);
+      if (task.id === DREAM_TASK_ID && lease.task.kind === 'internal' && deps.agentPool.isDurableRuntime?.() === true) {
+        const workId = 'scheduled:' + lease.record.runId, db = getDb();
+        if (getBudgetWork(workId, db)?.status === 'active' && !db.query("SELECT 1 FROM budget_work WHERE parent_work_id=? AND status IN ('active','paused') LIMIT 1").get(workId)) setBudgetWorkStatus(workId, 'completed', {boundary:'scheduled_dream_settled'}, db);
+      }
+      if (terminalSource) settleScheduledAgentSource(finalLease.task.chatJid, terminalSource, terminalStatus, completedAt);
+    });
     if (outcome.budgetBlocked) await drainScheduledBudgetNotifications(deps);
     log.info("Scheduled run settled", {
       operation: "complete_scheduled_run",
@@ -1051,7 +1086,8 @@ async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore & 
   schedulerMetrics.lastPollAt = now;
   await reconcileCompletedScheduledAgentSources(store, mayPoll);
   if (!mayPoll()) return;
-  reconcileExpiredScheduledAgentSources(now);
+  await reconcileExpiredScheduledAgentSources(now, mayPoll);
+  if (!mayPoll()) return;
   await reconcileInterruptedScheduledAgentRuns(store,now);
   claimSequence += 1;
   const claimed = await store.claimDue({

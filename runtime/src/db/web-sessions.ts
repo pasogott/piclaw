@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "./sqlite-async-admission.js";
 /**
  * db/web-sessions.ts – Persistent web UI auth session storage.
  *
@@ -57,7 +58,7 @@ export function createWebSession(
 }
 
 /** Fetch a currently valid session. Expired rows are removed by auth maintenance. */
-export function getWebSession(token: string): WebSessionRecord | null {
+export function getWebSession(token: string, repair = true): WebSessionRecord | null {
   const db = getDb();
   const tokenHash = hashSessionToken(token);
 
@@ -74,6 +75,7 @@ export function getWebSession(token: string): WebSessionRecord | null {
       .get(token) as StoredWebSession | null;
 
     if (row) {
+      if (!repair) return null;
       // Reject invalid legacy rows before requesting a write lock. Periodic
       // auth maintenance owns physical deletion, including logout triggers.
       const expiresAt = Date.parse(row.expires_at);
@@ -97,6 +99,7 @@ export function getWebSession(token: string): WebSessionRecord | null {
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
 
   if (!row.session_id) {
+    if (!repair) return null;
     const sessionId = createUuid("login");
     const updated = db.prepare(`UPDATE web_sessions SET session_id = ? WHERE token = ? AND session_id IS NULL
       AND user_id = ? AND auth_method IS ? AND created_at = ? AND expires_at = ?`)
@@ -117,6 +120,20 @@ export function getWebSession(token: string): WebSessionRecord | null {
     created_at: row.created_at,
     expires_at: row.expires_at,
   };
+}
+
+/** Initial HTTP authentication repairs legacy rows under the shared writer.
+ * Subsequent principal/permission refreshes are strictly read-only. */
+export async function admitWebSession(token: string, signal?: AbortSignal): Promise<WebSessionRecord | null> {
+  const current = getWebSession(token, false);
+  if (current) return current;
+  const db = getDb(), tokenHash = hashSessionToken(token);
+  const candidates = db.query("SELECT token,session_id,expires_at FROM web_sessions WHERE token IN (?,?)")
+    .all(tokenHash, token) as { token: string; session_id: string | null; expires_at: string }[];
+  if (!candidates.some(row => Number.isFinite(Date.parse(row.expires_at)) && Date.parse(row.expires_at) > Date.now()
+    && (row.token !== tokenHash || !row.session_id))) return null;
+  const check = () => { if (getDb() !== db) throw Error("Session database binding changed"); };
+  return admitSqliteWrite(db, () => getWebSession(token), check, signal, 5000, check);
 }
 
 /** List device sessions without exposing bearer tokens or their stored hashes. */
