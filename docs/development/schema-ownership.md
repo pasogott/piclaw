@@ -18,13 +18,14 @@ Profiles are `core`, `native` and `native-addons`. The command opens SQLite read
 
 Every declared owner records its category, initialiser, writer modules/APIs, source of truth, replay/retention policy and source references. Writer references identify owning modules and public entry points; they are not a complete caller graph. Core owns shared physical KV storage; each add-on/caller retains its payload semantics and lifecycle. The registry grants no new writer authority.
 
-The qualified profiles use core schema source `3c66c54de0bc4826dc51655bb5f009ce6f9905d9`, private `@earendil-works/pi-durable@1.4.0`, and approved native add-on source `e8aac2399148cbef638764ba2b5a1cd916cc5ecc`. These are source baselines, not installed-runtime claims.
+The registry retains its original core schema source `3c66c54de0bc4826dc51655bb5f009ce6f9905d9` and add-on DDL source `e8aac2399148cbef638764ba2b5a1cd916cc5ecc`. Subsequent owned migrations add explicit source/checksum entries and exact fingerprints; those original provenance entries are not rewritten. Current qualification uses private `@earendil-works/pi-durable@1.4.0` and the native contract's approved add-on source `ad7ad0a4b63ee37090b6bee4309fa5c458ec6510`, including Code Review 0.1.11 with the same version-1 shared schema. These are source/fixture claims, not installed-runtime claims.
 
 | Composition | Difference from fresh core | Authority |
 | --- | --- | --- |
 | Native default factory | SDK conversations/entries/tasks/submissions/documents and metadata; host bindings/cutover receipts; terminal settlement and timeline/media effect ledgers | SDK record APIs, host binding owner and existing service-effect stores |
 | Native with all approved add-ons | Current additional main-schema objects are Code Review's saved-review tables, indexes and generated constraints | Exact approved add-on `ReviewDatabase`/`ReviewStore`; main connection is borrowed under the host owner fence |
 | Historical upgraded core | Explicit session-import archive tables, FTS/shadows, indexes and triggers; preserved archive migration receipt | `SqliteSessionStore`, owner `piclaw-agent-sessions`, migration `001-namespaced-session-import` |
+| Historical cursor and S01 mirror retirement | Exact optional archives preserve old cursor fields/rowids and S01 lane/state/watch values; active schemas keep polling/queue payloads and immutable native bindings | [Cursor owner](native-cursor-storage.md), [S01 binding owner](native-operation-binding.md) and their existing owned-ledger transitions |
 | Historical chat-branch rebuild | SQLite quotes the rebuilt table header; the approved additional fingerprint retains all current clauses and constraints | Existing chat-branch migration in `connection.ts` |
 | Reopened/optimised fixture | Optional exact `sqlite_stat1` planner-statistics table | Existing SQLite `PRAGMA optimize`/`ANALYZE` lifecycle |
 
@@ -52,10 +53,12 @@ SDK document persistence and logical payload ownership are separate. The registr
 Run only the relevant tests through the repository launchers. For the frozen issue campaign, full suites are prohibited. The new fixture test uses the existing native fixture exports, synthetic providers, network denial and isolated filesystem roots.
 
 ```sh
-TMPDIR=/workspace/tmp/piclaw/tests bun runtime/scripts/local-test-priority.ts \
+PICLAW_LOCAL_TEST_NICE=10 bun runtime/scripts/local-test-priority.ts \
   --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- bun test ./test/schema-ownership.test.ts
 
-bun qualification/pi-durable-130/scripts/test-isolated.ts ./schema-ownership.test.ts
+# With the existing pinned native fixture exports; no native discovery sweep:
+PICLAW_LOCAL_TEST_NICE=10 bun runtime/scripts/local-test-priority.ts \
+  --cwd qualification/pi-durable-130 -- bun test ./schema-ownership.test.ts
 ```
 
 When a legitimate schema changes, inspect fresh and upgraded fixture inventories, identify its existing owner/initialiser and update the exact declarations with source evidence. Keep missing-index, constraint, unknown-object, optional-component and data/receipt-preservation negatives. Do not regenerate the registry from an unknown store to make a failure disappear.

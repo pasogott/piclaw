@@ -33,7 +33,7 @@ The operator supplies the complete configuration/source/credential declaration f
 
 Copy configuration snapshots out of runtime `.pi`/`.piclaw` paths before selecting them. No exception permits the tool to read an active profile, even for a fixture. The selected add-on workspace is an offline copy containing public package sources under its `.pi/extensions` layout; the read-only source audit evaluates no factories or hooks. Never include authentication values in IDs, source metadata or reference names.
 
-Native approval currently selects Code Review 0.1.8 from the pinned source in the native contract. Its persisted schema marker must be version 1. The same persistence implementation in package 0.1.9 does not confer new package/tool approval. Retained optional schema is preserved while an add-on is absent; it is not recreated by capture.
+Native approval currently selects Code Review 0.1.11 from the pinned source in the native contract. Its persisted schema marker must be version 1. The [Code Review ownership contract](code-review-persistence.md) records the current source hash, acquisition-only writer admission and original 0.1.8 qualification. A shared schema version does not confer package/tool approval on older or changed sources. Retained optional schema is preserved while an add-on is absent; it is not recreated by capture.
 
 ## Capture and verification APIs
 

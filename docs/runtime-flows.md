@@ -2,7 +2,7 @@
 
 Piclaw uses the following web-first authentication, message, agent, media, and lifecycle flows. [whatsapp.md](whatsapp.md) describes the WhatsApp channel.
 
-The flows below describe single-user operation. Native runtime ownership, accepted sources and operations remain durable across restart.
+The flows below describe single-user operation. Native runtime ownership, accepted sources and operations remain durable across restart. Older diagrams referring to direct `AgentSession.prompt()`, `runAgent()` or mutable session-tree navigation are retained historical descriptions of the retired Core execution path. Current execution follows [native web dispatch](development/native-web-execution.md), [native caller ownership](development/native-prompt-retirement.md) and [immutable routing](development/native-routing-identity.md).
 
 ## Authentication flow (single-user TOTP + passkeys)
 
@@ -206,9 +206,9 @@ The web client refreshes this state on:
 - `visibilitychange` when the document becomes visible again
 - successful manual `/compact`, through an immediate `context_usage` status event
 
-Native reset (`/new-session`) and manual/automatic compaction retain conversation identity. Fresh native estimates remain valid; unavailable counts are `null`, never a fabricated zero or a revived stored/report estimate. Direct/deferred command events and completed-turn snapshots can clear same-session meters. Failed native display reads also clear counts when the current identity remains known. Legacy readers without the native authority hint retain their validated same-generation compatibility fallback.
+Native reset (`/new-session`) and manual/automatic compaction retain conversation identity. Fresh native estimates remain valid; unavailable counts are `null`, never a fabricated zero or a revived stored/report estimate. Direct/deferred command events and completed-turn snapshots can clear same-session meters. Failed native display reads also clear counts when the current identity remains known. Context endpoints never fall back to a host-persisted estimate.
 
-`GET /agent/context` returns a full snapshot with `contextUpdate: "replace"`. This public marker replaces `tokens`, `contextWindow` and `percent`, including nulls. Runtime authority hints stay private. Without the marker, partial/cache-only telemetry retains omitted meters. Cache accounting remains independent. Both skins share this reconciliation, generation/revision guards and persisted-cache invalidation; late polls cannot undo a newer accepted boundary.
+`GET /agent/context` returns a full snapshot with `contextUpdate: "replace"`. This public marker replaces `tokens`, `contextWindow` and `percent`, including nulls. Runtime authority hints stay private. Without the marker, partial/cache-only telemetry retains omitted meters. Cache accounting remains independent. Both skins retain generation/revision guards and bounded page-local observations; late polls cannot undo a newer accepted boundary. Same-identity reconnect and authoritative unbound snapshots clear stale meters.
 
 Ordinary context requests perform **zero full-tree summary reads** and omit `sessionTree`. Clients needing the historical summary field must request `GET /agent/context?include_tree=1` (and their usual `chat_jid`). Each opt-in request reads the existing exact public tree: `{ sessionTree: { leafId, total } }`. `/tree`, session pickers, imported-history redaction and head/count semantics are unchanged. The repository consumer audit found no Classic/Visual meter consumer for that field; the qualification consumer now requests it explicitly. Arbitrary external clients were not observable in this audit. No latency improvement has been measured.
 
@@ -220,7 +220,7 @@ The persistence model is intentionally split:
 - backend truth decides whether the compaction-related affordance is currently warranted
 - browser-local state is reserved for lightweight local UI memory such as dismissal/seen state
 
-The web shell now also restores the **last known context usage for the active chat from `localStorage`** before issuing the fresh `/agent/context` request. That gives the footer an immediate post-reload value instead of a brief blank state while the runtime is still waking up.
+Context usage is never read from or written to `localStorage`. Classic can reuse a value accepted by the current page revision; Visual keeps the active chat's signals. A fresh page starts without a historical meter estimate and reads the bound SDK context. Old browser/router snapshot bytes remain opaque and inert. See [native UI observations](development/native-ui-projections.md) for cache bounds, unsent composer text, preferences and OOBE ownership.
 
 ## Request timing / perf tracing
 
@@ -254,24 +254,25 @@ This cache is browser-local performance state, not backend truth. It reduces vis
 
 A friendly handle rename preserves the chat JID and native binding. Internal JID maintenance is a separate operation.
 
-Chat JID rename/migration now treats descendants as any JID under `oldJid + ":"`, not only legacy `:branch:` forms.
+The following address-rewrite behaviour belongs to historical compatibility paths. Current native chat JIDs and branch bindings are immutable; native rename/reparent/merge paths refuse before effects. Friendly names remain host metadata under [native routing ownership](development/native-routing-identity.md).
+
+Historical chat JID rename/migration treats descendants as any JID under `oldJid + ":"`, not only legacy `:branch:` forms.
 
 That means renaming a branch like `web:default:research` to `web:default:research-notes` also rewrites descendants such as `web:default:research:analysis` across DB tables and associated session artifacts.
 
-## Model restore across reloads
+## Model state across reloads
 
-Piclaw persists the active model choice so a warm session can restore it after a reload or restart.
-
-There are two practical consequences:
-
-- post-reload UI state can show the last known model/context footprint immediately from browser-local memory while the backend finishes hydrating
-- session-manager/runtime restoration paths reapply the resolved provider/model when the session comes back, so a reload is less likely to feel like a personality transplant
-
-This reduces model resets during reload and recovery flows, but restoration still depends on successful session hydration.
+The bound native SDK conversation owns its model/context. The web UI reads current model metadata and context through the existing status snapshot; it does not hydrate a legacy session or restore context estimates from browser storage. Until that read succeeds, the UI keeps unknown values instead of inventing a model/context footprint. Preferences retain their independent owners.
 
 ## Scheduled tasks / IPC
 
-Scheduled tasks run on the same `AgentSession` as normal user messages but are isolated using the **session tree**. Before executing a task, the scheduler saves the current tree position (leaf ID) and the active model. The task's prompt and response are appended to the session as usual, then the scheduler **navigates back** to the saved leaf. This leaves the task's output in a side branch of the session tree — it persists in history but does not pollute the user's conversation context.
+Native agent tasks use admitted S07 occurrences and private SDK contexts with exact source/lease/budget bindings. The scheduler reads the canonical versioned definition, dispatches that occurrence and commits result/history through its existing completion owner. It never switches/restores the public chat's model or navigates its session tree. Shell tasks and internal maintenance retain their separate host paths. See [versioned definitions](development/scheduled-task-definitions.md), [result history](development/scheduled-result-history.md) and [native caller decisions](development/native-prompt-retirement.md).
+
+### Historical same-session scheduler (retired)
+
+The following diagram and rationale preserve the former implementation for historical reference; they describe no supported production executor.
+
+Scheduled tasks ran on the same `AgentSession` as normal user messages but are isolated using the **session tree**. Before executing a task, the scheduler saves the current tree position (leaf ID) and the active model. The task's prompt and response are appended to the session as usual, then the scheduler **navigates back** to the saved leaf. This leaves the task's output in a side branch of the session tree — it persists in history but does not pollute the user's conversation context.
 
 If the task specifies a different model (e.g. a cheaper one for periodic summaries), the model is switched before execution and restored afterwards. Because the tree navigation also rewinds the conversation state, the model restore happens on the original branch where it belongs.
 
