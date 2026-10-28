@@ -367,7 +367,9 @@ describe("runtime bootstrap", () => {
       queueStartupResumePendingIpc: () => events.push("queue-startup-resume"),
       startRuntimeLoop: async (loopDeps) => {
         events.push("start-runtime-loop");
-        expect(loopDeps.agentPool).toBe(agentPool);
+        expect(loopDeps).not.toHaveProperty("agentPool");
+        expect(loopDeps).not.toHaveProperty("queue");
+        expect(loopDeps).not.toHaveProperty("processMessages");
         expect(loopDeps.assistantName).toBe("Pi");
         expect(loopDeps.pollIntervalMs).toBe(123);
       },

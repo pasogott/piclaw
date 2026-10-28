@@ -226,12 +226,10 @@ import {
 const log = createLogger("runtime.bootstrap");
 
 export type RuntimeBootstrapQueue =
-  & StartRuntimeLoopDeps["queue"]
   & SchedulerDeps["queue"]
   & ShutdownDeps["queue"];
 
 export type RuntimeBootstrapAgentPool =
-  & StartRuntimeLoopDeps["agentPool"]
   & SchedulerDeps["agentPool"]
   & RuntimeModelResolver
   & ShutdownDeps["agentPool"];
@@ -456,11 +454,8 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       return;
     }
     messageLoop = deps.startRuntimeLoop({
-      queue,
       state,
-      agentPool,
       assistantName: deps.assistantName,
-      triggerPattern: deps.triggerPattern,
       pollIntervalMs: deps.pollIntervalMs,
       signal: messageLoopController.signal,
     });

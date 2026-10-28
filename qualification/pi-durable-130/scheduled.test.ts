@@ -115,14 +115,11 @@ async function setup(holdRootAdapter = false) {
     agentPool: {
       saveSessionPosition: async () => "dedicated-scheduled-fixture", restoreSessionPosition: async () => {},
       getCurrentModelLabel: async () => null,
-      runAgent: async (_prompt: string, _jid: string, options: { budgetScheduledTaskId: string }) => {
-        const records = value(await actual.listRuns({ taskId: options.budgetScheduledTaskId, state: "source_bound" }));
-        const candidates = records.filter(record => record.leaseExpiresAt! > new Date().toISOString());
-        if (candidates.length !== 1) throw new Error("Ambiguous scheduled owner");
-        const lease = leases.get(candidates[0]!.runId)!;
-        const expectedPrompt = payloads.get(lease.task.payloadRef);
-        if (expectedPrompt === undefined) throw new Error("Missing scheduled payload");
-        expect(_prompt).toBe(expectedPrompt);
+      dispatchScheduledAgent: async (lease: ScheduledRunLease) => {
+        expect(leases.get(lease.record.runId)).toEqual(lease);
+        const records=value(await actual.listRuns({taskId:lease.record.taskId,state:'source_bound'}));
+        expect(records.some(record=>record.runId===lease.record.runId)).toBe(true);
+        if(payloads.get(lease.task.payloadRef)===undefined)throw Error('Missing scheduled payload');
         await rootAdapter.promise;
         if (holdRootAdapter) throw new Error("Isolated admission probe finished");
         const bridge = createScheduledRunDispatch(store, lease, currentTask, dispatch);

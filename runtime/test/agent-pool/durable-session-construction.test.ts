@@ -112,12 +112,7 @@ for (const empty of [false, true]) {
       }
       await expect(pool.createRootChatSession("durable-root")).rejects.toThrow("Durable root session creation unavailable");
       expect(getDb().serialize()).toEqual(databaseBefore);
-      for (const chat of ["web:bound", "web:unknown", "dream:manual:fixture", "operation:fixture", "custom:room"]) {
-        const options = { get budgetWorkId() { runnerOptionReads++; return `forbidden-native-${empty}-${chat}`; } };
-        const output = await pool.runAgent("must not enter legacy orchestration", chat, options);
-        expect(getDb().serialize()).toEqual(databaseBefore);
-        expect(output).toEqual({ status: "error", result: null, error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" });
-      }
+      expect('runAgent' in pool).toBe(false);
       expect(runnerOptionReads).toBe(0);
       expect(getDb().serialize()).toEqual(databaseBefore);
       if (!empty) {

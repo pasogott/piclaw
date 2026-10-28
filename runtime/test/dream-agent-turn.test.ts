@@ -1,15 +1,22 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, linkSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { importFresh } from "./helpers.js";
+import { importFresh, setEnv } from "./helpers.js";
 import { assertPathWithinTestFilesystemIsolation } from "../scripts/test-filesystem-isolation.js";
 
 // Capture once, before any fixture freezes the global clock. A timed-out test
 // can finish late while the next fixture is already running.
 const realDateNow = Date.now;
+let restoreDreamPaths: (()=>void)|undefined;
+beforeEach(async()=>{
+  const config=await import("../src/core/config.js");
+  // Dream owns bootstrap-fixed paths; align dynamic daily-note/index readers
+  // with the SAME isolated fixture when another file changed process.env.
+  restoreDreamPaths=setEnv({PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR,PICLAW_STORE:config.STORE_DIR});
+});
 afterEach(() => {
-  Date.now = realDateNow;
+  Date.now = realDateNow; restoreDreamPaths?.(); restoreDreamPaths=undefined;
 });
 
 const acceptModelChange = async () => ({ status: "success", message: "ok" } as const);
@@ -31,7 +38,7 @@ function resetDreamNotesFixture(config: typeof import("../src/core/config.js")):
   rmSync(notesDir, { recursive: true, force: true });
 }
 
-test("runDreamAgentTurn applies an explicit Dream model override to the temporary dream chat", async () => {
+test("runDreamAgentTurn forwards its explicit model to native private dispatch without public model mutation", async () => {
   const config = await import("../src/core/config.js");
   resetDreamDestructiveFixture(config);
 
@@ -56,8 +63,9 @@ test("runDreamAgentTurn applies an explicit Dream model override to the temporar
           applied.push({ chatJid, raw: command.raw });
           return { status: "success", message: "ok" };
         },
-        runAgent: async (_prompt: string, chatJid: string) => {
-          runChats.push(chatJid);
+        isDurableRuntime:()=>true,dispatchDreamOperation: async (request: any) => {
+          expect(request.model).toBe("openai-compatible/glm-5.1");
+          runChats.push(request.chatJid);
           return { status: "success", result: "Dream complete." };
         },
         disposeChatSession: async () => {},
@@ -65,8 +73,8 @@ test("runDreamAgentTurn applies an explicit Dream model override to the temporar
     });
 
     expect(result.skipped).toBe(false);
-    expect(applied).toEqual([{ chatJid: expectedDreamChatJid, raw: "/model openai-compatible/glm-5.1" }]);
-    expect(runChats).toEqual([expectedDreamChatJid]);
+    expect(applied).toEqual([]);
+    expect(runChats).toEqual(["web:default"]);
   } finally {
     Date.now = realDateNow;
   }
@@ -121,7 +129,7 @@ test("runDreamAgentTurn reaps a stale dream lock and materializes memory files a
       mode: "auto",
       agentPool: {
         applyControlCommand: acceptModelChange,
-        runAgent: async () => ({ status: "success", result: "AutoDream complete." }),
+        isDurableRuntime:()=>true,dispatchDreamOperation: async () => ({ status: "success", result: "AutoDream complete." }),
         disposeChatSession: async () => {},
       } as any,
     });
@@ -174,7 +182,7 @@ test("runDreamAgentTurn skips gracefully when another live Dream run holds the l
       days: 2,
       mode: "auto",
       agentPool: {
-        runAgent: async () => ({ status: "success", result: "should not run" }),
+        isDurableRuntime:()=>true,dispatchDreamOperation: async () => ({ status: "success", result: "should not run" }),
         disposeChatSession: async () => {},
       } as any,
     });
@@ -199,7 +207,7 @@ test("runDreamAgentTurn records recovery summaries when the model pass succeeds 
     mode: "auto",
     agentPool: {
       applyControlCommand: acceptModelChange,
-      runAgent: async () => ({
+      isDurableRuntime:()=>true,dispatchDreamOperation: async () => ({
         status: "success",
         result: "AutoDream complete.",
         recovery: {
@@ -245,7 +253,7 @@ test("scheduled Dream consumes deferred startup backfill state and clears it aft
     mode: "auto",
     agentPool: {
       applyControlCommand: acceptModelChange,
-      runAgent: async () => {
+      isDurableRuntime:()=>true,dispatchDreamOperation: async () => {
         modelCalls += 1;
         return { status: "success", result: "Scheduled consolidation complete." };
       },
@@ -266,7 +274,7 @@ for(const replacement of ['same-pid','symlink'] as const)test(`Dream lock owners
   const marker='replacement owner must keep these exact bytes';
   const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
   const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
-    applyControlCommand:acceptModelChange,runAgent:async()=>{
+    applyControlCommand:acceptModelChange,isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{
       renameSync(lock,lock+'.former');
       if(replacement==='symlink'){writeFileSync(lock+'.target',String(process.pid));symlinkSync(lock+'.target',lock);}
       else writeFileSync(lock,String(process.pid));
@@ -285,7 +293,7 @@ test('Dream lock ownership: replacement during stale inspection is retained with
   }) as typeof process.kill);
   try{
     const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
-    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{runAgent:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
+    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
     expect(result.skipped).toBe(true);expect(calls).toBe(0);expect(readFileSync(lock,'utf8')).toBe(String(process.pid));
   }finally{kill.mockRestore();}
 });
@@ -301,7 +309,7 @@ test('Dream lock ownership: stale inspection keeps the original inode pinned unt
   }) as typeof process.kill);
   try{
     const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
-    await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{applyControlCommand:acceptModelChange,runAgent:async()=>({status:'success',result:'fixture'}),disposeChatSession:async()=>{}} as any});
+    await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{applyControlCommand:acceptModelChange,isDurableRuntime:()=>true,dispatchDreamOperation:async()=>({status:'success',result:'fixture'}),disposeChatSession:async()=>{}} as any});
     expect(pinned).toBe(true);expect(existsSync(lock)).toBe(false);
   }finally{kill.mockRestore();}
 });
@@ -317,7 +325,7 @@ for(const kind of ['malformed','symlink','hardlink','unknown-process'] as const)
   const kill=spyOn(process,'kill').mockImplementation((()=>{throw Object.assign(Error('inspection unavailable'),{code:'EIO'});}) as typeof process.kill);
   try{
     const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
-    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{runAgent:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
+    const result=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{calls++;return{status:'success',result:'forbidden'};},disposeChatSession:async()=>{}} as any});
     expect(result.skipped).toBe(true);expect(calls).toBe(0);expect(readFileSync(lock,'utf8')).toBe(original);
   }finally{kill.mockRestore();}
 });
@@ -331,7 +339,7 @@ for(const replacement of [false,true])test(`Dream lock ownership: process exit r
     import {renameSync,writeFileSync} from 'node:fs';
     initDatabase();await runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
       applyControlCommand:async()=>({status:'success',message:'fixture'}),
-      runAgent:async()=>{if(${replacement}){renameSync(${JSON.stringify(lock)},${JSON.stringify(lock+'.former')});writeFileSync(${JSON.stringify(lock)},String(process.pid));}process.exit(0);},disposeChatSession:async()=>{},
+      isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{if(${replacement}){renameSync(${JSON.stringify(lock)},${JSON.stringify(lock+'.former')});writeFileSync(${JSON.stringify(lock)},String(process.pid));}process.exit(0);},disposeChatSession:async()=>{},
     }});
   `],{env:{...process.env,PICLAW_DB_IN_MEMORY:'1',PI_OFFLINE:'1',PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
   const [status,stderr]=await Promise.all([child.exited,new Response(child.stderr).text(),new Response(child.stdout).text()]);
@@ -367,7 +375,7 @@ test("Dream failed execution: a thrown agent outcome still refreshes notes/index
   const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
   const failure=Error('uncertain accepted agent outcome');let disposed=0;
   await expect(dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
-    applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{disposed++;},
+    applyControlCommand:acceptModelChange,isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{throw failure;},disposeChatSession:async()=>{disposed++;},
   } as any})).rejects.toBe(failure);
   for(const name of ['MEMORY.md','current-state.md','recent-context.md'])expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory',name))).toBe(true);
   expect(db.getDb().query("SELECT path FROM workspace_files WHERE path='notes/memory/MEMORY.md'").get()).toEqual({path:'notes/memory/MEMORY.md'});
@@ -384,7 +392,7 @@ test("Dream failed execution: deterministic refresh failure retains the original
   try{
     const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
     const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
-      applyControlCommand:acceptModelChange,runAgent:async()=>{throw failure;},disposeChatSession:async()=>{},
+      applyControlCommand:acceptModelChange,isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{throw failure;},disposeChatSession:async()=>{},
     } as any}).then(()=>undefined,error=>error);
     expect(caught).toBeInstanceOf(AggregateError);expect(caught.errors).toEqual([failure,refreshFailure]);expect(hook).toHaveBeenCalledTimes(1);
     expect(existsSync(join(config.WORKSPACE_DIR,'notes/memory/.dream.lock'))).toBe(false);
@@ -400,7 +408,7 @@ test("Dream failed execution: access revocation blocks refresh and preserves the
   try{
     const dream=await importFresh<typeof import('../src/dream.js')>('../src/dream.js');
     const caught=await dream.runDreamAgentTurn({chatJid:'web:default',mode:'manual',days:1,agentPool:{
-      applyControlCommand:acceptModelChange,runAgent:async()=>{
+      applyControlCommand:acceptModelChange,isDurableRuntime:()=>true,dispatchDreamOperation:async()=>{
         denied=spyOn(access,'readAccessConfig').mockImplementation(()=>{throw Error('fixture access revoked');});throw failure;
       },disposeChatSession:async()=>{disposed++;},
     } as any}).then(()=>undefined,error=>error);
@@ -425,8 +433,8 @@ test("runDreamAgentTurn falls back to deterministic refresh when the model pass 
     mode: "auto",
     agentPool: {
       applyControlCommand: acceptModelChange,
-      runAgent: async (_prompt: string, _chatJid: string, options?: { timeoutMs?: number }) => {
-        capturedTimeoutMs = options?.timeoutMs;
+      isDurableRuntime:()=>true,dispatchDreamOperation: async (request: { timeoutMs: number }) => {
+        capturedTimeoutMs = request.timeoutMs;
         return {
           status: "error",
           error: "Timed out after 3m",
