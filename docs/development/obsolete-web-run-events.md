@@ -39,6 +39,14 @@ Focused evidence:9 host cases/48 assertions for retirement/native view/reattach/
 
 The general import-boundary checker still reports25 pre-existing findings, byte-identical to unchanged fc587 under the same invocation; no import/scan rules or exemptions are relaxed. Automatic repository CI and user-approved integration are additional evidence, not supplied by these local receipts.
 
+## Native side-model event contract
+
+After the substantive deletion, the surviving `SidePromptOptions.onEvent` boundary accepts the SDK's `AssistantMessageEvent` only. Its actual producer is `host-models.ts`; `default-application-runtime.ts` checks the captured source/current owner and clones the event before the side observer receives it. `application-bootstrap.ts` forwards native text/thinking deltas and detaches failing or cancelled observers. No current source or approved add-on emits AgentSession lifecycle events through this path.
+
+The follow-up removes the obsolete AgentSession event-family union/import and the clone callback's `as any`. Compile-negative cases in `qualification/pi-durable-130/side-prompt-event-types.ts` reject session lifecycle/compaction events and missing/wrong native fields, with a positive SDK native-event case. The **existing** qualification type project includes this plain compile-only fixture, so the repository gate enforces it without a new test runner or event abstraction. Before narrowing, two unused `@ts-expect-error` diagnostics prove the old union accepted the retired families; afterward all three type projects and the real native side-dispatch scenario (123 assertions) pass.
+
+This supporting typing follow-up has **zero physical/nonblank LOC or file-count delta** in production and earns no extra reduction credit. The substantive PR's −1,459/−1,384 after relocation charge is unchanged. See [side-boundary receipt](receipts/native-side-events-1277.json).
+
 ## Compatibility and rollback
 
 No current native/browser wire contract changes. Old recovery/compaction/summarisation producer APIs have no supported runtime caller. Shared preview/title utilities retain native and handler callers. Existing native SDK and host boundaries retain source IDs, budgets, error redaction, cancellation, terminal ordering and resource ownership.

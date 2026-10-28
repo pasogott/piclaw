@@ -2,7 +2,7 @@
  * agent-pool/contracts.ts – Shared public contracts for AgentPool and its helpers.
  */
 
-import type { AgentSessionEvent, AgentSessionRuntime, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionRuntime, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessageEvent,
   Usage,
@@ -122,7 +122,7 @@ export interface SidePromptResult {
 export interface SidePromptOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
-  onEvent?: (event: AssistantMessageEvent | AgentSessionEvent) => void;
+  onEvent?: (event: AssistantMessageEvent) => void;
   onTextDelta?: (delta: string) => void;
   onThinkingDelta?: (delta: string) => void;
   /** Optional stable identity for a retried side prompt. */
