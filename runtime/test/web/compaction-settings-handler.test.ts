@@ -288,18 +288,19 @@ test('native settings retain independent tracked phases without exposing or dele
   }, async () => {
     const db = await importFresh<typeof import('../../src/db.js')>('../src/db.js');
     db.initDatabase();
-    db.setChatCompactionBackoff('web:test-1', {
-      failureCount: 2,
-      lastFailedAt: '2026-04-29T11:00:00.000Z',
-      backoffUntil: new Date(Date.now() + 10 * 60_000).toISOString(),
-      lastErrorMessage: 'Compaction timed out',
-    });
-    db.setChatCompactionBackoff('web:test-expired', {
-      failureCount: 1,
-      lastFailedAt: '2026-04-29T10:00:00.000Z',
-      backoffUntil: new Date(Date.now() - 60_000).toISOString(),
-      lastErrorMessage: 'Expired suppression',
-    });
+    const { initializeChatCursorStorage, legacyCursorArchive } = await import('../../src/db/chat-cursor-storage.js');
+    // Replace this blank synthetic polling fixture with its pre-ledger source,
+    // then use the real owned upgrade. No production recovery writer remains.
+    expect(db.getDb().query('SELECT COUNT(*) AS n FROM chat_cursors').get()).toEqual({n:0});
+    db.getDb().transaction(() => {
+      db.getDb().exec("DROP TABLE chat_cursors; DELETE FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'");
+      db.getDb().exec(readFileSync(new URL('../fixtures/legacy-chat-cursors.sql',import.meta.url),'utf8'));
+      const insert = db.getDb().query('INSERT INTO chat_cursors(chat_jid,compaction_failure_count,compaction_last_failed_at,compaction_backoff_until,compaction_last_error) VALUES(?,?,?,?,?)');
+      insert.run('web:test-1',2,'2026-04-29T11:00:00.000Z',new Date(Date.now()+10*60_000).toISOString(),'Compaction timed out');
+      insert.run('web:test-expired',1,'2026-04-29T10:00:00.000Z',new Date(Date.now()-60_000).toISOString(),'Expired suppression');
+      initializeChatCursorStorage(db.getDb());
+    })();
+    const archived = db.getDb().query('SELECT rowid,* FROM '+legacyCursorArchive+' ORDER BY rowid').all();
 
     // Use the canonical singleton imported by the handler. Fresh-importing a
     // second watchdog module can reset the wrong process-global instance.
@@ -326,8 +327,9 @@ test('native settings retain independent tracked phases without exposing or dele
         expect.objectContaining({ chatJid: 'web:test-compaction-settings', phase: 'prompt' }),
       ]);
 
-      expect(db.getChatCompactionBackoff('web:test-1')).toMatchObject({ failureCount: 2, lastErrorMessage: 'Compaction timed out' });
-      expect(db.getChatCompactionBackoff('web:test-expired')).toMatchObject({ failureCount: 1, lastErrorMessage: 'Expired suppression' });
+      expect(db.getDb().query('SELECT rowid,* FROM '+legacyCursorArchive+' ORDER BY rowid').all()).toEqual(archived);
+      expect(db.getDb().query('SELECT compaction_failure_count,compaction_last_error FROM '+legacyCursorArchive+' WHERE chat_jid=?').get('web:test-1')).toEqual({compaction_failure_count:2,compaction_last_error:'Compaction timed out'});
+      expect(db.getDb().query('SELECT compaction_failure_count,compaction_last_error FROM '+legacyCursorArchive+' WHERE chat_jid=?').get('web:test-expired')).toEqual({compaction_failure_count:1,compaction_last_error:'Expired suppression'});
     } finally {
       watchdog.endTrackedPhase('web:test-compaction-settings');
       watchdog.resetProgressWatchdogForTests();

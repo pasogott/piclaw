@@ -458,7 +458,8 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(row.content).toBe("normal application input");
     expect(db.query("SELECT payload_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id)).toEqual({ payload_ref: `message-row:${row.rowid}` });
     expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
-    const legacyCursorBeforeWait = db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(chat);
+    const pollingBeforeWait = db.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(chat);
+    expect((db.query("PRAGMA main.table_info(chat_cursors)").all() as {name:string}[]).map(row=>row.name)).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     if (deferred) {
       const queued = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
         method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "/compact" }),
@@ -525,7 +526,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
       // Native input is claimed in the accepted-source ledger, not a fabricated
       // legacy cursor. An uncertain wait must advance neither representation.
-      expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(legacyCursorBeforeWait);
+      expect(db.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(pollingBeforeWait);
       expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id)).toEqual({ state: "claimed" });
       expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toHaveLength(0);
       expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([]);
@@ -725,7 +726,8 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
         for (let n = 0; n < 500 && !(db.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=?").get(sibling)); n++) await Bun.sleep(5);
         expect(db.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=?").all(sibling)).toHaveLength(1);
         expect(queue.isLaneBusy(`chat:${sibling}`)).toBe(true);
-        expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(sibling)).not.toEqual({ inflight_message_id: null });
+        expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=?").all(sibling)).toEqual([{state:"claimed"}]);
+        expect(db.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=? AND cursor_ts<>''").get(sibling)).toBeNull();
         expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(sibling)).toHaveLength(0);
         expect(base.host.modelCalls).toBe(1);
       } finally { compactHold.release(); }
@@ -745,7 +747,8 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(sibling)).toEqual([{ content: "synthetic answer" }]);
       expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(sibling)).toHaveLength(1);
       expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=?").all(sibling)).toEqual([{ state: "consumed" }]);
-      expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(sibling)).toEqual({ inflight_message_id: null });
+      const siblingInput = db.query("SELECT timestamp FROM messages WHERE chat_jid=? AND is_bot_message=0 ORDER BY rowid DESC LIMIT 1").get(sibling) as {timestamp:string};
+      expect(db.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(sibling)).toEqual({cursor_ts:siblingInput.timestamp});
       expect(db.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE domain=? AND chat_jid=?").all(incarnation, sibling)).toHaveLength(1);
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     }

@@ -1,3 +1,4 @@
+import { hasUnsettledLegacyCursorEvidence } from "../db/chat-cursor-storage.js";
 import type { NativeTurnViewChannel } from "../channels/web/agent/native-turn-view.js";
 /**
  * runtime/bootstrap.ts – Runtime bootstrap orchestration and default dependency wiring.
@@ -498,7 +499,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
             assert(!root.inTransaction, "Root DB transaction active");
             assert(!root.query("SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed') LIMIT 1").get(), "Pending S01 sources");
             assert(!root.query("SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal' LIMIT 1").get(), "Nonterminal S01 operations");
-            assert(!root.query("SELECT 1 FROM chat_cursors WHERE preflight_message_id IS NOT NULL OR inflight_message_id IS NOT NULL OR (queued_followups_json IS NOT NULL AND queued_followups_json <> '[]') LIMIT 1").get(), "Unsettled legacy chat cursors");
+            assert(!hasUnsettledLegacyCursorEvidence(root) && !root.query("SELECT 1 FROM main.chat_cursors WHERE queued_followups_json IS NOT NULL AND queued_followups_json <> '[]' LIMIT 1").get(), "Unsettled legacy chat cursors");
             const jids = (root.query("SELECT jid FROM chats UNION SELECT chat_jid AS jid FROM messages").all() as { jid: string }[]).map(row => row.jid);
             assert(getNewMessages(jids, state.lastTimestamp, deps.assistantName).messages.length === 0, "Unread accepted legacy messages");
             installedPool.assertLegacyCaptureIdle();

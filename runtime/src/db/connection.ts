@@ -17,6 +17,7 @@
  */
 
 import Database from "bun:sqlite";
+import { initializeChatCursorStorage } from "./chat-cursor-storage.js";
 import { initializeAccessSchema } from "./access-state.js";
 import { initializeSessionOwnershipSchema } from "./session-ownership.js";
 import { initializeSessionHandleSchema } from "./session-handles.js";
@@ -392,52 +393,6 @@ function createSchema(database: Database): void {
       value TEXT NOT NULL
     );
 
-    -- Per-chat cursor, preflight, and inflight-run tracking.
-    -- cursor_ts        : ISO timestamp of the last fully-processed message.
-    -- preflight_*      : set while pre-prompt work (like compaction) is running
-    --                    before the user message is consumed into inflight state.
-    --                    If still set on startup the message remains pending and
-    --                    the marker can be cleared without cursor rollback.
-    -- inflight_*       : set atomically with the cursor advance immediately
-    --                    before prompt execution begins; cleared by endChatRun /
-    --                    endChatRunWithError after the run. If still set on
-    --                    startup the process died mid-run and the cursor must be
-    --                    rolled back to inflight_prev_ts.
-    -- failed_*         : set atomically by endChatRunWithError when a run errors;
-    --                    cleared atomically by endChatRun on success, or by
-    --                    clearFailedRun on model switch. Because these columns
-    --                    share a row with inflight_*, every completion path is
-    --                    a single UPDATE with no intermediate inconsistent state.
-    -- compaction_active_* : durable marker for an in-flight compaction phase.
-    --                    If the process is killed by the external watchdog
-    --                    during recovery compaction, startup recovery can mark
-    --                    the chat as failed/backed off instead of replaying the
-    --                    same compaction loop.
-    CREATE TABLE IF NOT EXISTS chat_cursors (
-      chat_jid             TEXT PRIMARY KEY,
-      cursor_ts            TEXT NOT NULL DEFAULT '',
-      preflight_prev_ts    TEXT,
-      preflight_message_id TEXT,
-      preflight_started_at TEXT,
-      inflight_prev_ts     TEXT,
-      inflight_message_id  TEXT,
-      inflight_started_at  TEXT,
-      failed_prev_ts       TEXT,
-      failed_ts            TEXT,
-      failed_message_id    TEXT,
-      failed_thread_root   INTEGER,
-      failed_created_at    TEXT,
-      queued_followups_json TEXT,
-      compaction_active_started_at TEXT,
-      compaction_active_reason TEXT,
-      auto_compaction_window_ordinal INTEGER,
-      auto_compaction_baseline_tokens INTEGER,
-      auto_compaction_prefill_tokens INTEGER,
-      auto_compaction_success_count INTEGER,
-      auto_compaction_warned_count INTEGER,
-      auto_compaction_updated_at TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS token_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_jid TEXT NOT NULL,
@@ -748,55 +703,6 @@ function ensureChatBranchConstraints(database: Database): void {
 }
 
 /**
- * Add newer per-chat state columns to chat_cursors for databases created
- * before they were introduced. ALTER TABLE ADD COLUMN is safe to run
- * repeatedly – SQLite ignores the statement if the column already exists
- * (we catch the error).
- */
-function ensureChatCursorColumns(database: Database): void {
-  const cols = new Set(
-    (database.prepare("PRAGMA table_info(chat_cursors)").all() as Array<{ name: string }>)
-      .map((r) => r.name)
-  );
-  const toAdd: Array<[string, string]> = [
-    ["preflight_prev_ts",         "TEXT"],
-    ["preflight_message_id",      "TEXT"],
-    ["preflight_started_at",      "TEXT"],
-    ["failed_prev_ts",            "TEXT"],
-    ["failed_ts",                 "TEXT"],
-    ["failed_message_id",         "TEXT"],
-    ["failed_thread_root",        "INTEGER"],
-    ["failed_created_at",         "TEXT"],
-    ["queued_followups_json",     "TEXT"],
-    ["compaction_failure_count",  "INTEGER"],
-    ["compaction_last_failed_at", "TEXT"],
-    ["compaction_backoff_until",  "TEXT"],
-    ["compaction_last_error",     "TEXT"],
-    ["compaction_active_started_at", "TEXT"],
-    ["compaction_active_reason",     "TEXT"],
-    ["auto_compaction_window_ordinal", "INTEGER"],
-    ["auto_compaction_baseline_tokens", "INTEGER"],
-    ["auto_compaction_prefill_tokens", "INTEGER"],
-    ["auto_compaction_success_count", "INTEGER"],
-    ["auto_compaction_warned_count", "INTEGER"],
-    ["auto_compaction_updated_at", "TEXT"],
-  ];
-  for (const [col, type] of toAdd) {
-    if (!cols.has(col)) {
-      try {
-        database.exec(`ALTER TABLE chat_cursors ADD COLUMN ${col} ${type}`);
-      } catch (err) {
-        debugSuppressedError(log, "Chat-cursor migration raced an already-updated schema state.", err, {
-          operation: "db.ensure_chat_cursor_columns.add_column",
-          column: col,
-          type,
-        });
-      }
-    }
-  }
-}
-
-/**
  * One-time migration: seed chat_cursors from the old lastAgentTimestamp JSON
  * blob stored in router_state under key "last_agent_timestamp_web".
  * Runs inside a transaction so all rows land together or not at all.
@@ -949,7 +855,7 @@ function initializeSchema(database: Database): void {
   ensureWebSessionColumns(database);
   ensureWebSessionIdentity(database);
   ensureFts(database);
-  ensureChatCursorColumns(database);
+  initializeChatCursorStorage(database);
   migrateChatCursors(database);
   dropChatBranchDisplayName(database);
   dropObsoleteRemoteInteropSchema(database);

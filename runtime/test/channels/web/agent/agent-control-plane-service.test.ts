@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { withTempWorkspaceEnv } from "../../../helpers.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beginChatRun, closeDatabase, getDb, getDeferredQueuedFollowups, setDeferredQueuedFollowups, getMessageByRowId, storeMessage, storeChatMetadata, getInflightRuns, initDatabase } from "../../../../src/db.js";
+import { setChatCursor, closeDatabase, getDb, getDeferredQueuedFollowups, setDeferredQueuedFollowups, getMessageByRowId, storeMessage, storeChatMetadata, getChatCursor, initDatabase } from "../../../../src/db.js";
 import {
   buildStalledWorkDiagnostic,
   WebAgentControlPlaneService,
@@ -455,16 +455,12 @@ describe("WebAgentControlPlaneService", () => {
     });
   });
 
-  test("lists native runs and supports abort, terminal-display clearing and queue drain without editing old markers", async () => {
+  test("lists native runs and supports abort, terminal-display clearing and queue drain without mutating polling cursors", async () => {
     initDatabase();
     const events: Array<{ type: string; data: unknown }> = [];
     const controlCalls: Array<{ chatJid: string; command: unknown }> = [];
     const removedRows: number[] = [];
-    beginChatRun("web:hung", "2024-01-01T00:00:02.000Z", {
-      prevTs: "2024-01-01T00:00:01.000Z",
-      messageId: "msg-hung",
-      startedAt: "2024-01-01T00:00:03.000Z",
-    });
+    setChatCursor("web:hung", "2024-01-01T00:00:02.000Z");
     const queueLifecycle: QueueLifecycleStub = {
       getQueuedFollowupCount: () => 2,
       listQueuedStateItems: () => [
@@ -546,7 +542,8 @@ describe("WebAgentControlPlaneService", () => {
       had_preflight: false,
       had_status: true,
     });
-    expect(getInflightRuns().some((run) => run.chatJid === "web:hung")).toBe(true);
+    expect(getChatCursor("web:hung")).toBe("2024-01-01T00:00:02.000Z");
+    expect(getDb().query("SELECT * FROM chat_cursors WHERE chat_jid='web:hung'").get()).toEqual({chat_jid:"web:hung",cursor_ts:"2024-01-01T00:00:02.000Z",queued_followups_json:null});
     expect(events).toEqual(expect.arrayContaining([
       { type: "agent_followup_drained", data: { chat_jid: "web:hung", removed_count: 2 } },
     ]));

@@ -1110,11 +1110,7 @@ test("web channel queues normal message as follow-up when no mode is provided", 
     is_bot_message: false,
   });
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
-  db.beginChatRun("web:default", rootTimestamp, {
-    prevTs: "",
-    messageId: rootMessageId,
-    startedAt: new Date().toISOString(),
-  });
+  db.setChatCursor("web:default", rootTimestamp);
 
   let runCalls = 0;
 
@@ -1214,7 +1210,7 @@ test("web channel queues normal message as follow-up when session is active for 
   expect(intents).toEqual([]);
 });
 
-test("web channel processes messages normally when a turn is inflight but not actively streaming", async () => {
+test("web channel processes messages normally when the polling cursor exists without native streaming", async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -1238,13 +1234,7 @@ test("web channel processes messages normally when a turn is inflight but not ac
     thread_id: null,
   });
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
-  // Set an inflight marker WITHOUT an active streaming session — simulates
-  // a stale marker left after a restart or brief finalization gap.
-  db.beginChatRun("web:default", rootTimestamp, {
-    prevTs: "",
-    messageId: rootMessageId,
-    startedAt: new Date().toISOString(),
-  });
+  db.setChatCursor("web:default", rootTimestamp);
 
   let processChatEnqueued = false;
   const webMod = await import("../../../src/channels/web.js");
@@ -1723,11 +1713,7 @@ for (const chatJid of ["web:default", "web:branch"]) test(`web channel atomicall
     is_bot_message: false,
   });
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
-  db.beginChatRun(chatJid, rootTimestamp, {
-    prevTs: "",
-    messageId: rootMessageId,
-    startedAt: new Date().toISOString(),
-  });
+  db.setChatCursor(chatJid, rootTimestamp);
 
   const events: Array<{ type: string; data: any }> = [];
   const webMod = await import("../../../src/channels/web.js");
@@ -1836,11 +1822,7 @@ test("web channel emits queue removal before steer enqueue when converting a que
     is_bot_message: false,
   });
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
-  db.beginChatRun("web:default", rootTimestamp, {
-    prevTs: "",
-    messageId: rootMessageId,
-    startedAt: new Date().toISOString(),
-  });
+  db.setChatCursor("web:default", rootTimestamp);
 
   const events: Array<{ type: string; data: any }> = [];
   const webMod = await import("../../../src/channels/web.js");
