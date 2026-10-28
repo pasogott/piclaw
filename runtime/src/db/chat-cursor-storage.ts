@@ -43,12 +43,13 @@ function sql(db: Database, name: string): string | null {
   if (row.type !== 'table' || typeof row.sql !== 'string') fail();
   return row.sql;
 }
-/** Bounded declaration recognition, not SQL equivalence. Comments and quoted
- * identifiers are accepted; string literals and every constraint stay exact. */
+/** Bounded declaration recognition, not SQL equivalence. Comments are ignored;
+ * quoted tokens, string literals and every constraint stay exact, matching the
+ * read-only schema inventory rather than accepting unregistered spellings. */
 function normalise(text: string): string {
   const tokens = (text.match(/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[a-zA-Z_][a-zA-Z_0-9$]*|[^\s]/g) ?? [])
     .filter(token => !token.startsWith('--') && !token.startsWith('/*'))
-    .map(token => token.startsWith("'") ? token : /^["`\[]/.test(token) ? token.slice(1, -1).toLowerCase() : token.toLowerCase());
+    .map(token => /^['"`\[]/.test(token) ? token : token.toLowerCase());
   if (tokens[2] === 'if' && tokens[3] === 'not' && tokens[4] === 'exists') tokens.splice(2, 3);
   if (tokens.at(-1) === ';') tokens.pop();
   return tokens.join(' ');
@@ -67,7 +68,8 @@ function assertShape(db: Database, name: string, active: boolean): Column[] {
   if (!rows.some(row => row.name === 'chat_jid') || !rows.some(row => row.name === 'cursor_ts')) fail();
   if (!active && !historicalShapes.includes(rows.filter(row => Object.hasOwn(retired, row.name)).map(row => row.name).sort().join(','))) fail();
   if (active && rows.map(row => row.name).join(',') !== 'chat_jid,cursor_ts,queued_followups_json') fail();
-  if (normalise(definition) !== normalise(`CREATE TABLE ${name} (${expected.join(',')})`)) fail();
+  const header = name === legacyCursorArchive ? quote(name) : name;
+  if (normalise(definition) !== normalise(`CREATE TABLE ${header} (${expected.join(',')})`)) fail();
   const indexes = db.query(`PRAGMA main.index_list(${quote(name)})`).all() as { origin: string }[];
   if (indexes.some(index => index.origin !== 'pk')) fail();
   return rows;

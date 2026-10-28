@@ -31,7 +31,7 @@ EF-S01 harness correlation/mirror retirement remains separate work in #1691. Thi
 
 Historical upgrades rename the original table to `host_legacy_chat_cursor_state_v1`, create minimal active storage and copy rowids, chat identities, polling positions and queued bytes in the same writer transaction as the receipt. Every original historical column/value remains in the archive. The archive has no application writer after this transition.
 
-Recognition covers finite physical generations from `c8c502cd4`, `79f2a7b52`, `44d036256` and `35e443fc6`, the additive backoff columns introduced by `3fbe834cc`, and their pre-queue variants. Partial field groups, unknown constraints/columns/indexes, dependent views/triggers/foreign keys, temporary shadows and unreceipted archives refuse the transition. Recognition preserves string literals. Case-insensitive SQLite identifiers are checked before DDL.
+Recognition covers finite physical generations from `c8c502cd4`, `79f2a7b52`, `44d036256` and `35e443fc6`, the additive backoff columns introduced by `3fbe834cc`, and their pre-queue variants. Partial field groups, unknown constraints/columns/indexes, dependent views/triggers/foreign keys, temporary shadows and unreceipted archives refuse the transition. Recognition preserves quoted tokens and string literals, matching the schema inventory. Case-insensitive SQLite identifiers are checked before DDL.
 
 A receipt replay validates the selected transition, exact checksum/order and current/archive shapes. It preserves receipt timestamps, unrelated owners' receipts and subsequent polling/queue updates. Copy, receipt and caller-transaction failures roll back together.
 

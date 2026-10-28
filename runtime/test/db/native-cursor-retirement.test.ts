@@ -115,6 +115,7 @@ test('caller rollback includes the entire nested migration, and a later attempt 
 for (const [label, change] of [
   ['unknown column', 'ALTER TABLE chat_cursors ADD COLUMN mystery TEXT'],
   ['partial historical group', 'ALTER TABLE chat_cursors DROP COLUMN preflight_prev_ts'],
+  ['unregistered quoted column spelling', 'ALTER TABLE chat_cursors RENAME COLUMN queued_followups_json TO "temporary_payload"; ALTER TABLE chat_cursors RENAME COLUMN temporary_payload TO "queued_followups_json"'],
   ['unowned index', 'CREATE INDEX extra_cursor_index ON chat_cursors(cursor_ts)'],
   ['inbound foreign key', 'CREATE TABLE dependent(chat TEXT REFERENCES chat_cursors(chat_jid))'],
   ['uppercase inbound foreign key', 'CREATE TABLE dependent(chat TEXT REFERENCES CHAT_CURSORS(chat_jid))'],
@@ -129,6 +130,7 @@ for (const [label, change] of [
   ['unreceipted archive', `CREATE TABLE ${legacyCursorArchive}(untouched TEXT)`],
 ] as const) test(`unknown ${label} refuses retirement without changing original schema/data/receipts`, () => fixture(db => {
   seed(db); db.exec(change); const before = snapshot(db);
+  if (label === 'unregistered quoted column spelling') expect((db.query("SELECT sql FROM sqlite_schema WHERE name='chat_cursors'").get() as {sql:string}).sql).toContain('"queued_followups_json"');
   expect(() => initializeChatCursorStorage(db)).toThrow('Unsupported chat cursor');
   expect(snapshot(db)).toEqual(before);
 }));
