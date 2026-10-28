@@ -1,5 +1,8 @@
-import { isOrphanFunctionCallOutputError } from "../utils/provider-payload-errors.js";
-import type { AgentFailureCategory } from "./contracts.js";
+// Historical opaque-string regression oracle, excluded from production.
+// Original: fc587de57 runtime/src/agent-pool/recovery-classification.ts.
+// Its 57 moved physical / 51 nonblank lines receive no reduction credit.
+import { isOrphanFunctionCallOutputError } from "../../src/utils/provider-payload-errors.js";
+import type { AgentFailureCategory } from "../../src/agent-pool/contracts.js";
 
 export function isContextPressureFailure(errorText: string | null | undefined): boolean {
   if (!errorText) return false;

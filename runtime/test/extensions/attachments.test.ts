@@ -145,7 +145,7 @@ test("attach_file reports missing file", async () => {
   expect(result.content[0].text).toContain("File not found");
 });
 
-test("web processChat stores attachment content blocks", async () => {
+test("accepted web publisher stores attachment content blocks through the current message store", async () => {
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
@@ -177,11 +177,11 @@ test("web processChat stores attachment content blocks", async () => {
     // Publisher double only; native source identity/settlement is separately qualified.
     dispatchAcceptedInput: (chatJid:string,messageId:string,rowId:number)=>async()=>{
       expect(db.getMessageRowIdById(chatJid,messageId)).toBe(rowId);
-      const {storeAgentTurn}=await import("../../src/channels/web/messaging/agent-message-store.js");
-      const stored=storeAgentTurn(web,{response:()=>{}} as any,{chatJid,text:"Here is the report.",channelName:"web",threadId:rowId,
-        attachments:[{id:mediaId,name:"report.txt",contentType:"text/plain",size:6,kind:"file",sourcePath:"/tmp/report.txt"}],
-        isTerminalAgentReply:true,dispatchWebPushNotification:async()=>{}});
-      expect(stored).toBeGreaterThan(0);return "settled" as const;
+      const stored = web.storeMessage(chatJid, "Here is the report.", true, [mediaId], {
+        threadId: rowId, isTerminalAgentReply: true,
+        contentBlocks: [{ type: "file", name: "report.txt", filename: "report.txt", mime_type: "text/plain", size: 6 }],
+      });
+      expect(stored?.id).toBeGreaterThan(0); return "settled" as const;
     },
     queue: { enqueue: () => {} },
     agentPool: {
