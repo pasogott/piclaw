@@ -107,7 +107,7 @@ export function createHostProcessControls(options: Options) {
     name, description: name === "session_status" ? "Check authoritative global native activity and whether a restart can be requested. Read-only; no legacy sessions."
       : "Request graceful Piclaw exit after this exact operation is persisted and native cleanup is confirmed. Must be the only tool in the round. Other work refuses the request; no replay or forced interruption.",
     parameters: name === "session_status" ? Type.Object({ action: Type.Optional(Type.Union([Type.Literal("list"), Type.Literal("check")])) })
-      : Type.Object({ reason: Type.String({ minLength: 1, maxLength: 512, pattern: "\\S" }), resume_message: Type.Optional(Type.String()) }),
+      : Type.Object({ reason: Type.String({ minLength: 1, maxLength: 512, pattern: "\\S" }) }),
     callers: ["model"], replay: "unsafe", executionMode: "sequential",
     async execute(args: any, api, context) {
       const fail = (message: string) => ({ output: [{ type: "text" as const, text: message }], isError: true,

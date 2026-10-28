@@ -8,7 +8,7 @@ import { storeChatMetadata } from "../../runtime/src/db.js";
 import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
-import { createProvider, type AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
+import { createProvider, getCurrentTools, type AssistantMessage, type TranscriptContext } from "../../runtime/durable-engine/qualification/ai.ts";
 import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
 import { createRegistry, defineExtension } from "../../runtime/durable-engine/qualification/durable.ts";
 import { applicationOwnership, createApplicationBootstrapBundle } from "../../runtime/durable-engine/src/application-bootstrap.js";
@@ -35,7 +35,10 @@ for (const scenario of ["success", "siblings", "materialization-recovery", "alte
     const model = { provider: "qualification", id: "synthetic", name: "Synthetic", api: "openai-completions" as const,
       baseUrl: "https://invalid.invalid", reasoning: false, input: ["text" as const], contextWindow: 100000, maxTokens: 100,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-    const stream = () => {
+    const advertised: ReturnType<typeof getCurrentTools> = [];
+    const stream = (_model: unknown, request: TranscriptContext) => {
+      const exit = getCurrentTools(request.messages).find(tool => tool.name === "exit_process");
+      if (exit) advertised.push(exit);
       calls++;
       const output = new AssistantMessageEventStream();
       const first = calls === 1;
@@ -100,14 +103,21 @@ for (const scenario of ["success", "siblings", "materialization-recovery", "alte
       expect(stored).not.toBeNull();
       const message = root.query("SELECT rowid,id FROM messages WHERE chat_jid=? AND is_bot_message=0").get(chat) as any;
       const dispatch = bundle!.dispatchAcceptedInput(chat, message.id, message.rowid)!;
+      const outcome = await dispatch();
+      expect(advertised).toHaveLength(calls); expect(advertised.length).toBeGreaterThan(0);
+      for (const tool of advertised) {
+        const schema = JSON.parse(JSON.stringify(tool.parameters));
+        expect(Object.keys(schema.properties)).toEqual(["reason"]);
+        expect(schema.required).toEqual(["reason"]);
+      }
       if (scenario === "altered-result") {
-        expect(await dispatch()).toBe("pending");
+        expect(outcome).toBe("pending");
         expect(deferred).toHaveLength(0); expect(shutdowns).toHaveLength(0);
         expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
         expect(calls).toBe(1); return;
       }
       if (scenario === "materialization-recovery") {
-        expect(await dispatch()).toBe("pending");
+        expect(outcome).toBe("pending");
         expect(calls).toBe(1); expect(deferred).toHaveLength(0); expect(shutdowns).toHaveLength(0);
         await bundle!.close(); failMaterialization = false;
         await boot();
@@ -115,7 +125,7 @@ for (const scenario of ["success", "siblings", "materialization-recovery", "alte
         const again = bundle!.dispatchAcceptedInput(chat, message.id, message.rowid);
         if (again) expect(await again()).toBe("settled");
         expect(deferred).toHaveLength(0); expect(shutdowns).toHaveLength(0); expect(calls).toBe(1);
-      } else expect(await dispatch()).toBe("settled");
+      } else expect(outcome).toBe("settled");
       const posts = root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat);
       expect(posts).toEqual([{ content: scenario === "siblings" ? "Exit refused; sibling finished normally" : nativeExitNotice(reason) }]);
       expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
