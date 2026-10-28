@@ -15,9 +15,9 @@ const defaultValue = (value: string | null) => {
   return text;
 };
 
-/** Compatibility bridge for the two selected pre-ledger core helpers. New
- * stable schema changes belong in the existing owned migration ledger. */
-export function ensureLegacyColumns(database: Database, table: "messages" | "keychain_entries", columns: readonly LegacyColumn[]): void {
+/** Compatibility bridge for selected pre-ledger core columns. New stable
+ * schema changes belong in the existing owned migration ledger. */
+export function ensureLegacyColumns(database: Database, table: "messages" | "keychain_entries" | "web_sessions", columns: readonly LegacyColumn[]): void {
   const inspect = (): ColumnInfo[] => {
     try { return database.prepare(`PRAGMA table_xinfo(${table})`).all() as ColumnInfo[]; }
     catch { throw Error(`Cannot inspect legacy schema postconditions: ${table}.`); }
