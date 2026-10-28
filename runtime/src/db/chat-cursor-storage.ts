@@ -4,7 +4,27 @@ import { applyOwnedMigrations, type OwnedSchemaMigration } from './migrations.js
 export const legacyCursorArchive = 'host_legacy_chat_cursor_state_v1';
 const owner = 'host.chat-cursors';
 // Recognition only. Neither migration nor native dispatch interprets these values.
+const operationFields: Record<string, 'TEXT' | 'INTEGER'> = {
+  operation_id: 'TEXT', operation_source_seq: 'INTEGER', operation_phase: 'TEXT', operation_generation: 'INTEGER',
+  operation_cancel_cause: 'TEXT', operation_cancel_requested_at: 'TEXT', operation_settling_fence_id: 'TEXT', operation_settling_fenced_at: 'TEXT',
+};
+// Exact owner guards captured with the complete S01 cursor generation. Unknown
+// dependencies remain fatal; these obsolete guards are removed only atomically
+// with the archived table and the distinct owned-migration receipt.
+const operationGuards: Record<string, string> = {
+  chat_cursors_legacy_owner_exclusion: `CREATE TRIGGER chat_cursors_legacy_owner_exclusion
+    BEFORE UPDATE OF cursor_ts, preflight_prev_ts, preflight_message_id, preflight_started_at,
+      inflight_prev_ts, inflight_message_id, inflight_started_at,
+      failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at,
+      compaction_active_started_at, compaction_active_reason
+    ON chat_cursors WHEN old.operation_id IS NOT NULL AND new.operation_id IS NOT NULL
+    BEGIN SELECT RAISE(ABORT, 'active operation excludes legacy ownership mutation'); END`,
+  chat_cursors_active_owner_delete_exclusion: `CREATE TRIGGER chat_cursors_active_owner_delete_exclusion
+    BEFORE DELETE ON chat_cursors WHEN old.operation_id IS NOT NULL
+    BEGIN SELECT RAISE(ABORT, 'active operation excludes cursor deletion'); END`,
+};
 const retired: Record<string, 'TEXT' | 'INTEGER'> = {
+  ...operationFields,
   preflight_prev_ts: 'TEXT', preflight_message_id: 'TEXT', preflight_started_at: 'TEXT',
   inflight_prev_ts: 'TEXT', inflight_message_id: 'TEXT', inflight_started_at: 'TEXT',
   failed_prev_ts: 'TEXT', failed_ts: 'TEXT', failed_message_id: 'TEXT', failed_thread_root: 'INTEGER', failed_created_at: 'TEXT',
@@ -20,16 +40,20 @@ const historicalShapes = [['inflight_', 'failed_'], ['preflight_', 'inflight_', 
   ['preflight_', 'inflight_', 'failed_', 'compaction_active_', 'auto_compaction_']]
   .flatMap(prefixes => [prefixes, [...prefixes, 'compaction_failure_', 'compaction_last_', 'compaction_backoff_']])
   .map(prefixes => Object.keys(retired).filter(name => prefixes.some(prefix => name.startsWith(prefix))).sort().join(','));
+// One additional finite generation: all historical fields plus all eight S01 fields.
+historicalShapes.push(Object.keys(retired).sort().join(','));
 const activeCursorSql = "CREATE TABLE main.chat_cursors (chat_jid TEXT PRIMARY KEY, cursor_ts TEXT NOT NULL DEFAULT '', queued_followups_json TEXT)";
 const fresh: OwnedSchemaMigration = { owner, id: 'polling-frontier-v1', order: 1, sql: activeCursorSql };
 /** Exact pre-queue/current historical variants. ALTER retains original schema,
  * column order, rowids and every value; copy advances no execution frontier. */
-function retirement(hadQueue: boolean): OwnedSchemaMigration {
-  return { owner, id: hadQueue ? 'native-frontier-v1' : 'native-frontier-prequeue-v1', order: 1,
+function retirement(hadQueue: boolean, guardedOperation = false): OwnedSchemaMigration {
+  if (guardedOperation && !hadQueue) fail();
+  const migration: OwnedSchemaMigration = { owner, id: hadQueue ? 'native-frontier-v1' : 'native-frontier-prequeue-v1', order: 1,
     sql: `ALTER TABLE main.chat_cursors RENAME TO ${legacyCursorArchive};
 ${activeCursorSql};
 INSERT INTO main.chat_cursors(rowid,chat_jid,cursor_ts,queued_followups_json)
   SELECT rowid,chat_jid,cursor_ts,${hadQueue ? 'queued_followups_json' : 'NULL'} FROM main.${legacyCursorArchive} ORDER BY rowid;` };
+  return guardedOperation ? { ...migration, id: 'native-frontier-s01-owner-v1', sql: Object.keys(operationGuards).map(name => `DROP TRIGGER main.${name};`).join('\n') + '\n' + migration.sql } : migration;
 }
 interface Column { name: string; type: string; notnull: number; dflt_value: string | null; pk: number; hidden: number }
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -74,14 +98,22 @@ function assertShape(db: Database, name: string, active: boolean): Column[] {
   if (indexes.some(index => index.origin !== 'pk')) fail();
   return rows;
 }
-function assertNoDependents(db: Database): void {
+function assertNoDependents(db: Database, guardedOperation = false): void {
+  const recognised = new Set<string>();
   for (const schema of ['main', 'temp']) {
     const objects = schema === 'main' ? 'main.sqlite_schema' : 'sqlite_temp_schema';
-    if (db.query(`SELECT 1 FROM ${objects} WHERE type IN ('trigger','view') AND
-      (tbl_name='chat_cursors' COLLATE NOCASE OR instr(lower(coalesce(sql,'')),'chat_cursors')>0 OR instr(lower(coalesce(sql,'')),?)>0) LIMIT 1`).get(legacyCursorArchive)) fail();
+    const dependents = db.query(`SELECT type,name,tbl_name,sql FROM ${objects} WHERE type IN ('trigger','view') AND
+      (tbl_name='chat_cursors' COLLATE NOCASE OR instr(lower(coalesce(sql,'')),'chat_cursors')>0 OR instr(lower(coalesce(sql,'')),?)>0)`).all(legacyCursorArchive) as {type:string;name:string;tbl_name:string;sql:string}[];
+    for (const dependent of dependents) {
+      const name = dependent.name.toLowerCase();
+      if (!guardedOperation || schema !== 'main' || dependent.type !== 'trigger' || dependent.tbl_name.toLowerCase() !== 'chat_cursors' ||
+        !Object.hasOwn(operationGuards, name) || normalise(dependent.sql) !== normalise(operationGuards[name]!)) fail();
+      recognised.add(name);
+    }
     if (db.query(`SELECT 1 FROM ${objects} s,pragma_foreign_key_list(s.name,?) f
       WHERE s.type='table' AND lower(f."table") IN ('chat_cursors',?) LIMIT 1`).get(schema, legacyCursorArchive)) fail();
   }
+  if (guardedOperation && recognised.size !== Object.keys(operationGuards).length) fail();
 }
 /** Caller owns the root connection. A nested call is a savepoint; failed
  * recognition, copy, receipt or postcondition rolls back all retirement work.
@@ -92,18 +124,20 @@ export function initializeChatCursorStorage(db: Database): void {
     const archive = sql(db, legacyCursorArchive), current = sql(db, 'chat_cursors');
     const ledger = db.query("SELECT 1 FROM main.sqlite_schema WHERE name='piclaw_schema_migrations' COLLATE NOCASE").get();
     const receipt = ledger ? db.query('SELECT id FROM main.piclaw_schema_migrations WHERE owner=?').all(owner) as { id: string }[] : [];
-    assertNoDependents(db);
+    const original = current && receipt.length === 0 ? assertShape(db, 'chat_cursors', false) : null;
+    const guardedOperation = original?.some(row => row.name === 'operation_id') ?? false;
+    assertNoDependents(db, guardedOperation);
     if (receipt.length) {
       if (receipt.length !== 1) fail();
       assertShape(db, 'chat_cursors', true);
-      const migration = archive ? retirement(assertShape(db, legacyCursorArchive, false).some(row => row.name === 'queued_followups_json')) : fresh;
+      const archived = archive ? assertShape(db, legacyCursorArchive, false) : null;
+      const migration = archived ? retirement(archived.some(row => row.name === 'queued_followups_json'), archived.some(row => row.name === 'operation_id')) : fresh;
       if (receipt[0]?.id !== migration.id) fail();
       applyOwnedMigrations(db, [migration]);
       return;
     }
     if (archive) fail(); // Unreceipted evidence is never overwritten or adopted.
-    const original = current ? assertShape(db, 'chat_cursors', false) : null;
-    applyOwnedMigrations(db, [original ? retirement(original.some(row => row.name === 'queued_followups_json')) : fresh]);
+    applyOwnedMigrations(db, [original ? retirement(original.some(row => row.name === 'queued_followups_json'), guardedOperation) : fresh]);
     assertShape(db, 'chat_cursors', true);
     if (original) assertShape(db, legacyCursorArchive, false);
   }).immediate();
