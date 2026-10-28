@@ -89,11 +89,11 @@ test("all seven shipped consumers admit actual native startup and Restic effects
     expect(await denied!.json()).toEqual({ error: "Authenticated configuration owner required" });
     const kv = getExtensionKvStore();
     const probe = registerOwnedAddonConfigApi("observability", "authority-regression", {
-      async get() { await Promise.resolve(); kv.set("observability", "authority-probe", true, "global"); },
+      async get() { await Promise.resolve(); await kv.write!("observability", () => kv.set("observability", "authority-probe", true, "global")); },
       async set(payload, request) {
         await Promise.resolve();
         if (payload === "expire") controllers.get(request)!.abort();
-        kv.set(payload === "cross-namespace" ? "goal" : "observability", "authority-probe", true, "global");
+        await kv.write!("observability", () => kv.set(payload === "cross-namespace" ? "goal" : "observability", "authority-probe", true, "global"));
       },
     }, "synthetic-authority-regression");
     const controllers = new WeakMap<Request, AbortController>();

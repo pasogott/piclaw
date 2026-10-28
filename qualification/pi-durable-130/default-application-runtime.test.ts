@@ -576,6 +576,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     automaticCaptureSpy = spy;
   }
   let realRunCaptures = 0, realToolCaptures = 0;
+  const runCaptureStacks: string[] = [];
   let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
   if(scenario==='native-dream-runner-held-tool'){
@@ -607,7 +608,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureRun.apply(this, args);
-      realRunCaptures++;
+      realRunCaptures++; runCaptureStacks.push(new Error("Run source capture").stack!);
       expect(captured.operation.chatJid).toBe("web:default");
       const readonly = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner(), true);
       readonly.assertCurrent();
@@ -2136,19 +2137,19 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     const api = await import(join(reviewPackage, "runtime.ts"));
     const service = api.reviewService();
     expect(service.database.db).toBe(root);
-    const request = new Request("http://fixture/agent/addons/api/code-review/action", { method: "POST" });
-    admitAddonLocalRequest(request, { userId: "default", mode: "single-user" } as any, () => true);
+    const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
     let review: any, thread: any;
     writeFileSync(join(workspace, "review-source.ts"), "const saved = true;\n");
-    await withAddonLocalRequest(request, async ctx => {
-      expect(ctx!.ownerId).toBe("default");
-      const invoke = async (body: unknown) => {
-        const response = await api.handleReviewRequest(body, request, ctx);
-        expect(response.ok).toBe(true); return response.result;
-      };
-      review = await invoke({ action: "create", path: "review-source.ts", title: "Native review", target: { chatId: "web:default" }, requestId: "review-create" });
-      thread = await invoke({ action: "comment", reviewId: review.reviewId, fileId: review.files[0], side: "source", body: "NATIVE_SAVED_REVIEW_THREAD", requestId: "review-comment" });
-    });
+    const invoke = async (body: unknown) => {
+      const request = new Request("http://fixture/agent/addons/api/code-review/action", {method:"POST",body:JSON.stringify(body)});
+      admitAddonLocalRequest(request, {userId:"default",mode:"single-user"} as any, () => !request.signal.aborted);
+      const response = await handleRegisteredAddonConfigApiRequest(request,"code-review","action",(body,status=200)=>Response.json(body,{status}));
+      expect(response).not.toBeNull();
+      const receipt = await response!.json() as {ok:boolean;result:any};
+      expect(receipt.ok, JSON.stringify(receipt)).toBe(true); return receipt.result;
+    };
+    review = await invoke({ action: "create", path: "review-source.ts", title: "Native review", target: { chatId: "web:default" }, requestId: "review-create" });
+    thread = await invoke({ action: "comment", reviewId: review.reviewId, fileId: review.files[0], side: "source", body: "NATIVE_SAVED_REVIEW_THREAD", requestId: "review-comment" });
     const target = { chatId: "web:default", incarnation: first!.branchId, label: "Default" };
     const who = { ownerId: "default", actorId: "default", kind: "operator", workspaceId: createHash("sha256").update(workspace).digest("hex") };
     const submitted = service.submit(who, review.reviewId, { target, items: [{ threadId: thread.threadId, version: 1 }] }, { requestId: "review-send" });
@@ -3228,7 +3229,9 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   }
   if (nativePlan) {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 7 : 4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    // Each model tool also has one source capture in the shared background-policy beforeTool guard.
+    expect(runCaptureStacks.filter(stack => stack.includes("capturePendingToolSource")).length).toBe(scenario === "native-codemode-plan-goal" ? 2 : 1);
+    expect(realRunCaptures, runCaptureStacks.join("\n\n")).toBe(scenario === "native-codemode-plan-goal" ? 8 : 5); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");
