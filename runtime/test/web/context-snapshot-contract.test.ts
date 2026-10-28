@@ -3,7 +3,6 @@ import {
   getContextUsageRevision,
   mergeContextUsage,
   normalizeContextUsage,
-  persistContextUsage,
   reconcileContextUsageForChat,
   refreshContextUsageForChat,
   resetContextSessionGenerationsForTests,
@@ -54,10 +53,9 @@ test('same-identity reset clears meters even for the older explicit reset envelo
     .toMatchObject({ tokens: null, percent: null, sessionGeneration: 'stable-session', cacheUsage: previous?.cacheUsage });
 });
 
-test('authoritative polling replaces and persists stale same-session estimates before reload/restore', async () => {
+test('authoritative polling replaces only the current page revision without persisting estimates', async () => {
   memoryStorage();
   let state = reconcileContextUsageForChat('chat:poll', null, oldUsage, { authoritative: true });
-  persistContextUsage('chat:poll', state);
   expect(restoreContextUsage('chat:poll')?.tokens).toBe(777);
   await refreshContextUsageForChat({
     currentChatJid: 'chat:poll', activeChatJidRef: { current: 'chat:poll' }, getAgentContext: async () => unknown,
@@ -67,11 +65,11 @@ test('authoritative polling replaces and persists stale same-session estimates b
   expect(restoreContextUsage('chat:poll')).toEqual(state);
 });
 
-test('an unchanged unknown boundary fences a late poll and replaces stale storage without a render', async () => {
+test('an unchanged unknown boundary fences a late poll without reviving historical storage', async () => {
   memoryStorage();
   let state = reconcileContextUsageForChat('chat:race', null, unknown, { authoritative: true });
   // Simulate a stale cached value surviving a previous storage write failure.
-  persistContextUsage('chat:race', oldUsage);
+  (globalThis as any).window.localStorage.setItem('piclaw:ctx:chat:race',JSON.stringify(oldUsage));
   let resolve!: (value: unknown) => void;
   const response = new Promise<unknown>(done => { resolve = done; });
   const pending = refreshContextUsageForChat({

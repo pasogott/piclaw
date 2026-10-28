@@ -33,6 +33,7 @@ export interface TokenUsageSummary {
 }
 
 export interface AgentContext {
+  contextUpdate?: "replace";
   sessionGeneration?: string | null;
   tokens: number | null;
   contextWindow: number;

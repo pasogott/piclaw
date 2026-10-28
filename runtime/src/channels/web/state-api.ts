@@ -82,23 +82,12 @@ export async function buildPiclawStateSnapshot(channel: WebChannelLike): Promise
     const record = chat as unknown as Record<string, unknown>;
     const chatJid = String(record.chat_jid || "").trim();
     if (!chatJid) continue;
-    let runtimeReadFailed = false;
-    const runtimeContext = await channel.agentPool.getContextUsageForChat(chatJid).catch(() => { runtimeReadFailed = true; return null; });
-    const storedContext = runtimeReadFailed ? null : channel.getContextUsage(chatJid);
-    const currentGeneration = (typeof channel.agentPool.getSessionGenerationForChat === "function"
-      ? channel.agentPool.getSessionGenerationForChat(chatJid)
-      : null)
-      ?? (typeof record.session_id === "string" ? record.session_id : null)
-      ?? (typeof runtimeContext?.sessionGeneration === "string" ? runtimeContext.sessionGeneration : null);
-    const runtimeGeneration = typeof runtimeContext?.sessionGeneration === "string" ? runtimeContext.sessionGeneration : null;
-    const storedGeneration = typeof storedContext?.sessionGeneration === "string" ? storedContext.sessionGeneration : null;
-    const context = runtimeContext && (!runtimeGeneration || !currentGeneration || runtimeGeneration === currentGeneration)
-      ? { ...runtimeContext, ...(currentGeneration ? { sessionGeneration: currentGeneration } : {}) }
-      : storedContext && (!currentGeneration || storedGeneration === currentGeneration)
-        ? storedContext
-        : currentGeneration
-          ? { tokens: null, contextWindow: null, percent: null, sessionGeneration: currentGeneration }
-          : null;
+    const generation = () => channel.agentPool.getSessionGenerationForChat?.(chatJid) ?? null;
+    const before = generation();
+    const runtimeContext = await channel.agentPool.getContextUsageForChat(chatJid).catch(() => null);
+    const current = generation();
+    const context = before === current && runtimeContext && (!current || runtimeContext.sessionGeneration === current)
+      ? runtimeContext : current ? {tokens:null,contextWindow:null,percent:null,sessionGeneration:current,contextUpdate:'replace'} : null;
     chats.push({
       chat_jid: chatJid,
       agent_name: typeof record.agent_name === "string" ? record.agent_name : null,

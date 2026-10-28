@@ -7,6 +7,7 @@ test("public conversation frames feed existing thought, draft and nested tool UI
   const database = new Database(":memory:");
   try {
     database.exec(`CREATE TABLE piclaw_durable_bindings_v1(operation_id,source_seq,source_id,chat_jid,conversation_id,submission_id);
+      CREATE TABLE piclaw_durable_intent_bindings_v1(operation_id,chat_jid,conversation_id,submission_id);
       CREATE TABLE service_effect_s01_operations(operation_id,primary_source_seq);
       CREATE TABLE messages(id,chat_jid,thread_id);
       INSERT INTO service_effect_s01_operations VALUES('op',1);
@@ -33,6 +34,7 @@ test("coalesced completed entries recover thoughts and final tool output without
   const database = new Database(":memory:");
   try {
     database.exec(`CREATE TABLE piclaw_durable_bindings_v1(operation_id,source_seq,source_id,chat_jid,conversation_id,submission_id);
+      CREATE TABLE piclaw_durable_intent_bindings_v1(operation_id,chat_jid,conversation_id,submission_id);
       CREATE TABLE service_effect_s01_operations(operation_id,primary_source_seq); CREATE TABLE messages(id,chat_jid,thread_id);
       INSERT INTO service_effect_s01_operations VALUES('op',1); INSERT INTO messages VALUES('input','chat',NULL);
       INSERT INTO piclaw_durable_bindings_v1 VALUES('op',1,'input','chat',2,3);`);
@@ -60,6 +62,7 @@ test("native retries use the existing intent/countdown panel after tool output a
   const database=new Database(":memory:");
   try {
     database.exec(`CREATE TABLE piclaw_durable_bindings_v1(operation_id,source_seq,source_id,chat_jid,conversation_id,submission_id);
+      CREATE TABLE piclaw_durable_intent_bindings_v1(operation_id,chat_jid,conversation_id,submission_id);
       CREATE TABLE service_effect_s01_operations(operation_id,primary_source_seq);
       CREATE TABLE messages(id,chat_jid,thread_id);
       INSERT INTO service_effect_s01_operations VALUES('op',1);
@@ -97,6 +100,7 @@ test("native retry projection tolerates unavailable delay metadata before the fi
   const database=new Database(":memory:");
   try {
     database.exec(`CREATE TABLE piclaw_durable_bindings_v1(operation_id,source_seq,source_id,chat_jid,conversation_id,submission_id);
+      CREATE TABLE piclaw_durable_intent_bindings_v1(operation_id,chat_jid,conversation_id,submission_id);
       CREATE TABLE service_effect_s01_operations(operation_id,primary_source_seq);
       CREATE TABLE messages(id,chat_jid,thread_id);
       INSERT INTO service_effect_s01_operations VALUES('op',1);

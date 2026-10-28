@@ -77,7 +77,6 @@ export interface WebServerLifecycleGatewayDeps extends JsonResponder {
   webRuntimeConfig: {
     terminalEnabled: boolean;
   };
-  loadState(): void;
   initTheme(): void;
   handleRequest(req: Request): Promise<Response>;
   startWorkspaceWatcher(): WatcherLike;
@@ -99,7 +98,6 @@ export interface WebServerLifecycleGatewayDeps extends JsonResponder {
 
 export interface WebServerLifecycleGatewayChannel extends JsonResponder, WorkspaceWatcherChannel {
   syncWorkspaceWatcher?(): void;
-  loadState(): void;
   handleRequest(req: Request): Promise<Response>;
   authGateway: AuthGatewayLike;
   terminalService: TerminalServiceLike;
@@ -115,7 +113,6 @@ export function createWebServerLifecycleGateway(
   return new WebServerLifecycleGatewayService({
     ...configs,
     json: (payload, status = 200) => channel.json(payload, status),
-    loadState: () => channel.loadState(),
     initTheme: () => initTheme(),
     handleRequest: (req) => channel.handleRequest(req),
     startWorkspaceWatcher: () => startWorkspaceWatcher(channel),
@@ -163,7 +160,6 @@ export class WebServerLifecycleGatewayService {
 
   private async startResources(): Promise<void> {
     if (!this.accepting) return;
-    this.deps.loadState();
     try {
       this.deps.initTheme();
     } catch (err) {

@@ -11,7 +11,6 @@ import {
   refreshQueueStateForChat,
   resetContextSessionGenerationsForTests,
   reconcileContextUsageForChat,
-  persistContextUsage,
   restoreContextUsage,
 } from '../../web/src/ui/app-status-refresh-orchestration.js';
 
@@ -288,12 +287,7 @@ test('restoreContextUsage rejects local storage from a replaced session generati
       percent: 95,
       sessionGeneration: 'session-old',
     }, { authoritative: true });
-    persistContextUsage('chat:alpha', {
-      tokens: 95000,
-      contextWindow: 100000,
-      percent: 95,
-      sessionGeneration: 'session-old',
-    });
+    storage.set('piclaw:ctx:chat:alpha',JSON.stringify({tokens:95000,sessionGeneration:'session-old'}));
     reconcileContextUsageForChat('chat:alpha', null, {
       tokens: null,
       contextWindow: 100000,

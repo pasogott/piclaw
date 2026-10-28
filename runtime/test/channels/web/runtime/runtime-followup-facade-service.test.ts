@@ -157,8 +157,7 @@ describe("WebChannel runtime/follow-up facade service", () => {
     expect(service.getThreadRootId("web:test", "m-1")).toBe(55);
     service.resumeChat("web:test", 12);
     service.resumePendingChats("web:test");
-    service.loadState();
-    service.saveState();
+    expect(service).not.toHaveProperty('loadState');expect(service).not.toHaveProperty('saveState');
     service.setPanelExpanded("turn-1", "draft", true);
     expect(service.isPanelExpanded("turn-1", "draft")).toBe(true);
     service.updateThoughtBuffer("turn-1", "thought text", 3);
@@ -196,8 +195,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
       "thread-root:web:test:m-1",
       "resume:web:test:12",
       "resume-pending:web:test",
-      "load",
-      "save",
       "panel-set:turn-1:draft:true",
       "panel-get:turn-1:draft",
       "thought:turn-1:thought text:3",

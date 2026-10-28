@@ -32,7 +32,7 @@ Status reads and `/agent/runs` do not derive activity from preflight/inflight ma
 
 A native fault fixture commits the answer/terminal ledger, rejects the polling cursor write, then closes/reopens the disposable store and repeats startup wakeups. The same source/submission/task identities, answer, historical markers and provider-call count survive; only the polling cursor advances after confirmed observation. This is deterministic fault/reopen evidence, not a live-service restart or unclean-process-kill claim.
 
-#1673 owns final runner/compaction retirement. #1691/#1692 own subsequent schema/projection removals and residual historical JSON preservation. Source deletion does not authorise live data cleanup, migration, deployment or restart.
+#1673 owns final runner/compaction retirement. #1691 owns subsequent schema removals. [Native web UI observations](native-ui-projections.md) records #1692's projection retirement and residual historical JSON preservation. Source deletion does not authorise live data cleanup, migration, deployment or restart.
 
 ## Focused evidence
 

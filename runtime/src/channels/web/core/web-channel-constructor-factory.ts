@@ -88,7 +88,6 @@ export interface WebChannelConstructorFactoryChannel {
   json(payload: unknown, status?: number): Response;
   broadcastEvent(eventType: string, data: unknown): void;
   handleRequest(req: Request): Promise<Response>;
-  loadState(): void;
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void>;
   storeMessage(
     chatJid: string,
@@ -110,7 +109,6 @@ export interface WebChannelConstructorFactoryChannel {
 export interface WebChannelConstructorFactoryDefaults {
   defaultChatJid: string;
   defaultAgentId: string;
-  stateKey: string;
 }
 
 export interface WebChannelConstructorFactoryRuntimeOpts {
@@ -298,7 +296,6 @@ export function createWebChannelConstructorFactory(
     },
     {
       defaultAgentId: options.defaultAgentId,
-      stateKey: options.stateKey,
     },
   );
 
@@ -387,7 +384,6 @@ export function createWebChannelConstructorFactory(
   const serverLifecycleGateway = deps.createServerLifecycleGateway(
     {
       json: (payload, status = 200) => channel.json(payload, status),
-      loadState: () => channel.loadState(),
       handleRequest: (req) => channel.handleRequest(req),
       authGateway,
       terminalService: channel.terminalService,

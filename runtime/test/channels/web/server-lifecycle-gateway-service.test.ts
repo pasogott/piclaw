@@ -639,7 +639,7 @@ describe("web server lifecycle gateway service", () => {
 
     await fixture.service.start();
 
-    expect(fixture.state.loadStateCalls).toBe(1);
+    expect(fixture.state.loadStateCalls).toBe(0);
     expect(fixture.state.initThemeCalls).toBe(1);
     expect(fixture.state.serveAttempts).toBe(2);
     expect(fixture.state.sleepCalls).toEqual([1500]);

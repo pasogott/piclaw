@@ -42,15 +42,11 @@ type RuntimeFollowupRuntimeState = Pick<
   | "getThreadRootId"
   | "resumeChat"
   | "resumePendingChats"
-  | "loadState"
-  | "saveState"
   | "setPanelExpanded"
   | "isPanelExpanded"
   | "updateThoughtBuffer"
   | "updateDraftBuffer"
   | "getBuffer"
-  | "setContextUsage"
-  | "getContextUsage"
 >;
 
 export interface WebChannelRuntimeFollowupFacadeServiceDeps {
@@ -152,14 +148,6 @@ export class WebChannelRuntimeFollowupFacadeService {
     return this.deps.getRuntimeState().getAgentStatus(chatJid);
   }
 
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void {
-    this.deps.getRuntimeState().setContextUsage(chatJid, usage);
-  }
-
-  getContextUsage(chatJid: string): Record<string, unknown> | null {
-    return this.deps.getRuntimeState().getContextUsage(chatJid);
-  }
-
   replaceQueuedFollowupPlaceholder(
     chatJid: string,
     rowId: number,
@@ -190,14 +178,6 @@ export class WebChannelRuntimeFollowupFacadeService {
 
   resumePendingChats(chatJid?: string): void {
     this.deps.getRuntimeState().resumePendingChats(chatJid);
-  }
-
-  loadState(): void {
-    this.deps.getRuntimeState().loadState();
-  }
-
-  saveState(): void {
-    this.deps.getRuntimeState().saveState();
   }
 
   setPanelExpanded(turnId: string, panel: "thought" | "draft", expanded: boolean): void {

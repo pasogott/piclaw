@@ -5,6 +5,7 @@ import { ComposeBox } from '../../../web/src/components/compose-box.js';
 import { handleMessageResponseRefresh } from '../../../web/src/ui/app-auth-bootstrap.js';
 import { isCompactionStatus } from '../../../web/src/ui/status-duration.js';
 import { useAgentState } from '../../../web/src/ui/use-agent-state.js';
+import { restoreContextUsage } from '../../../web/src/ui/app-status-refresh-orchestration.js';
 
 // Real lifecycle hook, same bundled Preact as Classic. Only transport is gated.
 function Fixture() {
@@ -14,12 +15,14 @@ function Fixture() {
   const [connection, setConnection] = useState('connected');
   const agentStatusRef = useRef<any>(null);
   const requests = useRef<Array<(value: any) => void>>([]);
+  const contextRequests = useRef<Array<(value: any) => void>>([]);
+  const [contextUsage, setContextUsage] = useState(() => restoreContextUsage('web:hook-fixture'));
   const noop = () => {};
   const lifecycle = useAgentStatusLifecycle({
     currentChatJid: 'web:hook-fixture', activeChatJidRef: useRef('web:hook-fixture'),
     queueRefreshGenRef: useRef(0), dismissedQueueRowIdsRef: useRef(new Set()),
     getAgentQueueState: async () => ({}), setFollowupQueueItems: noop, clearQueuedSteerStateIfStale: noop,
-    getAgentContext: null, setContextUsage: noop, getAutoresearchStatus: null,
+    getAgentContext: () => new Promise(resolve => { contextRequests.current.push(resolve); }), setContextUsage, getAutoresearchStatus: null,
     setExtensionStatusPanels: noop, setPendingExtensionPanelActions: noop,
     getAgentStatus: () => new Promise(resolve => { requests.current.push(resolve); }),
     wasAgentActiveRef: useRef(false), viewStateRef: useRef(null), refreshTimeline: async () => {},
@@ -73,15 +76,18 @@ function Fixture() {
       return result;
     },
     refresh: lifecycle.refreshAgentStatus,
+    refreshContext: lifecycle.refreshContextUsage,
     connection: lifecycle.handleConnectionStatusChange,
+    contextCount: () => contextRequests.current.length,
+    releaseContext(index: number, payload: any) { contextRequests.current[index](payload); },
     count: () => requests.current.length,
     release(index: number, payload: any) { requests.current[index](payload); },
   };
   return h('div', {},
-    h('output', { id: 'state' }, JSON.stringify({ status, draft, thought, connection, pendingRequest })),
+    h('output', { id: 'state' }, JSON.stringify({ status, draft, thought, connection, pendingRequest, context: contextUsage })),
     new URLSearchParams(location.search).has('compose') ? h(ComposeBox, {
       currentChatJid: 'web:hook-fixture',
-      contextUsage: { tokens: 10000, contextWindow: 20000, percent: 50 },
+      contextUsage: new URLSearchParams(location.search).has('projection') ? contextUsage : { tokens: 10000, contextWindow: 20000, percent: 50 },
       statusNotice: isCompactionStatus(status) ? status : null,
       isAgentActive: Boolean(status && status.type !== 'error'),
       services: {

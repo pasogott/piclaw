@@ -277,8 +277,7 @@ describe("web channel runtime public surface service", () => {
     expect(service.consumePendingSteering("web:test")).toEqual(["2026-03-28T00:04:00.000Z"]);
     service.updateAgentStatus("web:test", status);
     expect(service.getAgentStatus("web:test")).toEqual(status);
-    service.setContextUsage("web:test", { percent: 42 });
-    expect(service.getContextUsage("web:test")).toEqual({ percent: 42 });
+    expect(service).not.toHaveProperty('setContextUsage');expect(service).not.toHaveProperty('getContextUsage');
     service.broadcastEvent("extension_ui_working", { chat_jid: "web:test", message: "Compacting context…" });
     service.broadcastEvent("extension_ui_working_indicator", { chat_jid: "web:test", frames: ["a", "b"], interval_ms: 80 });
     expect(service.getExtensionWorkingState("web:test")).toEqual({
@@ -292,8 +291,7 @@ describe("web channel runtime public surface service", () => {
     expect(service.getThreadRootId("web:test", "m-1")).toBe(43);
     service.resumeChat("web:test", 12);
     service.resumePendingChats("web:test");
-    service.loadState();
-    service.saveState();
+    expect(service).not.toHaveProperty('loadState');expect(service).not.toHaveProperty('saveState');
     service.setPanelExpanded("turn-1", "thought", true);
     expect(service.isPanelExpanded("turn-1", "thought")).toBe(true);
     service.updateThoughtBuffer("turn-1", "thought text", 3);
@@ -320,8 +318,6 @@ describe("web channel runtime public surface service", () => {
       "pending-consume:web:test",
       "status-update:web:test:Thinking",
       "status-get:web:test",
-      "context-set:web:test:42",
-      "context-get:web:test",
       "broadcast:extension_ui_working:{\"chat_jid\":\"web:test\",\"message\":\"Compacting context…\"}",
       "broadcast:extension_ui_working_indicator:{\"chat_jid\":\"web:test\",\"frames\":[\"a\",\"b\"],\"interval_ms\":80}",
       "broadcast:agent_response:{\"chat_jid\":\"web:test\"}",
@@ -329,8 +325,6 @@ describe("web channel runtime public surface service", () => {
       "thread-root:web:test:m-1",
       "resume:web:test:12",
       "resume-pending:web:test",
-      "load",
-      "save",
       "panel-set:turn-1:thought:true",
       "panel-get:turn-1:thought",
       "thought:turn-1:thought text:3",

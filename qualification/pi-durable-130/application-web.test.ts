@@ -363,7 +363,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   const queue = runtimeBase.queue;
   try {
     const readSummary = async () => {
-      channel.setContextUsage(chat, { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: "preserved-session" });
+      db.query("INSERT INTO router_state(key,value) VALUES('last_agent_timestamp_web',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({contextUsages:{[chat]:{tokens:999,contextWindow:10000,percent:9.99,sessionGeneration:'preserved-session'}}}));
       const treeReader = spyOn(pool, "getSessionTreeSummaryForChat");
       let payload: Record<string, unknown>;
       try {

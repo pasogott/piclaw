@@ -12,7 +12,7 @@ function deferred<T>() {
 }
 
 function modelLookupFixture(getCurrentModelLabel: () => Promise<string | null>) {
-  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
+  const statuses = new AgentStatusStore();
   type Result = { status: string; message: string };
   const compact = deferred<Result>();
   const stats = deferred<Result>();

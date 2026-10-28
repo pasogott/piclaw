@@ -50,7 +50,6 @@ import {
   getContextUsageRevision,
   haveSameContextUsage,
   normalizeContextUsage,
-  persistContextUsage,
   reconcileContextUsageForChat,
   restoreContextUsage,
 } from './app-status-refresh-orchestration.js';
@@ -500,7 +499,6 @@ export function handleAppSseEvent(
           reset: data.context_reset === true,
         });
         if (haveSameContextUsage(prev, merged)) return prev;
-        persistContextUsage(currentChatJid, merged);
         return merged;
       });
     }
@@ -762,7 +760,6 @@ export function handleAppSseEvent(
             expectedRevision,
           });
           if (haveSameContextUsage(prev, merged)) return prev;
-          persistContextUsage(targetChatJid, merged);
           return merged;
         });
       })

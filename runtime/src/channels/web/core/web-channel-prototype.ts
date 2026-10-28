@@ -44,7 +44,6 @@ export interface WebChannelPrototypeMembers extends WebChannelLike {
   handleRequest(req: Request): Promise<Response>;
   enqueueAgentMessage(request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult>;
   resumePendingChats(chatJid?: string): void;
-  loadState(): void;
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void>;
 }
 
@@ -280,19 +279,6 @@ export function installWebChannelPrototype(
         return state as unknown as Record<string, unknown> | null;
       }),
     },
-    setContextUsage: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string, usage: Record<string, unknown> | null): void => {
-        service.setContextUsage(chatJid, usage);
-      }),
-    },
-    getContextUsage: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string): Record<string, unknown> | null =>
-        service.getContextUsage(chatJid)),
-    },
     replaceQueuedFollowupPlaceholder: {
       configurable: true,
       writable: true,
@@ -334,20 +320,6 @@ export function installWebChannelPrototype(
       writable: true,
       value: withRuntimePublicSurface((service, chatJid?: string): void => {
         service.resumePendingChats(chatJid);
-      }),
-    },
-    loadState: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service): void => {
-        service.loadState();
-      }),
-    },
-    saveState: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service): void => {
-        service.saveState();
       }),
     },
     setPanelExpanded: {

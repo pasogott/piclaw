@@ -8,17 +8,15 @@ import {
   type FollowupQueueItemLike,
 } from './app-followup-queue.js';
 import { isMainTimelineView } from './app-realtime-timeline.js';
-import { getLocalStorageJSON, setLocalStorageItem } from '../utils/storage.js';
 
 type StateSetter<T> = (next: T | ((prev: T) => T)) => void;
 
-// Keep the existing per-chat key for storage compatibility, but only restore
-// payloads carrying the currently verified Pi session generation. Legacy
-// generation-less values are ignored rather than migrated as current usage.
-const CONTEXT_STORAGE_PREFIX = 'piclaw:ctx:';
+// SDK observations live only in this bounded page-local revision cache.
+const CONTEXT_CACHE_LIMIT = 128;
+let contextRevision = 0;
 const CONTEXT_REPLACE = 'replace';
 const contextUsageStates = new Map<string, [generation: string | null, revision: number, usage: Record<string, unknown> | null]>();
-export function getContextUsageRevision(chatJid: string): number { return contextUsageStates.get(chatJid)?.[1] ?? 0; }
+export function getContextUsageRevision(chatJid: string): number { return contextUsageStates.get(chatJid)?.[1] ?? contextRevision; }
 
 function finiteOrNull(value: unknown): number | null {
   if (value == null) return null;
@@ -145,13 +143,14 @@ export function reconcileContextUsageForChat(
     const result = mergeContextUsage(previous, next, replace);
     // Even an unchanged unknown snapshot is a new boundary: an older in-flight
     // poll must not restore counts, and persisted same-session data must clear.
-    contextUsageStates.set(chatJid, [incomingGeneration ?? knownGeneration,
-      getContextUsageRevision(chatJid) + (replace || !haveSameContextUsage(previous, result) ? 1 : 0), result]);
-    if (replace) persistContextUsage(chatJid, result);
+    rememberContext(chatJid, incomingGeneration ?? knownGeneration,
+      replace || !haveSameContextUsage(previous, result) ? ++contextRevision : getContextUsageRevision(chatJid), result);
     return result;
   };
   if (!incomingGeneration) {
-    return knownGeneration || options.requireKnown
+    // The current endpoint can report an unbound session. Clear its meters;
+    // unscoped legacy/SSE updates still cannot replace a known SDK observation.
+    return options.requireKnown || (knownGeneration && !(options.authoritative && next.contextUpdate === CONTEXT_REPLACE))
       ? normalizeContextUsage(previous)
       : merge();
   }
@@ -168,6 +167,7 @@ export function reconcileContextUsageForChat(
 
 export function resetContextSessionGenerationsForTests(): void {
   contextUsageStates.clear();
+  contextRevision = 0;
 }
 
 export function haveSameContextUsage(a: unknown, b: unknown): boolean {
@@ -187,27 +187,23 @@ export function hasRenderableContextUsage(payload: unknown): boolean {
   return Boolean(normalized && (normalized.percent != null || normalized.cacheUsage != null));
 }
 
-export function persistContextUsage(chatJid: string, payload: unknown): void {
-  if (!chatJid || !payload || typeof payload !== 'object') return;
-  const data = normalizeContextUsage(payload);
-  if (!data?.sessionGeneration) return;
-  try {
-    setLocalStorageItem(CONTEXT_STORAGE_PREFIX + chatJid, JSON.stringify(data));
-  } catch (error) {
-    console.debug('[app-status-refresh] Ignoring best-effort context usage persistence failure.', error, {
-      chatJid,
-    });
-  }
+function rememberContext(chat: string, generation: string | null, revision: number, usage: Record<string, unknown> | null): void {
+  contextUsageStates.delete(chat);
+  contextUsageStates.set(chat,[generation,revision,usage]);
+  while(contextUsageStates.size>CONTEXT_CACHE_LIMIT)contextUsageStates.delete(contextUsageStates.keys().next().value!);
 }
 
+/** A connection boundary invalidates outstanding reads even with a stable SDK session ID. */
+export function invalidateContextUsageForChat(chat: string): Record<string, unknown> | null {
+  const generation=getContextSessionGeneration(chat),previous=contextUsageStates.get(chat)?.[2];
+  const cleared=generation?mergeContextUsage(previous,{tokens:null,contextWindow:null,percent:null,sessionGeneration:generation,contextUpdate:'replace'}):null;
+  rememberContext(chat,generation,++contextRevision,cleared);
+  return cleared;
+}
+
+/** Restore only a value accepted by this page's current revision; never browser storage. */
 export function restoreContextUsage(chatJid: string): Record<string, unknown> | null {
-  const knownGeneration = getContextSessionGeneration(chatJid);
-  if (!knownGeneration) return null;
-  // Pane snapshots and best-effort storage can lag an inactive-chat event.
-  // The revision's accepted value wins, even if its storage write failed.
-  const stored = normalizeContextUsage(contextUsageStates.get(chatJid)?.[2]
-    ?? getLocalStorageJSON<Record<string, unknown>>(CONTEXT_STORAGE_PREFIX + chatJid));
-  return stored?.sessionGeneration === knownGeneration ? stored : null;
+  return getContextSessionGeneration(chatJid) ? contextUsageStates.get(chatJid)?.[2] ?? null : null;
 }
 
 
@@ -300,7 +296,6 @@ export async function refreshContextUsageForChat(options: RefreshContextUsageFor
         expectedRevision,
       });
       if (haveSameContextUsage(prev, merged)) return prev;
-      persistContextUsage(targetChatJid, merged);
       return merged;
     });
   } catch (error) {

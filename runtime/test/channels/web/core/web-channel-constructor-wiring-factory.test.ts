@@ -139,7 +139,6 @@ describe("web channel constructor wiring factory", () => {
     const options: WebChannelConstructorFactoryOptions = {
       defaultChatJid: "web:default",
       defaultAgentId: "default",
-      stateKey: "state-key",
       webServerConfig: {
         host: "127.0.0.1",
         port: 8080,
@@ -169,7 +168,7 @@ describe("web channel constructor wiring factory", () => {
       createRuntimeState: (callbacks, runtimeOptions) => {
         creationOrder.push("runtimeState");
         runtimeStateCallbacks = callbacks;
-        expect(runtimeOptions).toEqual({ defaultAgentId: "default", stateKey: "state-key" });
+        expect(runtimeOptions).toEqual({ defaultAgentId: "default" });
         return runtimeState;
       },
       createIdentitySnapshot: (currentIdentity) => ({
