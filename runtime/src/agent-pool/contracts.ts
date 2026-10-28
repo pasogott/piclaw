@@ -2,7 +2,7 @@
  * agent-pool/contracts.ts – Shared public contracts for AgentPool and its helpers.
  */
 
-import type { AgentSessionEvent, AgentSessionRuntime, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, AgentSessionRuntime, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessageEvent,
   Usage,
@@ -128,10 +128,6 @@ export interface SidePromptOptions {
   /** Optional stable identity for a retried side prompt. */
   budgetWorkId?: string;
   budgetParentWorkId?: string | null;
-}
-
-export interface RetrySettingsProvider {
-  getRetrySettings?: SettingsManager["getRetrySettings"];
 }
 
 /** Data-only accepted native identity; no SDK handle or execution permission. */

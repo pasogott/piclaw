@@ -574,7 +574,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     // The assertion closure is restored with the other capture spies below.
     automaticCaptureSpy = spy;
   }
-  let realRunCaptures = 0, realToolCaptures = 0;
+  let realRunCaptures = 0, realToolCaptures = 0, pendingAdmissionCaptures = 0;
+  const pendingAdmissionCalls:string[]=[];
   let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
   if(scenario==='native-dream-runner-held-tool'){
@@ -603,6 +604,15 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     }));
   }
   if (nativePlan) {
+    const capturePending = HostConversationRuntime.prototype.capturePendingToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "capturePendingToolSource").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof capturePending>){
+      const captured=await capturePending.apply(this,args);
+      pendingAdmissionCaptures++;pendingAdmissionCalls.push(args[2]);
+      expect(captured.inputs[0]?.sourceId).toBe(expectedToolSource);
+      expect(captured.operation.chatJid).toBe("web:default");
+      expect(captured.runTaskId).toBeDefined();
+      return captured;
+    }));
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureRun.apply(this, args);
@@ -3223,7 +3233,15 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   }
   if (nativePlan) {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 7 : 4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    // Two model source captures + two plan snapshots, plus the real pending
+    // beforeTool admission added by the native background-policy hook. Goal
+    // adds request snapshots and its terminal fence at both model/nested tools.
+    // None may use a legacy session owner; exact call IDs distinguish the hooks.
+    expect(pendingAdmissionCaptures).toBe(codemodePlan ? nativeGoal ? 4 : 2 : 1);
+    expect(pendingAdmissionCalls).toEqual(codemodePlan ? nativeGoal
+      ? ["factory-tool-1","factory-tool-1","factory-tool-1/c1","factory-tool-1/c1"]
+      : ["factory-tool-1","factory-tool-1/c1"] : ["factory-tool-1"]);
+    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 8 : 5); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");

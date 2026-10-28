@@ -386,8 +386,6 @@ For the packaged Azure managed-identity/static-key path and its additional token
 | `PICLAW_USER_NAME` | _(empty)_ | Display name for the human user in the web UI |
 | `PICLAW_USER_AVATAR` | _(empty)_ | Avatar URL for the human user |
 | `PICLAW_USER_AVATAR_BACKGROUND` | _(empty)_ | CSS background colour for the user avatar circle |
-| `PICLAW_SESSION_MAX_SIZE_MB` | `32` | Session file size threshold (MB) for auto-rotation warnings and pre-prompt rotation |
-| `PICLAW_SESSION_AUTO_ROTATE` | `1` | Automatically rotate oversized session files before the next prompt |
 | `PICLAW_TURN_MAX_TOOL_EXECUTIONS` | `64` | Authoritative per-turn completed tool-execution budget. Settings persists `domains.agent.toolUseMessageBudget`; values are clamped to `8..512`. Legacy `PICLAW_TURN_MAX_TOOL_USE_MESSAGES` and `PICLAW_MID_TURN_TOOL_EXECUTION_HARD_CEILING` are lower-priority compatibility aliases. |
 | `PICLAW_WHATSAPP_PHONE` | _(empty)_ | Alias for `WHATSAPP_PHONE` |
 | `PICLAW_TOOL_OUTPUT_RETENTION_MS` | `2592000000` (30 days) | Milliseconds to retain stored tool outputs (preferred; overrides `_DAYS`; values are capped at 30 days) |
@@ -927,3 +925,9 @@ Notes:
 ## Remote Peer add-on
 
 Cross-instance identity, pairing, messaging, and mediated work are configured by the installable [Remote Peer add-on](https://rcarmo.github.io/piclaw-addons/addons/remote-peer/). Core has no peer-specific settings or peer-owned state.
+
+### Retired Core execution settings
+
+Native SDK task/submission maintenance owns compaction and recovery. The former Core automatic-recovery attempt/budget/loop-guard controls, session JSONL rotation limits, and foreground/idle/scoped trigger thresholds are no longer active settings. Sessions panes retain the independent tool-use budget and session-isolation controls. Native auto-compaction remains on the Compaction pane; accepted maintenance is not cancelled or replayed by a policy edit.
+
+Old JSON configuration and historical receipts remain untouched. Declared retired domain keys are preserved but never resolved or accepted in a new patch; unrelated unknown keys still fail validation. Stale general-setting saves containing retired execution fields reject before any change. Root SDK summary/model/watchdog utilities with real consumers retain their own settings; they do not enable a second native recovery loop. See [prompt-owner retirement](development/native-prompt-retirement.md).
