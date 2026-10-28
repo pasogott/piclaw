@@ -24,7 +24,6 @@ import {
   WORKSPACE_DIR,
 } from "../../src/core/config-context.js";
 import {
-  getAgentLogConfig,
   getLoggingConfig,
   getPushoverConfig,
 } from "../../src/core/config-integrations.js";
@@ -184,7 +183,6 @@ test("identity and integration modules preserve grouped facade contracts", () =>
   expect(getRoutingConfig().triggerPattern).toBeInstanceOf(RegExp);
   expect(getUiThemeConfig().theme).toBeTruthy();
   expect(["debug", "info", "warn", "error"]).toContain(getLoggingConfig().level);
-  expect(getAgentLogConfig().retentionMs).toBeGreaterThan(0);
   expect(Number.isFinite(getPushoverConfig().priority)).toBe(true);
 });
 
