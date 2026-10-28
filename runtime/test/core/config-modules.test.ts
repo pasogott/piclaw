@@ -38,9 +38,7 @@ import {
   getCompactionRuntimeConfig,
   getDreamConfig,
   getProgressWatchdogConfig,
-  getRecoveryPolicyConfig,
   getSessionPoolConfig,
-  getSessionStorageConfig,
 } from "../../src/core/config-runtime.js";
 import {
   getSearchMatchMode,
@@ -177,10 +175,8 @@ test("config runtime module preserves grouped session and recovery contracts", (
   expect(getAgentRuntimeConfig().timeoutMs).toBeGreaterThan(0);
   expect(getDreamConfig().agentTimeoutMs).toBeGreaterThan(0);
   expect(getSessionPoolConfig().cleanupIntervalMs).toBeGreaterThan(0);
-  expect(getSessionStorageConfig().maxSizeBytes).toBe(getSessionStorageConfig().maxSizeMb * 1024 * 1024);
   expect(getCompactionRuntimeConfig().backoffMaxMs).toBeGreaterThanOrEqual(getCompactionRuntimeConfig().backoffBaseMs);
   expect(getProgressWatchdogConfig().timeoutMs).toBeGreaterThanOrEqual(0);
-  expect(getRecoveryPolicyConfig().automaticRecoveryTotalBudgetMs).toBe(0);
 });
 
 test("identity and integration modules preserve grouped facade contracts", () => {

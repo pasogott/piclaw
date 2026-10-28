@@ -114,8 +114,6 @@ test("uses proportional compaction thresholds with the 300s progress watchdog di
     expect(snapshot["call:getCompactionRuntimeConfig"].timeoutMs).toBe(300_000);
     expect(snapshot["call:getCompactionRuntimeConfig"].progressWatchdogEnabled).toBe(false);
     expect(snapshot["call:getCompactionRuntimeConfig"].progressWatchdogTimeoutMs).toBe(300_000);
-    expect(snapshot["call:getCompactionRuntimeConfig"].thresholdPercent).toBe(80);
-    expect(snapshot["call:getCompactionRuntimeConfig"].maxThresholdTokens).toBe(0);
   } finally {
     ws.cleanup();
   }
@@ -184,9 +182,6 @@ test("loads provider-native compaction settings from the compaction domain", () 
       timeoutMs: 600_000,
       backoffBaseMs: 120_000,
       backoffMaxMs: 600_000,
-      thresholdPercent: 70,
-      maxThresholdTokens: 123456,
-      backoffDecayFactor: 0.25,
     });
   } finally {
     ws.cleanup();
@@ -420,7 +415,6 @@ test("config and env fallback chains handle booleans and session settings", () =
 
     const snapshot = loadConfigInSubprocess(ws, [
       "WEB_RUNTIME_CONFIG",
-      "SESSION_STORAGE_CONFIG",
     ], {
       env: {
         PICLAW_WEB_SESSION_TTL: "120",
@@ -456,13 +450,6 @@ test("config and env fallback chains handle booleans and session settings", () =
       composeUploadLimitMb: 256,
       workspaceUploadLimitMb: 256,
       uiMode: "classic",
-    });
-    expect(snapshot.SESSION_STORAGE_CONFIG).toEqual({
-      maxSizeMb: 8,
-      maxSizeBytes: 8 * 1024 * 1024,
-      maxLines: 8000,
-      maxCompactionsBeforeRotation: 3,
-      autoRotate: false,
     });
   } finally {
     ws.cleanup();
@@ -612,32 +599,6 @@ test("pushover config getter groups aliased config file settings", () => {
   }
 });
 
-test("session storage config getter groups size and auto-rotate settings", () => {
-  const ws = createTempWorkspace("piclaw-config-");
-  try {
-    const snapshot = loadConfigInSubprocess(ws, [
-      "SESSION_STORAGE_CONFIG",
-      "call:getSessionStorageConfig",
-      "same:getSessionStorageConfig:SESSION_STORAGE_CONFIG",
-      "frozen:SESSION_STORAGE_CONFIG",
-    ], {
-      env: { PICLAW_SESSION_MAX_SIZE_MB: "64", PICLAW_SESSION_AUTO_ROTATE: "on" },
-    });
-    expect(snapshot["same:getSessionStorageConfig:SESSION_STORAGE_CONFIG"]).toBe(true);
-    expect(snapshot["frozen:SESSION_STORAGE_CONFIG"]).toBe(true);
-    expect(snapshot.SESSION_STORAGE_CONFIG).toEqual({
-      maxSizeMb: 64,
-      maxSizeBytes: 64 * 1024 * 1024,
-      maxLines: 8000,
-      maxCompactionsBeforeRotation: 3,
-      autoRotate: true,
-    });
-    expect(snapshot["call:getSessionStorageConfig"]).toEqual(snapshot.SESSION_STORAGE_CONFIG);
-  } finally {
-    ws.cleanup();
-  }
-});
-
 test("agent runtime config getter groups foreground and background timeout settings", () => {
   const ws = createTempWorkspace("piclaw-config-");
   try {
@@ -653,23 +614,6 @@ test("agent runtime config getter groups foreground and background timeout setti
     expect(snapshot["frozen:AGENT_RUNTIME_CONFIG"]).toBe(true);
     expect(snapshot.AGENT_RUNTIME_CONFIG).toEqual({ timeoutMs: 120000, backgroundTimeoutMs: 45000 });
     expect(snapshot["call:getAgentRuntimeConfig"]).toEqual(snapshot.AGENT_RUNTIME_CONFIG);
-  } finally {
-    ws.cleanup();
-  }
-});
-
-test("session storage config defaults to 32 MB with auto-rotate enabled", () => {
-  const ws = createTempWorkspace("piclaw-config-");
-  try {
-    const snapshot = loadConfigInSubprocess(ws, ["SESSION_STORAGE_CONFIG", "call:getSessionStorageConfig"]);
-    expect(snapshot.SESSION_STORAGE_CONFIG).toEqual({
-      maxSizeMb: 32,
-      maxSizeBytes: 32 * 1024 * 1024,
-      maxLines: 8000,
-      maxCompactionsBeforeRotation: 3,
-      autoRotate: true,
-    });
-    expect(snapshot["call:getSessionStorageConfig"]).toEqual(snapshot.SESSION_STORAGE_CONFIG);
   } finally {
     ws.cleanup();
   }
@@ -851,9 +795,6 @@ test("in-process module init handles deprecated env warnings, argv parsing, and 
         "WEB_RUNTIME_CONFIG",
         "call:getWebRuntimeConfig",
         "same:getWebRuntimeConfig:WEB_RUNTIME_CONFIG",
-        "SESSION_STORAGE_CONFIG",
-        "call:getSessionStorageConfig",
-        "same:getSessionStorageConfig:SESSION_STORAGE_CONFIG",
         "AGENT_RUNTIME_CONFIG",
         "call:getAgentRuntimeConfig",
         "same:getAgentRuntimeConfig:AGENT_RUNTIME_CONFIG",
@@ -934,15 +875,6 @@ test("in-process module init handles deprecated env warnings, argv parsing, and 
     });
     expect(snapshot["same:getWebRuntimeConfig:WEB_RUNTIME_CONFIG"]).toBe(true);
     expect(snapshot["call:getWebRuntimeConfig"]).toEqual(snapshot.WEB_RUNTIME_CONFIG);
-    expect(snapshot.SESSION_STORAGE_CONFIG).toEqual({
-      maxSizeMb: 64,
-      maxSizeBytes: 64 * 1024 * 1024,
-      maxLines: 8000,
-      maxCompactionsBeforeRotation: 3,
-      autoRotate: true,
-    });
-    expect(snapshot["same:getSessionStorageConfig:SESSION_STORAGE_CONFIG"]).toBe(true);
-    expect(snapshot["call:getSessionStorageConfig"]).toEqual(snapshot.SESSION_STORAGE_CONFIG);
     expect(snapshot.AGENT_RUNTIME_CONFIG).toEqual({ timeoutMs: 120000, backgroundTimeoutMs: 45000 });
     expect(snapshot["same:getAgentRuntimeConfig:AGENT_RUNTIME_CONFIG"]).toBe(true);
     expect(snapshot["call:getAgentRuntimeConfig"]).toEqual(snapshot.AGENT_RUNTIME_CONFIG);

@@ -10,16 +10,12 @@ import {
 import {
   getIdentityConfig,
   getOrCreateWebWidgetToken,
-  getSessionStorageConfig,
-  getRecoveryPolicyConfig,
   getToolUseBudget,
   getWebRuntimeConfig,
   getSearchMatchMode,
   getScopedModelsOnly,
   setAssistantAvatar,
   setAssistantName,
-  setSessionStorageConfig,
-  setAutomaticRecoveryPolicyConfig,
   setToolUseBudget,
   getToolOutputStoreThreshold,
   setToolOutputStoreThreshold,
@@ -35,8 +31,6 @@ import {
   type SearchMatchMode,
 } from "../../../core/config.js";
 import { generateTotpQr } from "../../../utils/totp-qr.js";
-import { getAutomaticRecoveryConfig } from "../../../agent-pool/recovery-policy.js";
-import { getAgentRuntimeConfig } from "../../../core/config.js";
 import { ensureAvatarCache, resolveAvatarUrl, type AvatarKind } from "../media/avatar-service.js";
 import { getServerUiOutputConfig, getServerUiThemeConfig, setServerUiOutputConfig, setServerUiThemeConfig } from "../ui-state.js";
 
@@ -46,15 +40,13 @@ export interface GeneralSettingsData {
   userName: string;
   userAvatar: string;
   userAvatarBackground: string;
-  sessionAutoRotate: boolean;
-  sessionMaxSizeMb: number;
-  sessionMaxLines: number;
+
   webTerminalEnabled: boolean;
   composeUploadLimitMb: number;
   workspaceUploadLimitMb: number;
   toolUseBudget: number;
   toolOutputStoreThreshold: number;
-  sessionMaxCompactions: number;
+
   instanceTotp: {
     configured: boolean;
     issuer: string;
@@ -66,10 +58,7 @@ export interface GeneralSettingsData {
   sessionIsolation: "none" | "summary" | "full";
   searchMatchMode: "or" | "and";
   scopedModelsOnly: boolean;
-  automaticRecoveryEnabled: boolean;
-  automaticRecoveryMaxAttempts: number;
-  automaticRecoveryTotalBudgetMs: number;
-  automaticRecoveryEffectiveBudgetMs: number;
+
   uiTheme: string;
   uiTint: string | null;
   outputPad: number;
@@ -81,21 +70,17 @@ export interface GeneralSettingsInput {
   assistantAvatar?: unknown;
   userName?: unknown;
   userAvatar?: unknown;
-  sessionAutoRotate?: unknown;
-  sessionMaxSizeMb?: unknown;
-  sessionMaxLines?: unknown;
+
   webTerminalEnabled?: unknown;
   composeUploadLimitMb?: unknown;
   workspaceUploadLimitMb?: unknown;
   toolUseBudget?: unknown;
   toolOutputStoreThreshold?: unknown;
-  sessionMaxCompactions?: unknown;
+
   sessionIsolation?: unknown;
   searchMatchMode?: unknown;
   scopedModelsOnly?: unknown;
-  automaticRecoveryEnabled?: unknown;
-  automaticRecoveryMaxAttempts?: unknown;
-  automaticRecoveryTotalBudgetMs?: unknown;
+
   uiTheme?: unknown;
   uiTint?: unknown;
   outputPad?: unknown;
@@ -185,9 +170,7 @@ function buildTotpSettingsData(): GeneralSettingsData["instanceTotp"] {
 
 export function getGeneralSettingsData(): GeneralSettingsData {
   const identity = getIdentityConfig();
-  const session = getSessionStorageConfig();
   const web = getWebRuntimeConfig();
-  const recovery = getRecoveryPolicyConfig();
   const uiTheme = getServerUiThemeConfig();
   const uiOutput = getServerUiOutputConfig();
   return {
@@ -196,23 +179,18 @@ export function getGeneralSettingsData(): GeneralSettingsData {
     userName: identity.userName || "",
     userAvatar: identity.userAvatar || "",
     userAvatarBackground: identity.userAvatarBackground || "",
-    sessionAutoRotate: session.autoRotate,
-    sessionMaxSizeMb: session.maxSizeMb,
-    sessionMaxLines: session.maxLines,
+
     webTerminalEnabled: web.terminalEnabled,
     composeUploadLimitMb: web.composeUploadLimitMb,
     workspaceUploadLimitMb: web.workspaceUploadLimitMb,
     toolUseBudget: getToolUseBudget(),
     toolOutputStoreThreshold: getToolOutputStoreThreshold(),
-    sessionMaxCompactions: session.maxCompactionsBeforeRotation,
+
     instanceTotp: buildTotpSettingsData(),
     sessionIsolation: getSessionIsolationLevel(),
     searchMatchMode: getSearchMatchMode(),
     scopedModelsOnly: getScopedModelsOnly(),
-    automaticRecoveryEnabled: recovery.automaticRecoveryEnabled,
-    automaticRecoveryMaxAttempts: recovery.automaticRecoveryMaxAttempts,
-    automaticRecoveryTotalBudgetMs: recovery.automaticRecoveryTotalBudgetMs,
-    automaticRecoveryEffectiveBudgetMs: getAutomaticRecoveryConfig(undefined, getAgentRuntimeConfig().timeoutMs).totalBudgetMs,
+
     uiTheme: uiTheme.theme,
     uiTint: uiTheme.tint,
     outputPad: uiOutput.outputPad,
@@ -225,7 +203,11 @@ export function rotateWidgetTokenSettings(): GeneralSettingsData {
   return getGeneralSettingsData();
 }
 
+const RETIRED_EXECUTION_SETTINGS=["sessionAutoRotate","sessionMaxSizeMb","sessionMaxLines","sessionMaxCompactions","automaticRecoveryEnabled","automaticRecoveryMaxAttempts","automaticRecoveryTotalBudgetMs","automaticRecoveryEffectiveBudgetMs"] as const;
+
 export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<GeneralSettingsData> {
+  const retired=RETIRED_EXECUTION_SETTINGS.filter(key=>Object.hasOwn(input,key));
+  if(retired.length)throw Error('Unsupported native general settings: '+retired.join(', ')+'. No settings were changed.');
   const nextAssistantName = normalizeOptionalString(input.assistantName);
   if (nextAssistantName !== undefined) {
     setAssistantName(nextAssistantName || "PiClaw");
@@ -253,23 +235,6 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
     }
   }
 
-  const sessionPatch: { maxSizeMb?: number; maxLines?: number; maxCompactionsBeforeRotation?: number; autoRotate?: boolean } = {};
-  const nextSessionMaxSizeMb = normalizeOptionalInt(input.sessionMaxSizeMb, 1, 256);
-  if (nextSessionMaxSizeMb !== undefined) {
-    sessionPatch.maxSizeMb = nextSessionMaxSizeMb;
-  }
-  const nextSessionMaxLines = normalizeOptionalInt(input.sessionMaxLines, 100, 50000);
-  if (nextSessionMaxLines !== undefined) {
-    sessionPatch.maxLines = nextSessionMaxLines;
-  }
-  const nextSessionAutoRotate = normalizeOptionalBoolean(input.sessionAutoRotate);
-  if (nextSessionAutoRotate !== undefined) {
-    sessionPatch.autoRotate = nextSessionAutoRotate;
-  }
-  if (Object.keys(sessionPatch).length > 0) {
-    setSessionStorageConfig(sessionPatch);
-  }
-
   const nextWebTerminalEnabled = normalizeOptionalBoolean(input.webTerminalEnabled);
   if (nextWebTerminalEnabled !== undefined) {
     setWebTerminalEnabled(nextWebTerminalEnabled);
@@ -295,11 +260,6 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
     setToolOutputStoreThreshold(nextToolOutputThreshold);
   }
 
-  const nextMaxCompactions = normalizeOptionalInt(input.sessionMaxCompactions, 1, 20);
-  if (nextMaxCompactions !== undefined) {
-    sessionPatch.maxCompactionsBeforeRotation = nextMaxCompactions;
-  }
-
   const nextSessionIsolation = typeof input.sessionIsolation === "string" ? input.sessionIsolation.trim().toLowerCase() : undefined;
   if (nextSessionIsolation === "none" || nextSessionIsolation === "summary" || nextSessionIsolation === "full") {
     setSessionIsolationLevel(nextSessionIsolation as SessionIsolationLevel);
@@ -314,21 +274,6 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
   if (nextScopedModelsOnly !== undefined) {
     setScopedModelsOnly(nextScopedModelsOnly);
   }
-
-  const recoveryPatch: Parameters<typeof setAutomaticRecoveryPolicyConfig>[0] = {};
-  const nextAutomaticRecoveryEnabled = normalizeOptionalBoolean(input.automaticRecoveryEnabled);
-  if (nextAutomaticRecoveryEnabled !== undefined) recoveryPatch.automaticRecoveryEnabled = nextAutomaticRecoveryEnabled;
-  if (input.automaticRecoveryMaxAttempts !== undefined) {
-    const value = Number(input.automaticRecoveryMaxAttempts);
-    if (!Number.isInteger(value) || value < 0) throw new Error("automaticRecoveryMaxAttempts must be a non-negative integer");
-    recoveryPatch.automaticRecoveryMaxAttempts = value;
-  }
-  if (input.automaticRecoveryTotalBudgetMs !== undefined) {
-    const value = Number(input.automaticRecoveryTotalBudgetMs);
-    if (!Number.isInteger(value) || value < 0) throw new Error("automaticRecoveryTotalBudgetMs must be a non-negative integer");
-    recoveryPatch.automaticRecoveryTotalBudgetMs = value;
-  }
-  if (Object.keys(recoveryPatch).length > 0) setAutomaticRecoveryPolicyConfig(recoveryPatch);
 
   const nextUiTheme = typeof input.uiTheme === "string" ? input.uiTheme.trim().toLowerCase() : undefined;
   const nextUiTint = input.uiTint === undefined
