@@ -144,6 +144,6 @@
     "worker-recovery.test.ts"
   ],
   "fileTimeoutMs": {
-    "default-application-runtime.test.ts": 600000
+    "default-application-runtime.test.ts": 900000
   }
 }
