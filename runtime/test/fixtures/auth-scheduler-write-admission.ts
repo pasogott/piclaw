@@ -1,16 +1,14 @@
 import '../setup-filesystem-isolation.js';
 import { expect, spyOn } from 'bun:test';
-import { rmSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { join } from 'node:path';
 import { createTempWorkspace, setEnv } from '../helpers.js';
-import { closeDatabase, getDb, initDatabase } from '../../src/db/connection.js';
+import { closeDatabase, getDb, initDatabase, getDatabaseBinding } from '../../src/db/connection.js';
 import { createWebSession, getWebSession } from '../../src/db/web-sessions.js';
 import { createWebauthnEnrollment, getWebauthnCredentialById, getWebauthnEnrollment, storeWebauthnCredential } from '../../src/db/webauthn.js';
 import { createTask, getBudgetCap, getTaskById, saveBudgetCap } from '../../src/db.js';
 import { reviseScheduledTaskAuthorityRecord } from '../../src/db/scheduled-task-authority.js';
-import { STORE_DIR } from '../../src/core/config.js';
 import { WEB_RUNTIME_CONFIG } from '../../src/core/config-web.js';
 import { createSingleUserPasskeyHandler } from '../../src/channels/web/auth/single-user-passkeys.js';
 import { handleWebauthnLoginFinish, handleWebauthnRegisterFinish, type WebauthnAuthContext } from '../../src/channels/web/auth/webauthn-auth.js';
@@ -64,9 +62,6 @@ function setup() {
   restore = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data, PICLAW_ACCESS_MODE: 'single-user' });
   // Explicitly opt this owned disposable fixture out of helpers' memory mode.
   closeDatabase();
-  // STORE_DIR is bootstrap-bound. This child exclusively owns that disposable
-  // database; recreate it between cases rather than pretending setEnv retargets it.
-  for (const suffix of ['', '-wal', '-shm']) rmSync(join(STORE_DIR, `messages.db${suffix}`), { force: true });
   process.env.PICLAW_DB_IN_MEMORY = '0'; initDatabase();
   WEB_RUNTIME_CONFIG.passkeyMode = 'passkey-only'; WEB_RUNTIME_CONFIG.totpSecret = ''; WEB_RUNTIME_CONFIG.trustProxy = false;
   resetRateLimiterStateForTests();
@@ -74,7 +69,10 @@ function setup() {
   getDb().query("UPDATE users SET home_chat_jid='web:default' WHERE id='default'").run();
   storeWebauthnCredential({ user_id: 'default', rp_id: 'example.com', credential_id: credentialId, public_key: cose.toString('base64url'), sign_count: 0 });
   expect(getDb().query('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
-  blocker = new Database(join(STORE_DIR, 'messages.db'));
+  const file = getDatabaseBinding()!.path;
+  expect(file).toBe(join(ws.store, 'messages.db'));
+  blocker = new Database(file);
+  expect((blocker.query('PRAGMA database_list').all() as { name: string; file: string }[]).find(row => row.name === 'main')!.file).toBe(file);
 }
 function cleanup() {
   if (blocker?.inTransaction) blocker.exec('ROLLBACK');

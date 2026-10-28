@@ -28,7 +28,10 @@ async function createServiceFixture(fileBacked = false) {
   const db = await import("../../../../src/db.js");
   // setEnv enforces memory by default; this reopen fixture explicitly owns its
   // temporary store and restores the default before workspace cleanup.
-  if (fileBacked) process.env.PICLAW_DB_IN_MEMORY = "0";
+  if (fileBacked) {
+    db.closeDatabase();
+    process.env.PICLAW_DB_IN_MEMORY = "0";
+  }
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");

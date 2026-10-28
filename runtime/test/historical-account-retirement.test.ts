@@ -3,8 +3,8 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { closeDatabase, getDb, initDatabase } from "../src/db/connection.js";
-import { STORE_DIR } from "../src/core/config.js";
+import { closeDatabase, getDb, initDatabase, getDatabaseBinding } from "../src/db/connection.js";
+import { resolveRuntimeConfigPaths } from "../src/core/config-paths.js";
 import { getRootOwnership } from "../src/db/session-ownership.js";
 import { readAccessState } from "../src/db/access-state.js";
 import { createWebSession } from "../src/db/web-sessions.js";
@@ -96,10 +96,11 @@ test("empty history and zero counter retire transactionally while current auth, 
   } finally { h.close(); }
   // An isolated copied profile exercises the actual current startup initializer.
   closeDatabase();
-  // The initializer uses the captured configuration, even if an earlier test changed the environment.
-  mkdirSync(STORE_DIR, { recursive: true });
-  copyFileSync(join(root, "prepared", "candidate.db"), join(STORE_DIR, "messages.db"));
-  process.env.PICLAW_DB_IN_MEMORY = "0"; initDatabase();
+  const paths = resolveRuntimeConfigPaths({ env: { PICLAW_WORKSPACE: root, PICLAW_STORE: join(root, "reopened-store"), PICLAW_DB_IN_MEMORY: "0" } });
+  mkdirSync(paths.storeDir, { recursive: true });
+  copyFileSync(join(root, "prepared", "candidate.db"), paths.databasePath);
+  initDatabase(paths);
+  expect(getDatabaseBinding()?.path).toBe(paths.databasePath);
   expect(inspectHistoricalAccounts(getDb()).expectedPhysicalTables).toBe(0);
   expect(getRootOwnership(getDb(), "web:retained")?.ownerUserId).toBe("default");
 });
