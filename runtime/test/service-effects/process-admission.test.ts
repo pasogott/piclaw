@@ -57,7 +57,7 @@ test("EF-S07 checks admission inside the claim transaction after serial await, b
 test("EF-S01 fences ordinary source SQL admission but permits exact finish, cancellation and reconciliation", async () => {
   const subject = openSqliteSubject(":memory:", [], false);
   const db = subject.database;
-  const harness = { ...TERMINAL_HARNESS, state: "running" as const };
+  const harness = { ...TERMINAL_HARNESS };
   subject.seedOperation(terminalOperation({ phase: "executing", harness }));
   const made = createCurrentPiclawServiceWorkStore(db, { hitFault() { return false; }, recordTrace() {} });
   if (!made.ok) throw Error("fixture construction failed");
@@ -105,7 +105,8 @@ test("EF-S01 fences ordinary source SQL admission but permits exact finish, canc
     expect(finished.ok).toBe(true);
     if (!finished.ok) throw Error("finish failed");
     expect(finished.value.phase).toBe("settling");
-    expect(finished.value.harness?.state).toBe("finished");
+    expect(finished.value.harness).toEqual(harness);
+    expect(Object.keys(finished.value.harness!).sort()).toEqual(['harnessOperationId','sessionId']);
     const committed = snapshot();
     expect(await work.finishHarness(request)).toEqual(finished);
     expect(await work.getOperation(operation.operationId)).toEqual(finished);
