@@ -16,8 +16,9 @@ beforeEach(async()=>{
   restoreDreamPaths=setEnv({PICLAW_WORKSPACE:config.WORKSPACE_DIR,PICLAW_DATA:config.DATA_DIR,PICLAW_STORE:config.STORE_DIR});
 });
 afterEach(() => {
-  Date.now = realDateNow; restoreDreamPaths?.(); restoreDreamPaths=undefined;
+  Date.now = realDateNow;
 });
+afterEach(()=>{restoreDreamPaths?.();restoreDreamPaths=undefined;});
 
 const acceptModelChange = async () => ({ status: "success", message: "ok" } as const);
 

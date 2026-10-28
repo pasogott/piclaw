@@ -34,7 +34,6 @@ import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
 import { createLogger } from "../utils/logger.js";
 import { seedFreshWorkspaceCoreAddons } from "./core-addon-defaults.js";
-import { parseNonNegativeIntStrict } from "../utils/strict-int.js";
 import { patchConsoleTimestamps } from "./console-timestamps.js";
 import { startExternalProgressWatchdogMonitor } from "./progress-watchdog-supervisor.js";
 import { recoverPendingRestartHandoffs } from "./restart-handoff.js";
@@ -54,18 +53,7 @@ const STARTUP_MEMORY_SNAPSHOT_DIR = join(DATA_DIR, "startup-memory-snapshots");
 export const STARTUP_STATUS_CHAT_JID = "web:default";
 export const STARTUP_STATUS_TURN_ID = "startup:web:default";
 
-function parseStartupWarmupBoolean(value: string | undefined, fallback = false): boolean {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  return fallback;
-}
 
-function parseStartupWarmupLimit(value: string | undefined, fallback = 0): number {
-  const parsed = parseNonNegativeIntStrict(value, fallback);
-  return Math.max(0, Math.min(8, parsed));
-}
 const WORKSPACE_BOOTSTRAP_ENTRIES = [
   "AGENTS.md",
   ".mcp.json.example",
@@ -210,40 +198,6 @@ export function initializeRuntimeEnvironment(state: RuntimeState): ReturnType<ty
   state.loadTimestamps();
   state.loadChats();
   return access;
-}
-
-export function resolveStartupSessionWarmupOptions(env: NodeJS.ProcessEnv = process.env): {
-  warmDefaultChat: boolean;
-  recentLimit: number;
-} {
-  return {
-    warmDefaultChat: parseStartupWarmupBoolean(env.PICLAW_STARTUP_WARM_DEFAULT_CHAT, false),
-    recentLimit: parseStartupWarmupLimit(env.PICLAW_STARTUP_WARMUP_RECENT_LIMIT, 0),
-  };
-}
-
-export function queueStartupSessionWarmup(
-  agentPool: AgentPool & {
-    scheduleChatWarmup?: (chatJid: string, options?: { priority?: boolean }) => boolean;
-    scheduleRecentChatWarmup?: (options?: { limit?: number; excludeChatJids?: string[] }) => string[];
-  },
-  options: { defaultChatJid?: string; recentLimit?: number; warmDefaultChat?: boolean } = {},
-): void {
-  const defaultChatJid = typeof options.defaultChatJid === "string" && options.defaultChatJid.trim()
-    ? options.defaultChatJid.trim()
-    : "web:default";
-  const warmDefaultChat = options.warmDefaultChat ?? false;
-  const recentLimit = Math.max(0, Math.min(8, Math.trunc(options.recentLimit ?? 0) || 0));
-
-  if (warmDefaultChat) {
-    agentPool.scheduleChatWarmup?.(defaultChatJid, { priority: true });
-  }
-  if (recentLimit > 0) {
-    agentPool.scheduleRecentChatWarmup?.({
-      limit: recentLimit,
-      excludeChatJids: warmDefaultChat ? [defaultChatJid] : [],
-    });
-  }
 }
 
 function sanitizeStartupSnapshotLabel(label: string): string {
@@ -579,7 +533,6 @@ export async function startWebChannel(
   await initializeWebAddonMessagingRuntime(agentPool, web);
 
   captureStartupMemorySnapshot(agentPool, { label: "post-web-start" });
-  queueStartupSessionWarmup(agentPool, resolveStartupSessionWarmupOptions());
   runWebStartupRecoveryBootstrap(web, () => {
     recoverPendingRestartHandoffs(web);
   }, (resume) => {

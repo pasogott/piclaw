@@ -12,7 +12,7 @@ function staticImports(entry: string): string[] {
     .map((specifier) => specifier.path);
 }
 
-for (const entry of ["dream.ts", "task-scheduler.ts", "runtime/message-loop.ts"]) {
+for (const entry of ["dream.ts", "task-scheduler.ts"]) {
   test(`${entry} imports recovery-summary and not automatic-recovery`, () => {
     const imports = staticImports(entry);
     expect(imports).toContain(entry === "runtime/message-loop.ts"
@@ -23,3 +23,9 @@ for (const entry of ["dream.ts", "task-scheduler.ts", "runtime/message-loop.ts"]
       : "./agent-pool/automatic-recovery.js");
   });
 }
+
+test('readonly polling imports neither outcome summary nor recovery execution',()=>{
+  const imports=staticImports('runtime/message-loop.ts');
+  expect(imports).not.toContain('../agent-pool/recovery-summary.js');
+  expect(imports).not.toContain('../agent-pool/automatic-recovery.js');
+});

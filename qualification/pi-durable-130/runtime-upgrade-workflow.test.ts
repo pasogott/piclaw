@@ -65,7 +65,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
     const policy = await openFixture({ acquired: true }); await policy.close();
     const model = { id: "synthetic", name: "Synthetic", provider: "qualification", api: "openai-completions" as const, baseUrl: "https://invalid.invalid", reasoning: false, input: ["text" as const], contextWindow: 100000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     const modelOptions = createAgentPoolModelOptions([model]);
-    const queue = new AgentQueue(), pool = new AgentPool({ ...modelOptions, createSession: async (chat, sessionDir) => {
+    const queue = new AgentQueue(), pool = new AgentPool({ ...modelOptions, getDurableSession:undefined,legacyCapture:true, createSession: async (chat, sessionDir) => {
       const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
         appendSystemPromptOverride: () => [], agentsFilesOverride: () => ({ agentsFiles: [] }),
         disabledBuiltinExtensions: ["codemode", "tool-search", "mcp"], systemPromptOverride: () => scenario === "happy-different-current" ? "Captured current continuation policy" : "original baseline" });

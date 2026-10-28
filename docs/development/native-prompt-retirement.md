@@ -36,7 +36,7 @@ Native root SDK definitions/resources, smart summary preparation, provider quota
 
 #1673 stays open for exclusive configuration consumers and the #1672 composition prerequisite. Its four fallback runner call sites and deprecated public runner/options have been retired. Read-only legacy recovery-settings metadata still has a general-settings consumer; it grants no native retry permission. The compatibility session/resource composition and its final lifetime audit are outstanding.
 
-#1672 retains its final composition/lifetime audit. #1691/#1692 own physical legacy execution-field and UI projection retirement; no historical marker, payload, receipt or database is removed by this code deletion. No dependency upgrade, deployment, restart or live storage/configuration operation is included.
+[Native host composition](native-host-composition.md) requires native lookup or an explicit historical `legacyCapture: true` selection. Native tool/binder/session lifecycle placeholders, warmup entry points and idle GC timer are deleted; unsupported native MCP live Apply cannot borrow an empty legacy shutdown certificate. The independent real native MCP/resource owner and explicit resident capture path remain separately qualified. #1672 acceptance requires merged construction/lifetime evidence. #1691/#1692 own physical legacy execution-field and UI projection retirement; no historical marker, payload, receipt or database is removed by this code deletion. No dependency upgrade, deployment, restart or live storage/configuration operation is included.
 
 ## Evidence
 

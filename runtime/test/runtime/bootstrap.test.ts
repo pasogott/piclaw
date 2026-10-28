@@ -24,7 +24,7 @@ import { AgentPool } from "../../src/agent-pool.js";
 import { AgentQueue } from "../../src/queue.js";
 import { WebChannel } from "../../src/channels/web.js";
 import { initDatabase, getDb, closeDatabase } from "../../src/db/connection.js";
-import { createAgentPoolModelOptions } from "../model-services-fixture.js";
+import { createAgentPoolModelOptions,createLegacyCapturePoolOptions } from "../model-services-fixture.js";
 import type { RuntimeBootstrapContext } from "../../src/runtime/bootstrap.js";
 import { getChatTransport, registerChatTransport, setLocalChatTransport } from "../../src/extensions/chat-transport-registry.js";
 
@@ -85,7 +85,7 @@ describe("runtime bootstrap", () => {
     const dir = mkdtempSync(join(tmpdir(), "migration-runtime-"));
     const owner = acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true });
     const queue = new AgentQueue();
-    const pool = new AgentPool(createAgentPoolModelOptions());
+    const pool = new AgentPool(createLegacyCapturePoolOptions());
     // The suite shares SESSIONS_DIR with deliberately malformed history fixtures.
     // Verify bootstrap's real configuration, then scope this fixture's real capture.
     const capture = pool.captureLegacyUpgradeBindings.bind(pool);
@@ -174,7 +174,7 @@ describe("runtime bootstrap", () => {
     const dir = mkdtempSync(join(tmpdir(), "migration-local-"));
     const owner = acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true });
     const queue = new AgentQueue();
-    const pool = new AgentPool(createAgentPoolModelOptions());
+    const pool = new AgentPool(createLegacyCapturePoolOptions());
     const web = new WebChannel({ queue, agentPool: pool });
     const producer = Promise.withResolvers<void>();
     const ready = Promise.withResolvers<RuntimeBootstrapContext>();

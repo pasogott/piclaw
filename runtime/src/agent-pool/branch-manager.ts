@@ -68,8 +68,7 @@ export interface ActiveChatAgent {
 export interface AgentBranchManagerOptions {
   pool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
-  getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
-  refreshRuntime: (chatJid: string, runtime: AgentSessionRuntime) => Promise<void>;
+  getOrCreateRuntime?: (chatJid: string) => Promise<AgentSessionRuntime>;
   isActive: (chatJid: string) => boolean;
   scheduleSessionWarmup?: (chatJid: string) => void;
   cancelSessionWarmup?: (chatJid: string) => void;
@@ -536,6 +535,7 @@ export class AgentBranchManager {
     });
 
     try {
+      if (!this.options.getOrCreateRuntime) throw Error("Native session restoration does not construct legacy sessions");
       await this.options.getOrCreateRuntime(chatJid);
     } catch (err) {
       this.options.onWarn?.("Restored branch but failed to warm its session", {
@@ -558,6 +558,7 @@ export class AgentBranchManager {
       const existing = findOwnedFork(getDb(), owner, sourceChatJid, options.requestId ?? "");
       if (existing) return { ...existing, display_name: null };
     }
+    if (!this.options.getOrCreateRuntime) throw Error("Native branch fork does not construct legacy sessions");
     const sourceSession = (await this.options.getOrCreateRuntime(sourceChatJid)).session;
     const sourceIsActive = isSessionActive(sourceSession);
     const stableForkLeafId = this.options.activeForkBaseLeafByChat.has(sourceChatJid)

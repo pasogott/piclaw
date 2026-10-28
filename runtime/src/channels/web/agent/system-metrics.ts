@@ -288,7 +288,8 @@ function readCgroupMemoryCurrent(): number | null {
 }
 
 function normalizeRuntimeMemorySnapshot(snapshot: AgentPoolMemoryInstrumentationSnapshot | null | undefined): RuntimeMemorySnapshot | null {
-  if (!snapshot) return null;
+  // These are legacy session-pool counters, not native SDK runtime metrics.
+  if (!snapshot?.sessionManager) return null;
   return {
     cached_main_sessions: snapshot.cachedMainSessions,
     cached_side_sessions: snapshot.cachedSideSessions,
