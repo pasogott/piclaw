@@ -10,7 +10,6 @@ import {
 import {
   reconcileContextUsageForChat,
   resetContextSessionGenerationsForTests,
-  persistContextUsage,
   restoreContextUsage,
   refreshContextUsageForChat,
 } from '../../web/src/ui/app-status-refresh-orchestration.js';
@@ -715,7 +714,7 @@ test('handleAppSseEvent resets context on a new session generation and rejects s
   });
 });
 
-test('same-identity replacement clears active and inactive persisted meters without losing cache telemetry', () => {
+test('same-identity replacement clears active and inactive page-local meters without losing cache telemetry', () => {
   const previousWindow = (globalThis as any).window;
   const storage = new Map<string, string>();
   (globalThis as any).window = { localStorage: {
@@ -729,7 +728,6 @@ test('same-identity replacement clears active and inactive persisted meters with
         tokens: 777, contextWindow: 10000, percent: 7.77, sessionGeneration: 'stable-session',
         cacheUsage: { latest: { cacheHitRate: 75 } },
       }, { authoritative: true });
-      persistContextUsage(chat, previous);
       if (chat === 'chat:alpha') state.setContextUsageState(previous);
       handleAppSseEvent('agent_status', { chat_jid: chat, type: 'context_usage', context_usage: {
         tokens: null, contextWindow: null, percent: null, sessionGeneration: 'stable-session', contextUpdate: 'replace',
@@ -738,16 +736,17 @@ test('same-identity replacement clears active and inactive persisted meters with
     }
     expect(state.getContextUsageState()).toMatchObject({ tokens: null, percent: null });
     expect(state.getAgentStatusState()).toBeNull();
+    expect(storage.size).toBe(0);
   } finally { (globalThis as any).window = previousWindow; }
 });
 
-test('switching back cannot restore stale pane meters after inactive replacement, storage failure and offline refresh', async () => {
+test('switching back cannot restore stale pane meters after inactive replacement, unavailable storage and offline refresh', async () => {
   const previousWindow = (globalThis as any).window;
   const storage = new Map<string, string>();
-  let failWrites = false;
+  let failWrites = false, storageReads = 0, storageWrites = 0;
   (globalThis as any).window = { localStorage: {
-    getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => { if (failWrites) throw Error('storage unavailable'); storage.set(key, value); },
+    getItem: (key: string) => { storageReads++; return storage.get(key) ?? null; },
+    setItem: (key: string, value: string) => { storageWrites++; if (failWrites) throw Error('storage unavailable'); storage.set(key, value); },
   } };
   try {
     const state = createDeps(); // alpha active; beta's saved pane is inactive
@@ -755,7 +754,7 @@ test('switching back cannot restore stale pane meters after inactive replacement
       tokens: 777, contextWindow: 10000, percent: 7.77, sessionGeneration: 'stable-session',
       cacheUsage: { latest: { cacheHitRate: 75 } },
     }, { authoritative: true });
-    persistContextUsage('chat:beta', previous);
+    storage.set('piclaw:ctx:chat:beta', JSON.stringify(previous)); // Inert historical bytes from an older page.
     const pane = { ...createEmptyChatPaneState(), contextUsage: previous, agentPlan: 'keep plan',
       followupQueueItems: [{ row_id: 'keep', content: 'keep queue' }] };
     failWrites = true;
@@ -777,6 +776,7 @@ test('switching back cannot restore stale pane meters after inactive replacement
       getAgentContext: async () => { throw Error('offline'); }, setContextUsage: state.deps.setContextUsage });
     expect(state.getContextUsageState()?.tokens).toBeNull();
     expect(restoreContextUsage('chat:beta')?.tokens).toBeNull();
+    expect(storageReads).toBe(0); expect(storageWrites).toBe(0);
   } finally { (globalThis as any).window = previousWindow; }
 });
 
