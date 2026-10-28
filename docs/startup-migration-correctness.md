@@ -8,7 +8,7 @@ Issues #1699, #1700 and #1701 share one requirement: record or report an applied
 
 Replay compares owner, ID, order and SQL checksum. Changed historical order or SQL fails without rewriting the receipt. A later failure rolls back the entire unapplied batch, including its ledger writes. Previously applied receipts remain unchanged. Separate owners can retain their existing IDs/order values.
 
-`piclaw_schema_migrations` remains the owned ledger. Historical `user_version`, `core_schema_migrations` and SDK `durable_schema` interpretation is unchanged. The broader retirement work in #1274 and ledger-shape work in #1684 remain separate.
+`piclaw_schema_migrations` remains the owned ledger. Historical `user_version`, `core_schema_migrations` and SDK `durable_schema` interpretation is unchanged. The subsequent [#1274 web-session slice](development/web-session-schema-ledger.md) adopts the existing identity index under this same ledger and removes two bespoke ensure helpers. Ledger-shape work in #1684 is separate.
 
 ## Selected legacy columns
 
@@ -16,7 +16,7 @@ The message-column and keychain-note compatibility helpers now share `ensureLega
 
 A failed ALTER is accepted only when a fresh schema read proves the expected column shape. Missing, wrong-shape or uninspectable columns stop initialization. Diagnostics contain the selected table/column identity and exclude raw SQLite errors, SQL text, paths and values. A successful no-op ALTER cannot bypass verification.
 
-The caller's foreign-key policy is restored on both successful and failed schema initialization. The existing startup transaction rolls back earlier DDL when a later postcondition fails. Other legacy ensure helpers are unchanged; this is a scoped compatibility fix while stable schema changes move to the owned ledger through #1274.
+The caller's foreign-key policy is restored on both successful and failed schema initialization. The existing startup transaction rolls back earlier DDL when a later postcondition fails. The #1699 slice left other legacy ensure helpers unchanged. #1274 subsequently reuses this verifier for the selected web-session columns and the existing owned ledger for their stable identity index; unselected legacy steps remain unchanged.
 
 ## Media compression
 
