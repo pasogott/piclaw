@@ -46,10 +46,6 @@ describe("web channel http surface service", () => {
           calls.push(`workspace:${req.method}`);
           return response("workspace");
         },
-        handleTimeline: (limit: number, before?: number, chatJid?: string) => {
-          calls.push(`timeline:${limit}:${before ?? "null"}:${chatJid ?? ""}`);
-          return response("timeline");
-        },
         handleHashtag: (tag: string, limit: number, offset: number, chatJid?: string) => {
           calls.push(`hashtag:${tag}:${limit}:${offset}:${chatJid ?? ""}`);
           return response("hashtag");
@@ -225,7 +221,7 @@ describe("web channel http surface service", () => {
     expect(await (await service.handleManifest(new Request("https://example.test/manifest.json", { method: "HEAD" }))).text()).toBe("manifest");
     expect(await (await service.handleAvatar("user", getReq)).text()).toBe("avatar");
     expect(await (await service.handleWorkspaceVisibility(postReq)).text()).toBe("workspace");
-    expect(await service.handleTimeline(5, 7, "web:branch").text()).toBe("timeline");
+    expect(service).not.toHaveProperty("handleTimeline");
     expect(await service.handleHashtag("tag", 6, 2, "web:branch").text()).toBe("hashtag");
     expect(await service.handleSearch("query", 7, 3, "web:branch", "root", "web:root").text()).toBe("search");
     expect(await service.handleThread(9, "web:branch").text()).toBe("thread");
@@ -271,7 +267,6 @@ describe("web channel http surface service", () => {
       "manifest:HEAD",
       "avatar:user:GET",
       "workspace:POST",
-      "timeline:5:7:web:branch",
       "hashtag:tag:6:2:web:branch",
       "search:query:7:3:web:branch:root:web:root",
       "thread:9:web:branch",

@@ -17,7 +17,6 @@ import {
   handleSearchRequest,
   handleThoughtRequest,
   handleThreadRequest,
-  handleTimelineRequest,
 } from "./content-endpoints.js";
 import { deletePostResponse } from "../timeline-service.js";
 import { handleAgentsRequest, handleAvatarRequest } from "./identity-endpoints.js";
@@ -83,10 +82,6 @@ export class WebChannelEndpointFacadeService {
     const url = new URL(req.url);
     const chatJid = url.searchParams.get("chat_jid")?.trim() || this.options.defaultChatJid;
     return await this.options.handlePostRequest(req, isReply, chatJid);
-  }
-
-  handleTimeline(limit: number, before?: number, chatJid?: string): Response {
-    return handleTimelineRequest(limit, before, chatJid, this.options.endpointContexts.content());
   }
 
   handleHashtag(tag: string, limit: number, offset: number, chatJid?: string): Response {
