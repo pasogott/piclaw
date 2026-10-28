@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as config from '../../src/core/config-integrations.js';
+import { getRegisteredDomainConfigSchemas, readDomainConfig } from '../../src/core/domain-config.js';
+import { loadPiclawEnvConfig } from '../../src/core/config-sources.js';
+import { assertPathWithinTestFilesystemIsolation } from '../../scripts/test-filesystem-isolation.js';
+
+const path = join(process.env.PICLAW_WORKSPACE!, '.piclaw/config.json');
+assertPathWithinTestFilesystemIsolation(path, process.env, { allowRoot: false });
+const original = readFileSync(path, 'utf8');
+assert.equal('AGENT_LOG_CONFIG' in config, false);
+assert.equal('getAgentLogConfig' in config, false);
+const schema = getRegisteredDomainConfigSchemas().find(entry => entry.domain === 'logging')!;
+assert(schema);
+const retired = ['PICLAW_AGENT_LOG_RETENTION_MS', 'PICLAW_AGENT_LOG_RETENTION_DAYS', 'PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS'];
+const aliases = Object.values(schema.fields).flatMap(field => field.compatibilityEnv ?? []).map(alias => alias.envKey);
+assert(retired.every(name => !aliases.includes(name)));
+const value = readDomainConfig(schema, { configPath: path, env: process.env });
+assert.deepEqual(value, { level: 'warn', retentionMs: 123456, cleanupIntervalMs: 654321 });
+assert.deepEqual(config.getLoggingConfig(), { level: 'warn' });
+assert.equal(Object.isFrozen(config.getLoggingConfig()), true);
+const dotenv = loadPiclawEnvConfig();
+assert(retired.every(name => !(name in dotenv)));
+assert.equal(readFileSync(path, 'utf8'), original);
+console.log(JSON.stringify({ exportsRetired: true, aliasesRetired: true, legacyJsonAccepted: true, configBytesPreserved: true, loggingLevelPreserved: true }));
