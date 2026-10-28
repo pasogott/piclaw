@@ -113,13 +113,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     db.exec("CREATE TABLE IF NOT EXISTS recovery_fixture_identity (id TEXT PRIMARY KEY, input TEXT NOT NULL)");
     let ports = stores();
     async function open() {
-      runtime = await HostConversationRuntime.open({ incarnation, owner: { assert, release() {} },
-        openStorage: async () => { assert(); candidateStorage = await openStorage(); return candidateStorage; },
-        harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
-        prepareTerminalEffect: testConfig.prepareTerminalEffect,
-        withIdleModelGuard: testConfig.withIdleModelGuard,
-        withPromptContextGuard: testConfig.withPromptContextGuard,
-        ...ports, existingConversationIds: [base.root.id], conversationFor(chat, branch) {
+      runtime = await HostConversationRuntime.open({ incarnation, owner: { assert, release() {} }, openStorage: async () => { assert(); candidateStorage = await openStorage(); return candidateStorage; }, harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } }, prepareTerminalEffect: testConfig.prepareTerminalEffect, withIdleModelGuard: testConfig.withIdleModelGuard, withPromptContextGuard: testConfig.withPromptContextGuard, ...ports, existingConversationIds: [base.root.id], conversationFor(chat, branch) {
           if (chat !== chatJid || branch !== "main") throw Error("Manifest conflict"); return base.root.id;
         }, authorizeScheduling(inspection) {
           assert(); authorizations++;
@@ -127,7 +121,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
           const httpRow = testConfig.httpPrimary ? db.query('SELECT rowid, id FROM messages WHERE chat_jid=? AND is_bot_message=0 ORDER BY rowid LIMIT 1').get(chatJid) as { rowid: number; id: string } | null : null;
           const allowedPrimary = httpRow ? `message:${httpRow.rowid}:${httpRow.id}` : primaryRequestId;
           if (inspection.submissions.some(s => s.conversationId !== base.root.id || (![allowedPrimary, `queued-steer:${intentSourceId}`].includes(s.requestId!) && !testConfig.allowRequest?.(s.requestId!)))) throw Error("Unknown recovered authority");
-        }, putAnswer(ref, text) { payloads.putText(ref, text); }, sessionId: incarnation, lane: "main", generation, now: () => testConfig.httpPrimary ? new Date().toISOString() : at }, context);
+        }, putAnswer(ref, text) { payloads.putText(ref, text); }, sessionId: incarnation, now: () => testConfig.httpPrimary ? new Date().toISOString() : at }, context);
       return createDurableConversationAdapter({ incarnation, manifest, runtime });
     }
     const snapshot = () => ["messages", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits", "recovery_fixture_identity"].map(t => db.query(`SELECT * FROM ${t}`).all());
@@ -146,13 +140,12 @@ async function prepare() {
       const primaryId = await runtime!.submit(primary);
       await runtime!.wait(primary, primaryId); // Primary is committed before the restart; never replay it.
       const operation = value(await ports.work.getOperation(claimed.operation.operationId))!;
-      value(await ports.work.bindHarness(sealed({ effect: effect(`${incarnation}:running`, incarnation, source.sourceSeq), expectedVersion: operation.version,
-        sessionId: incarnation, lane: "main", harnessOperationId: String(primaryId), state: "running" as const, watchGeneration: generation })));
+      value(await ports.work.bindHarness(sealed({ effect: effect(`${incarnation}:running`, incarnation, source.sourceSeq), expectedVersion: operation.version, sessionId: incarnation, harnessOperationId: String(primaryId) })));
       const b = value(await ports.work.acceptSource(sealed({ effect: effect(`${incarnation}:B`), chatJid, sourceId: intentSourceId, kind: "message" as const,
         payloadRef: `queued-source:${intentSourceId}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
       setDeferredQueuedFollowups(chatJid, [{ rowId: 1650, threadId: null, source_id: b.sourceId, source_accepted: true, queuedContent: "accepted B", queuedAt: at }]);
       const coordinator = createDurableQueuedSteering({ work: ports.work, chatJid, branchId: "main", assertCurrentWriter: assert,
-        runningBinding: { sessionId: incarnation, lane: "main", watchGeneration: generation },
+        runningBinding: { sessionId: incarnation },
         adapter: { ...adapter, validateIntent(input) {
           adapter.validateIntent(input);
           // Fixture controller's captured identity is persisted in the SAME materialization transaction.

@@ -146,7 +146,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     wrapWait: failWait ? wait => async (...args) => { await wait(...args); failed.release(); throw Error("lost wait ACK"); } : undefined,
     ...importedBindings, sessions: new Map(importedBindings.sessions),
     offlineInitialize: true, answers,
-    runtime: { incarnation, sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
+    runtime: { incarnation, sessionId: "preserved-session", now: () => new Date().toISOString(),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } } },
   } satisfies Parameters<typeof createApplicationBootstrapBundle>[0];
   if (!failWait && !forks) {

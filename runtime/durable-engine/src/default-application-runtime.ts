@@ -1309,7 +1309,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       check(ref, lifetime.signal);
       return binding;
     },
-    runtime: { onStorageFailure: notifyStorageFailure, incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
+    runtime: { onStorageFailure: notifyStorageFailure, incarnation: mapping.domain, sessionId: mapping.domain, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
   if (remotePeer) {
     const native = await import(pathToFileURL(join(remotePeer.source.packageDir, "native.ts")).href);

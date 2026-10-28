@@ -12,7 +12,9 @@
     "host.historical-accounts/offline-empty-v1": "{\"base\":\"bae0a32550a17711957b75ae8d45bbc6b008e4c9\",\"historicalSource\":\"cdc214fcc06349dc9d315c2d17c866764e4557d5\",\"owner\":\"host.historical-accounts\",\"id\":\"offline-empty-v1\",\"migration_order\":1,\"checksum\":\"746a4c82365ce5a36baf333a86d4331c9272e9c812920652ab0c7743ba2bc09e\"}",
     "host.chat-cursors/native-frontier-prequeue-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"native-frontier-prequeue-v1\",\"migration_order\":1,\"checksum\":\"8e9e5d0741ff9d493dd3b1032cd0cb2ee9b2ba703c9cf1dcb2c7b4ad7b4afdb3\"}",
     "host.chat-cursors/native-frontier-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"native-frontier-v1\",\"migration_order\":1,\"checksum\":\"e5f26cdd5e61243ef522e2cedc1ec175c96df433feed354f6418479a988f72d5\"}",
-    "host.chat-cursors/polling-frontier-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"polling-frontier-v1\",\"migration_order\":1,\"checksum\":\"539339d735a1b5fa7411e90c948484746a7d71675ebb60e01b860f0d702fb0ef\"}"
+    "host.chat-cursors/polling-frontier-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"polling-frontier-v1\",\"migration_order\":1,\"checksum\":\"539339d735a1b5fa7411e90c948484746a7d71675ebb60e01b860f0d702fb0ef\"}",
+    "service_effect_s01/native-harness-binding-v1": "{\"base\":\"75e5b08d5399beb1c3728e4d96ec6fdbebda08bf\",\"owner\":\"service_effect_s01\",\"id\":\"native-harness-binding-v1\",\"migration_order\":2,\"checksum\":\"e88db3dc4c81f5f3dd319ed92a2a79aa92e759d6ae12c6eb1180351daddc0742\"}",
+    "service_effect_s01/retire-harness-mirrors-v1": "{\"base\":\"75e5b08d5399beb1c3728e4d96ec6fdbebda08bf\",\"owner\":\"service_effect_s01\",\"id\":\"retire-harness-mirrors-v1\",\"migration_order\":2,\"checksum\":\"eb5306aba410376f94eb9d4a2c9bcdbbf9ba2fad0337b4d06994143640a9d809\"}"
   },
   "owners": {
     "core:background-contexts": {
@@ -580,8 +582,8 @@
         "runtime/src/service-effects/current-piclaw/terminal-settlement-store.ts",
         "runtime/src/service-effects/current-piclaw/service-work-store.ts"
       ],
-      "sourceOfTruth": "S01 durable accepted sources/operations/queue/intents and decision receipts; replay identity is authoritative, not a disposable projection.",
-      "replayRetention": "service-work-store.ts decision replay/idempotency checks; no broad terminal cleanup/TTL found. Preserve source and operation membership.",
+      "sourceOfTruth": "Host operation admission, source membership, version/cancellation/terminal-delivery phases and immutable session/primary-execution binding. SDK tasks own live status, lane and physical generations; no persisted native execution observation is authoritative here.",
+      "replayRetention": "Preserve operation/source identity, active-operation uniqueness, cancellation, terminal delivery and idempotency receipts. Owned order2 retires only three SDK mirrors, retaining original values in an optional forensic archive without retargeting any inbound FK. No TTL, recovery replay or physical retention authority is created.",
       "references": [
         "runtime/src/service-effects/current-piclaw/service-work-schema.ts",
         "runtime/src/service-effects/current-piclaw/service-work-store.ts"
@@ -1247,6 +1249,20 @@
         "runtime/src/db/chat-cursor-storage.ts",
         "runtime/src/runtime/bootstrap.ts",
         "runtime/test/fixtures/legacy-chat-cursors.sql"
+      ]
+    },
+    "archive:s01-harness-observations": {
+      "category": "migration-archive",
+      "initializer": "runtime/src/service-effects/current-piclaw/service-work-schema.ts#installServiceWorkSchema",
+      "writers": [
+        "runtime/src/service-effects/current-piclaw/service-work-schema.ts (one owned historical retirement only)"
+      ],
+      "sourceOfTruth": "Original lane/state/watch values keyed by original operation identity and full-width rowid, copied before retiring the exclusive columns. Host protocol/binding records remain active; this historical snapshot grants no execution, cancellation, maintenance or owner-generation authority.",
+      "replayRetention": "Preserve raw historical observations and migration receipts. No runtime reader/writer, pruning or restore API. This archive is not the complete recovery/rollback unit. Fresh roots create no archive.",
+      "references": [
+        "runtime/src/service-effects/current-piclaw/service-work-schema.ts",
+        "runtime/src/service-effects/current-piclaw/service-work-store.ts",
+        "runtime/durable-engine/src/host-runtime.ts"
       ]
     }
   },
@@ -2802,7 +2818,8 @@
     "table:service_effect_s01_operations": {
       "owner": "core:service_effect_s01_operations",
       "fingerprints": [
-        "a8348c18a290f2a60b965c28fda0159cc3fa58527887b77d1625fdc5e93da9e1"
+        "a8348c18a290f2a60b965c28fda0159cc3fa58527887b77d1625fdc5e93da9e1",
+        "72020fd8c8eabb024a944c6a20973e210a23177a2f470792ca22551477648bc3"
       ],
       "requiredIn": [
         "core",
@@ -4704,6 +4721,18 @@
       "requiredWhenOwnerPresent": true,
       "derivedIndexes": [
         "41298dcc3a243b5aee011307b28bcc0e977ab27635f854e4f8f2f346722c9508"
+      ]
+    },
+    "table:service_effect_s01_legacy_harness_v1": {
+      "owner": "archive:s01-harness-observations",
+      "fingerprints": [
+        "0c5acf61ff1fa8d5e3a8ffa21ed37123590570fc969f26136b5fba37be706ab4"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "64159762982ce5663407e3a742fe21d3a9a5c9ccb7e3843ff75e4038016abd42",
+        "b5f577c2f6e5e9c25eb8d62245559171ccd5bdf44372fc80435d6e5b59287040"
       ]
     }
   },

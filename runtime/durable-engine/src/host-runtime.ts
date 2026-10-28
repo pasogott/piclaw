@@ -120,8 +120,6 @@ export interface RuntimeOptions {
   readonly materializeAnswer?: (ref: string, answer: SettledAnswer, operation: OperationSnapshot) => Promise<MaterializedAnswer>;
   readonly onStorageFailure?: (error: unknown) => void;
   readonly sessionId: string;
-  readonly lane: string;
-  readonly generation: number;
   readonly now: () => string;
 }
 
@@ -189,8 +187,8 @@ function currentHarnessSettings(options: HarnessOptions) {
 }
 function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
-    openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
-  return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
+    openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId } = o;
+  return Object.freeze({ incarnation, sessionId, captured: true as const,
     codemodeExecute: o.codemodeExecute,
     onStorageFailure: o.onStorageFailure?.bind(o),
     assertAdmission: o.assertAdmission?.bind(o),
@@ -272,8 +270,8 @@ export class HostConversationRuntime {
   static async open(config: RuntimeOptions, context: Context): Promise<HostConversationRuntime> {
     const options = runtimeSnapshot(config);
     options.owner.assert(); // Before storage normalization/construction, including SQLite open recovery.
-    if (!options.incarnation || !Number.isSafeInteger(options.generation) || options.generation < 1 || !options.existingConversationIds.length)
-      throw new Error("Explicit store identity, generation and existing manifest required");
+    if (!options.incarnation || !options.sessionId || !options.existingConversationIds.length)
+      throw new Error("Explicit store identity, session binding and existing manifest required");
     const storage = await options.openStorage();
     let harness: Harness | undefined;
     try {
@@ -1524,8 +1522,7 @@ export class HostConversationRuntime {
         if (!current || current.chatJid !== input.chatJid || current.phase !== "executing" || current.cancellation ||
           !current.claimedSourceSeqs.includes(input.sourceSeq) || (operation && (operation.operationId !== current.operationId || operation.version !== current.version)))
           throw Error("Host operation authority unavailable");
-        if (current.harness ? current.harness.sessionId !== o.sessionId || current.harness.lane !== o.lane ||
-          current.harness.watchGeneration !== o.generation || current.harness.state !== "running" ||
+        if (current.harness ? current.harness.sessionId !== o.sessionId ||
           (!live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId) && data.role !== "intent")
           : callId !== undefined || data.role !== "primary" || current.primarySourceSeq !== input.sourceSeq)
           throw Error("Exact host harness required");
@@ -1560,8 +1557,7 @@ export class HostConversationRuntime {
       const current = value(await o.work.getOperation(operation.operationId)); this.fence();
       if (!current || current.version !== operation.version || current.phase !== "executing" || current.cancellation ||
         current.harness?.harnessOperationId !== operation.harness?.harnessOperationId ||
-        current.harness?.sessionId !== operation.harness?.sessionId || current.harness?.lane !== operation.harness?.lane ||
-        current.harness?.watchGeneration !== operation.harness?.watchGeneration || current.harness?.state !== operation.harness?.state)
+        current.harness?.sessionId !== operation.harness?.sessionId)
         throw Error("Host operation authority unavailable");
       this.assertCapturedSourceCurrent(inputs);
       return { inputs: Object.freeze(inputs), operation, sourceModel };
@@ -1581,9 +1577,8 @@ export class HostConversationRuntime {
     if (!operation || operation.chatJid !== input.chatJid ||
       (intent ? operation.primarySourceSeq === input.sourceSeq : operation.primarySourceSeq !== input.sourceSeq) ||
       !operation.claimedSourceSeqs.includes(input.sourceSeq)) throw new Error("Unaccepted operation/source");
-    if (intent && (!operation.harness || operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
-      operation.harness.watchGeneration !== o.generation || !operation.harness.harnessOperationId ||
-      (!operation.terminal && operation.harness.state !== "running" && !(operation.phase === "settling" && operation.harness.state === "finished")))) throw new Error("Exact host harness required");
+    if (intent && (!operation.harness || operation.harness.sessionId !== o.sessionId || !operation.harness.harnessOperationId ||
+      (!operation.terminal && !["executing","cancelling","settling"].includes(operation.phase)))) throw new Error("Exact host harness required");
     if (intent) {
       const primary = await this.harness.submission(Number(operation.harness!.harnessOperationId) as SubmissionId, this.context); this.fence();
       const status = await primary?.status(this.context); this.fence();
@@ -1888,8 +1883,7 @@ export class HostConversationRuntime {
       const state = await this.readState(copy); this.fence();
       if (state.operation.terminal) return false;
       const harness = state.operation.harness;
-      if (!state.submissionId || !harness || harness.sessionId !== o.sessionId || harness.lane !== o.lane ||
-          harness.watchGeneration !== o.generation || harness.harnessOperationId !== String(state.submissionId))
+      if (!state.submissionId || !harness || harness.sessionId !== o.sessionId || harness.harnessOperationId !== String(state.submissionId))
         throw Error("Exact host harness required");
       const intents = await o.bindings.intents?.list(copy) ?? []; this.fence();
       const expected = state.operation.claimedSourceSeqs.filter(seq => seq !== copy.sourceSeq && seq !== state.operation.cancellation?.sourceSeq);
@@ -2151,23 +2145,22 @@ export class HostConversationRuntime {
     if (!operation) throw new Error("Missing operation");
     // Never refresh away an attachment/version fence after inspecting accepted inputs.
     if (operation.version !== initialVersion) return null;
-    if (operation.harness?.state === "running") {
-      if (!o.work.finishHarness) throw new Error("Host harness completion API required");
-      if (operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
-        operation.harness.watchGeneration !== o.generation || operation.harness.harnessOperationId !== String(primarySubmissionId))
+    if (!operation.harness) {
+      if (!primarySubmissionId) throw Error("Exact host primary binding required");
+      operation = value(await o.work.bindHarness(sealed({effect:effect(`runtime:bind:v2:${input.requestId}`,input.operationId,input.sourceSeq),
+        expectedVersion:operation.version,sessionId:o.sessionId,harnessOperationId:String(primarySubmissionId)}))); this.fence();
+    }
+    if (operation.phase !== "settling") {
+      if (!o.work.finishHarness) throw new Error("Host settlement API required");
+      if (operation.harness!.sessionId !== o.sessionId || operation.harness!.harnessOperationId !== String(primarySubmissionId))
         throw new Error("Exact host harness required");
       const request = {
-        effect: { ...effect(`runtime:finish:${input.requestId}:${operation.version}`, input.operationId, input.sourceSeq), operationId: input.operationId },
-        expectedVersion: operation.version, expectedHarness: operation.harness,
+        effect: {...effect(`runtime:finish:v2:${input.requestId}:${operation.version}`,input.operationId,input.sourceSeq),operationId:input.operationId},
+        expectedVersion:operation.version,expectedHarness:operation.harness!,
       } satisfies FinishHarnessRequest;
-      request.effect.requestHash = hashCanonicalRequest({ method: "finishHarness.v1", ...request } as unknown as CanonicalJsonValue);
+      request.effect.requestHash=hashCanonicalRequest({method:"finishHarness.v1",...request} as unknown as CanonicalJsonValue);
       this.fence();
-      operation = value(await o.work.finishHarness(request)); this.fence();
-    }
-    if (!operation.harness) {
-      operation = value(await o.work.bindHarness(sealed({ effect: effect(`runtime:bind:${input.requestId}:${o.generation}`, input.operationId, input.sourceSeq),
-        expectedVersion: operation.version, sessionId: o.sessionId, lane: o.lane, harnessOperationId: String(state.submissionId),
-        state: "finished" as const, watchGeneration: o.generation }))); this.fence();
+      operation=value(await o.work.finishHarness(request));this.fence();
     }
     const cancelled = operation.cancellation !== null, ref = `runtime-answer:${o.incarnation}:${state.submissionId}`;
     // Scheduled delivery belongs to EF-S07, not the ordinary-message publisher.

@@ -53,7 +53,7 @@ export function collectNativeRecoveryReferences(db: Database, submissions: Reado
       FROM piclaw_durable_bindings_v1 b
       JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid
       JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq
-      WHERE o.harness_state='finished' AND (o.terminal_disposition='completed'
+      WHERE o.phase='terminal' AND (o.terminal_disposition='completed'
         OR (o.terminal_disposition='failed' AND o.terminal_message_row_id IS NOT NULL))`).all() as
       { incarnation: string; submission_id: number | bigint | null; operation_id:string; chat_jid:string; conversation_id:number|bigint; request_id:string; source_id: string; kind: string; terminal_disposition: string; terminal_message_row_id: number | bigint | null }[];
     for (const binding of bindings) {

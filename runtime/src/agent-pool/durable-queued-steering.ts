@@ -18,7 +18,7 @@ export function createDurableQueuedSteering(options: {
   chatJid: string;
   branchId: string;
   assertCurrentWriter(): void;
-  runningBinding: Readonly<{ sessionId: string; lane: string; watchGeneration: number }>;
+  runningBinding: Readonly<{ sessionId: string }>;
   readQueued(rowId: number): QueuedFollowupItem | undefined;
   materialize(item: QueuedFollowupItem, accept: QueuedInputMaterialization): InteractionRow | null;
   /** Verify the original accepted immutable input digest, not just current queue bytes. */
@@ -40,12 +40,11 @@ export function createDurableQueuedSteering(options: {
     const frontier = await frontierFor(chatJid); assert();
     if (!frontier.ok || !frontier.value.activeOperationId) throw Error('No active host operation');
     const selected = await operationFor(frontier.value.activeOperationId); assert();
-    if (!selected.ok || !selected.value?.harness || selected.value.harness.state !== 'running')
+    if (!selected.ok || !selected.value?.harness || selected.value.phase !== 'executing')
       throw Error('No running host binding');
     // Snapshot all authority before materialization; attachment repeats the full SQL CAS.
     const target = structuredClone(selected.value);
-    if (target.harness!.sessionId !== binding.sessionId || target.harness!.lane !== binding.lane ||
-      target.harness!.watchGeneration !== binding.watchGeneration || !target.harness!.harnessOperationId)
+    if (target.harness!.sessionId !== binding.sessionId || !target.harness!.harnessOperationId)
       throw Error('Host harness binding conflict');
     const item = read(rowId);
     if (!item?.source_accepted || !item.source_id) throw Error('Accepted queue item unavailable');

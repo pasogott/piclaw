@@ -417,7 +417,7 @@ describe("EF-S01 hostile boundaries and identity", () => {
     }
   });
 
-  test("harness binding is immutable across every correlation component", async () => {
+  test("binding identity is immutable and retired SDK observations reject before mutation", async () => {
     const fixture = open();
     try {
       const operation = await seedOperation(
@@ -429,10 +429,7 @@ describe("EF-S01 hostile boundaries and identity", () => {
         effect: { ...effect("bind:first"), operationId: operation.operationId },
         expectedVersion: operation.version,
         sessionId: "session-1",
-        lane: "main",
         harnessOperationId: "run-1",
-        state: "running" as const,
-        watchGeneration: 7,
       };
       const request = hashed(base);
       expect((await fixture.store.bindHarness(request)).ok).toBeTrue();
@@ -450,7 +447,7 @@ describe("EF-S01 hostile boundaries and identity", () => {
         });
         expectTypedFailure(
           await fixture.store.bindHarness(changed),
-          "owner_conflict",
+          key === 'session' || key === 'run' ? 'owner_conflict' : 'invalid_transition',
         );
       }
     } finally {
@@ -835,10 +832,7 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
           },
           expectedVersion: operation.version,
           sessionId: "secret-session",
-          lane: "secret-lane",
           harnessOperationId: "secret-run",
-          state: "running" as const,
-          watchGeneration: 9,
         }),
       );
       expect(harness.ok).toBeTrue();

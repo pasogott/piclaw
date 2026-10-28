@@ -22,7 +22,7 @@ for (const boundary of ["before-submit", "committed-ack-lost"] as const) {
       const options = {
         incarnation: f.incarnation,
         binding: { chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id },
-        runningBinding: { sessionId: f.incarnation, lane: "main", watchGeneration: f.generation },
+        runningBinding: { sessionId: f.incarnation },
         assertOwner: () => f.owner.assert(), work: f.ports.work, bindings: f.ports.bindings,
         async readAcceptedInput(source: AcceptedSourceSnapshot) {
           const row = f.db.query("SELECT content FROM messages WHERE id=? AND chat_jid=?")

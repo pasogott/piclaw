@@ -84,8 +84,7 @@ async function setup(busy = false) {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => { assert(); expect(db.inTransaction).toBe(true); return true; },
     applyTerminalEffects(commit, scope) { return hooks.terminalEffects?.(commit, scope); },
   }));
-  const options: RuntimeOptions = {
-    cancelOperationSource(input, expectedVersion) {
+  const options: RuntimeOptions = { cancelOperationSource(input, expectedVersion) {
       db.transaction(() => {
         assert();
         const operation = db.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?")
@@ -98,33 +97,24 @@ async function setup(busy = false) {
           acceptedAt: at, createWakeIntent: false }), expectedVersion, "operator_abort", db);
         assert();
       }).immediate();
-    },
-    prepareTerminalEffect: input => hooks.prepareTerminal?.(input) ?? Promise.resolve(undefined),
-    incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
-    openStorage: async () => { assert(); opens++; return SqliteStorage.open(await openWalFixtureDatabase(path)); },
-    harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
-    work: { acceptSource: work.acceptSource.bind(work), claimNext: work.claimNext.bind(work), appendIntent: work.appendIntent.bind(work),
+    }, prepareTerminalEffect: input => hooks.prepareTerminal?.(input) ?? Promise.resolve(undefined), incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } }, openStorage: async () => { assert(); opens++; return SqliteStorage.open(await openWalFixtureDatabase(path)); }, harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } }, work: { acceptSource: work.acceptSource.bind(work), claimNext: work.claimNext.bind(work), appendIntent: work.appendIntent.bind(work),
       finishHarness: work.finishHarness.bind(work), bindHarness: work.bindHarness.bind(work), recordQueuedInput: work.recordQueuedInput.bind(work), getOperation: work.getOperation.bind(work),
       getChatFrontier: work.getChatFrontier.bind(work), listOpenOperations: work.listOpenOperations.bind(work),
       async acceptCancellation(request) { await hooks.cancellation?.(); return work.acceptCancellation(request); } }, terminal, existingConversationIds: [id], conversationFor: (chat, branch) => {
       if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch");
       return hooks.resolveConversation?.() ?? id;
-    },
-    bindings: createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
+    }, bindings: createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
       manifest: [{ chatJid: "web:runtime", branchId: "existing-main", conversationId: id }],
       async resolveContent(ref) {
         const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
         if (!payload) throw new Error("Missing host payload"); return payload.content;
-      } }),
-    async authorizeScheduling(inspection) {
+      } }), async authorizeScheduling(inspection) {
       authorizations++;
       await hooks.authorize?.();
       // Fail closed: this fixture grants progress only when there is no recovered live work.
       if (!busy && !allowKnown && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Recovered authority requires explicit host review");
       if ((busy || allowKnown) && inspection.submissions.some(s => s.conversationId !== id || !["request-1", "queued-steer:intent-1", "queued-steer:intent-2", ...(busy ? ["known-seed"] : [])].includes(s.requestId!))) throw new Error("Unknown recovered submission");
-    },
-    putAnswer: (ref, text) => { payloads.putText(ref, text); }, sessionId: "existing-host-session", lane: "main", generation: 1, now: () => at,
-  };
+    }, putAnswer: (ref, text) => { payloads.putText(ref, text); }, sessionId: "existing-host-session", now: () => at };
   const runtime = await HostConversationRuntime.open(options, context);
   async function accept(requestId = "request-1", content = "hello"): Promise<AcceptedInput> {
     const source = value(await work.acceptSource(sealed({ effect: effect(`accept:${requestId}`), chatJid: "web:runtime", sourceId: requestId,
@@ -138,9 +128,7 @@ async function setup(busy = false) {
   }
   async function attach(primary: AcceptedInput, submissionId: number, requestId = "intent-1", content = "new accepted answer"): Promise<AcceptedInput> {
     let op = value(await work.getOperation(primary.operationId))!;
-    if (!op.harness) op = value(await work.bindHarness(sealed({ effect: effect("bind-running", op.operationId, primary.sourceSeq),
-      expectedVersion: op.version, sessionId: options.sessionId, lane: options.lane, harnessOperationId: String(submissionId),
-      state: "running" as const, watchGeneration: options.generation })));
+    if (!op.harness) op = value(await work.bindHarness(sealed({ effect: effect("bind-running", op.operationId, primary.sourceSeq), expectedVersion: op.version, sessionId: options.sessionId, harnessOperationId: String(submissionId) })));
     const source = value(await work.acceptSource(sealed({ effect: effect(`accept:${requestId}`), chatJid: primary.chatJid,
       sourceId: requestId, kind: "message" as const, payloadRef: `queued-source:${requestId}`,
       targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
@@ -544,9 +532,7 @@ test("runtime: operator abort cancels a held tool before its effect", () => fixt
     const input = await f.accept("request-1", "use-tool");
     const id = await f.runtime.submit(input);
     const op = value(await f.work.getOperation(input.operationId))!;
-    value(await f.work.bindHarness(sealed({ effect: effect("abort-tool-bind", op.operationId, input.sourceSeq),
-      expectedVersion: op.version, sessionId: f.options.sessionId, lane: f.options.lane,
-      harnessOperationId: String(id), state: "running" as const, watchGeneration: f.options.generation })));
+    value(await f.work.bindHarness(sealed({ effect: effect("abort-tool-bind", op.operationId, input.sourceSeq), expectedVersion: op.version, sessionId: f.options.sessionId, harnessOperationId: String(id) })));
     const waiting = f.runtime.wait(input, id);
     await f.base.host.toolEntered.promise;
     expect(await f.runtime.abortOperation(input)).toBe(true);
@@ -563,9 +549,7 @@ test("runtime: operator abort rejects foreign run before recording cancellation"
   const input = await f.accept();
   const id = await f.runtime.submit(input);
   const op = value(await f.work.getOperation(input.operationId))!;
-  value(await f.work.bindHarness(sealed({ effect: effect("abort-bind", op.operationId, input.sourceSeq),
-    expectedVersion: op.version, sessionId: f.options.sessionId, lane: f.options.lane,
-    harnessOperationId: String(id), state: "running" as const, watchGeneration: f.options.generation })));
+  value(await f.work.bindHarness(sealed({ effect: effect("abort-bind", op.operationId, input.sourceSeq), expectedVersion: op.version, sessionId: f.options.sessionId, harnessOperationId: String(id) })));
   await expect(f.runtime.abortOperation(input)).rejects.toThrow("Foreign abort run input");
   expect(value(await f.work.getOperation(input.operationId))?.cancellation).toBeNull();
   expect(f.db.query("SELECT * FROM service_effect_s01_sources WHERE kind='cancellation'").all()).toEqual([]);
@@ -1078,7 +1062,8 @@ test("runtime intents: attachment after listed bindings cannot refresh the initi
     const current = value(await f.work.getOperation(input.operationId))!;
     expect(current.version).toBe(initial.version + 1);
     expect(current.claimedSourceSeqs).toEqual([...initial.claimedSourceSeqs, attached!.sourceSeq]);
-    expect(current.harness?.state).toBe("running");
+    expect(current.phase).toBe("executing");
+    expect(current.harness).toEqual({sessionId:f.options.sessionId,harnessOperationId:String(id)});
     expect(current.terminal).toBeNull();
     expect(await intents.get(attached!)).toBeNull();
     expect(f.db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?")
@@ -1133,7 +1118,8 @@ for (const failure of ["missing-port", "late-version", "materialize-retry"] as c
       await expect(reopened.settle(input)).rejects.toThrow();
       const op = value(await f.work.getOperation(input.operationId))!;
       expect(op.terminal).toBeNull();
-      expect(op.harness?.state).toBe(failure === "materialize-retry" ? "finished" : "running");
+      expect(op.phase).toBe(failure === "materialize-retry" ? "settling" : "executing");
+      expect(op.harness).toEqual({sessionId:f.options.sessionId,harnessOperationId:String(id)});
       expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(0);
       expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
       if (failure === "materialize-retry") {

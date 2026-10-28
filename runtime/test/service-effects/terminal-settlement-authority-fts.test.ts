@@ -23,7 +23,7 @@ describe("EF-S02 authority matrix and composed state", () => {
         disposition: "failed" as const,
         phase: "executing" as const,
         cancellation: null,
-        harness: { ...TERMINAL_HARNESS, state: "running" as const },
+        harness: TERMINAL_HARNESS,
       },
       {
         disposition: "skipped" as const,
@@ -35,7 +35,7 @@ describe("EF-S02 authority matrix and composed state", () => {
         disposition: "superseded" as const,
         phase: "suspended" as const,
         cancellation: null,
-        harness: { ...TERMINAL_HARNESS, state: "suspended" as const },
+        harness: TERMINAL_HARNESS,
       },
     ];
     try {

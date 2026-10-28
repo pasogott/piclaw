@@ -47,7 +47,7 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
   const chat = model ? "web:allocation-override" : "web:allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: main.id }];
   const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "session"]]), offlineInitialize: true,
-    runtime: { incarnation: "allocation", sessionId: "allocation", lane: "main", generation: 1, now: () => new Date().toISOString(),
+    runtime: { incarnation: "allocation", sessionId: "allocation", now: () => new Date().toISOString(),
       harnessOptions: { models: fixture.models, registry: fixture.registry, settings: { retry: { enabled: false } } } },
     answers: { resolver: { resolve: () => null }, put() {} },
   }, context);
@@ -136,7 +136,7 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   let acceptMainDuringPayload = false;
   const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "original"], [emptyChat, "empty-original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
-    runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
+    runtime: { incarnation: "side-allocation", sessionId: "side-allocation",
       now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry,
         settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
     answers: { resolver: { resolve(ref) {

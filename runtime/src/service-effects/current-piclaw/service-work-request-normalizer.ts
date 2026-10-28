@@ -52,13 +52,6 @@ const INTENT_KINDS = new Set([
   "settle",
   "maintenance",
 ]);
-const HARNESS_STATES = new Set([
-  "not_started",
-  "running",
-  "suspended",
-  "aborting",
-  "finished",
-]);
 const QUEUE_KINDS = new Set(["steer", "follow_up", "next_run"]);
 const QUEUE_STATES = new Set(["accepted", "queued", "consumed", "disposed"]);
 
@@ -167,30 +160,22 @@ export function normaliseMutationRequest(
         "effect",
         "expectedVersion",
         "sessionId",
-        "lane",
         "harnessOperationId",
-        "state",
-        "watchGeneration",
       ])
     ) {
-      const state = enumValue(request.state, HARNESS_STATES);
-      if (!effect.operationId || !state) return null;
+      if (!effect.operationId) return null;
       normalised = {
         effect: { ...effect, operationId: effect.operationId },
         expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
         sessionId: requiredText(request.sessionId),
-        lane: requiredText(request.lane),
-        harnessOperationId: requiredNullableText(request.harnessOperationId),
-        state: state as BindHarnessRequest["state"],
-        watchGeneration: requiredSafeInteger(request.watchGeneration, 0),
+        harnessOperationId: requiredText(request.harnessOperationId),
       };
     } else if (method === "finishHarness" && exactKeys(request, ["effect", "expectedVersion", "expectedHarness"])) {
       const harness = record(request.expectedHarness);
-      if (!effect.operationId || !harness || !exactKeys(harness, ["sessionId", "lane", "harnessOperationId", "state", "watchGeneration"]) || harness.state !== "running") return null;
+      if (!effect.operationId || !harness || !exactKeys(harness, ["sessionId", "harnessOperationId"])) return null;
       normalised = {
         effect: { ...effect, operationId: effect.operationId }, expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
-        expectedHarness: { sessionId: requiredText(harness.sessionId), lane: requiredText(harness.lane),
-          harnessOperationId: requiredText(harness.harnessOperationId), state: "running", watchGeneration: requiredSafeInteger(harness.watchGeneration, 0) },
+        expectedHarness: { sessionId: requiredText(harness.sessionId), harnessOperationId: requiredText(harness.harnessOperationId) },
       };
     } else if (
       method === "recordQueuedInput" &&
@@ -276,12 +261,11 @@ export function normaliseQueuedSourceAttachment(input: unknown): AttachQueuedSou
     if (!value || !isBoundedTree(input) || !exactKeys(value, ["effect", "chatJid", "expectedVersion", "expectedHarness", "sourceId", "sourceHash", "payloadRef", "createdAt"])) return null;
     const effect = normaliseEffect(value.effect);
     const harness = record(value.expectedHarness);
-    if (!effect?.operationId || !effect.sourceSeq || !harness || !exactKeys(harness, ["sessionId", "lane", "harnessOperationId", "state", "watchGeneration"]) || harness.state !== "running") return null;
+    if (!effect?.operationId || !effect.sourceSeq || !harness || !exactKeys(harness, ["sessionId", "harnessOperationId"])) return null;
     const request: AttachQueuedSourceRequest = {
       effect: { ...effect, operationId: effect.operationId, sourceSeq: requiredSafeInteger(effect.sourceSeq, 1) },
       chatJid: requiredText(value.chatJid), expectedVersion: requiredSafeInteger(value.expectedVersion, 1),
-      expectedHarness: { sessionId: requiredText(harness.sessionId), lane: requiredText(harness.lane),
-        harnessOperationId: requiredText(harness.harnessOperationId), state: "running", watchGeneration: requiredSafeInteger(harness.watchGeneration, 0) },
+      expectedHarness: { sessionId: requiredText(harness.sessionId), harnessOperationId: requiredText(harness.harnessOperationId) },
       sourceId: requiredText(value.sourceId), sourceHash: requiredText(value.sourceHash),
       payloadRef: requiredText(value.payloadRef), createdAt: requiredInstant(value.createdAt),
     };

@@ -80,10 +80,10 @@ export function createDurableQueueDispatch(options: {
         const id = await submit(accepted); assert();
         if (correlation && !operation.harness) {
           const harness = structuredClone(correlation(id));
-          if (harness.state !== 'running' || harness.harnessOperationId !== String(id)) return 'pending';
+          if (harness.harnessOperationId !== String(id)) return 'pending';
           const request = { effect: { idempotencyKey: `running:${operationId}:${id}`, requestHash: '', operationId,
             sourceSeq: source.sourceSeq, provenanceRef: source.provenanceRef, redactionClass: 'private' as const },
-            expectedVersion: operation.version, ...harness };
+            expectedVersion: operation.version, ...harness, harnessOperationId: String(id) };
           request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
           const bound = await bind(request); assert();
           if (!bound.ok) return 'pending';

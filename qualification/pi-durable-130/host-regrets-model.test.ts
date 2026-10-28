@@ -42,9 +42,7 @@ async function fixture() {
     operationId: claimed.operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,
     payloadRef: source.payloadRef, requestId: "authority:request", requestHash: "a".repeat(64), submissionId: 42 as never }];
   const before = { operation: claimed.operation, inputs };
-  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq),
-    expectedVersion: claimed.operation.version, sessionId: "authority:session", lane: "main",
-    harnessOperationId: "42", state: "running" as const, watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "authority:session", harnessOperationId: "42" })));
   root.exec("CREATE TABLE authority_probe (value TEXT)");
   return { root, before, captured: { operation, inputs } };
 }

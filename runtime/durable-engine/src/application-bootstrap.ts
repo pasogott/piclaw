@@ -126,7 +126,7 @@ export interface ApplicationBootstrapOptions {
   assertInputAdmission?: (chatJid: string, content: string) => void;
   prepareInputText?: NonNullable<WebChannelOpts["prepareInputText"]>;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
-  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute" | "onStorageFailure">;
+  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "harnessOptions" | "now" | "codemodeExecute" | "onStorageFailure">;
   /** Existing application payload store, with immutable answer references. */
   answers: { resolver: EffectPayloadResolver; put(ref: string, text: string): void | Promise<void> };
   /** Optional acknowledgement boundary; the supplied operation still performs the real wait. */
@@ -347,7 +347,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
       const branch = routeIndex.get(chat)?.branchId; if (!branch) throw Error("Unbound application branch"); return branch;
     }, assertCurrentWriter: assert,
-      runningCorrelation: id => ({ sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running", watchGeneration: r.generation }),
+      runningCorrelation: id => ({ sessionId: r.sessionId, harnessOperationId: String(id) }),
       shutdown: shutdown.signal, waitForReconciliation: recovery.waitForReconciliation });
     const getInputSourceAdmission: NonNullable<WebChannelOpts["getInputSourceAdmission"]> = chat => {
       const current = () => { const binding = routeIndex.get(chat); return binding && lookup(chat, binding.branchId); };
@@ -648,7 +648,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           const operation=value(await work.getOperation(input.operationId));assertLive();
           if(!operation)throw Error('Background operation unavailable');
           if(!operation.harness)value(await work.bindHarness(sealed({effect:effect(`background-bind:${input.requestId}`,input.operationId,input.sourceSeq),expectedVersion:operation.version,
-            sessionId:r.sessionId,lane:r.lane,harnessOperationId:String(submission),state:'running' as const,watchGeneration:r.generation})));
+            sessionId:r.sessionId,harnessOperationId:String(submission)})));
           if(payload.policy.origin.kind==='addon')markAddonOperationInputCommitted(operationId,payload.policy.origin.inputSequence);ready=true;timedOut ||= Date.now()>=Date.parse(payload.policy.expiresAt);if(signal.aborted||timedOut)cancel();
           if(cancelling)await cancelling;else await runtime.wait(input,submission,shutdown.signal);
           if(cancelling)await cancelling;
@@ -825,7 +825,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const operation = value(await work.getOperation(allocated.operationId)); assertLive();
         if (operation && !operation.harness) value(await work.bindHarness(sealed({
           effect: effect(`side-bind:${allocated.requestId}`, allocated.operationId, allocated.sourceSeq), expectedVersion: operation.version,
-          sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running" as const, watchGeneration: r.generation })));
+          sessionId: r.sessionId, harnessOperationId: String(id) })));
         let cancelling: Promise<void> | undefined;
         let timedOut = false;
         const timeoutMs = getAgentRuntimeConfig().timeoutMs;
@@ -1009,8 +1009,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!operation.harness) {
         const request = { effect: { idempotencyKey: `running:${input.operationId}:${id}`, requestHash: "", operationId: input.operationId,
           sourceSeq: input.sourceSeq, provenanceRef: `scheduled_run:${input.sourceId}`, redactionClass: "private" as const },
-          expectedVersion: operation.version, sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id),
-          state: "running" as const, watchGeneration: r.generation };
+          expectedVersion: operation.version, sessionId: r.sessionId, harnessOperationId: String(id) };
         request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
         value(await work.bindHarness(request)); assertLive();
       }
@@ -1026,12 +1025,12 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const projection = inputProjection, scope = routeIndex.get(chat);
       if (!projection || !scope || !lookup(chat, scope.branchId)) return undefined;
       const running = root.query(`SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND phase='executing'
-        AND harness_state='running' AND harness_session_id=? AND harness_lane=? AND harness_watch_generation=?`)
-        .get(chat, r.sessionId, r.lane, r.generation);
+        AND harness_session_id=? AND harness_operation_id IS NOT NULL`)
+        .get(chat, r.sessionId);
       if (!running) return undefined;
       const checkProjection = () => { assertLive(); check(); if (inputProjection !== projection) throw Error("Application input projection detached"); };
       return createDurableQueuedSteering({ work, adapter, chatJid: chat, branchId: scope.branchId,
-        assertCurrentWriter: checkProjection, runningBinding: { sessionId: r.sessionId, lane: r.lane, watchGeneration: r.generation },
+        assertCurrentWriter: checkProjection, runningBinding: { sessionId: r.sessionId },
         readQueued: id => hostFollowups.getQueuedFollowupItems(chat).find(item => item.rowId === id),
         validatePayload: stored => { checkProjection(); getQueuedInputMaterialization(chat)!(stored); checkProjection(); },
         materialize: (item, accept) => storeWebMessage(projection,

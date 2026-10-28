@@ -7,7 +7,7 @@ import { openSqliteSubject } from "./terminal-settlement-test-support.js";
 function fixture(validateAcceptance?: () => boolean) {
   const subject = openSqliteSubject(":memory:", [], false);
   const db = subject.database;
-  const harness = { ...TERMINAL_HARNESS, state: "running" as const };
+  const harness = { ...TERMINAL_HARNESS };
   subject.seedOperation(terminalOperation({ phase: "executing", harness }));
   let lost = false, fault = false;
   const made = createCurrentPiclawServiceWorkStore(db, { validateAcceptance, recordTrace() {}, hitFault(point, method) {
@@ -26,7 +26,7 @@ function seal<T extends FinishHarnessRequest>(r: T): T {
   return { ...r, effect: { ...r.effect, requestHash: hashCanonicalRequest({ method: "finishHarness.v1", ...r } as unknown as CanonicalJsonValue) } };
 }
 
-test("finish harness commits running -> finished/settling once, replays original decision and fences changed identity", async () => {
+test("host completion commits settling once without mirroring SDK state, replays original decision and fences changed identity", async () => {
   const f = fixture();
   try {
     const result = await f.work.finishHarness(f.request);
@@ -34,7 +34,7 @@ test("finish harness commits running -> finished/settling once, replays original
     if (!result.ok) throw Error("finish");
     expect(result.value.version).toBe(4);
     expect(result.value.phase).toBe("settling");
-    expect(result.value.harness).toEqual({ ...f.request.expectedHarness, state: "finished" });
+    expect(result.value.harness).toEqual(f.request.expectedHarness);
     const committed = f.snapshot();
     expect(await f.work.finishHarness(f.request)).toEqual(result);
     expect(f.snapshot()).toEqual(committed);

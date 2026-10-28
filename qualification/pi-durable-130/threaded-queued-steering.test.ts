@@ -46,7 +46,7 @@ for (const variant of ['plain', 'thread', 'screen', 'both', 'tampered'] as const
     const primary = root.query('SELECT rowid,id FROM messages WHERE chat_jid=? AND content=?').get(chat, 'Primary input') as any;
     settling = bundle.dispatchAcceptedInput(chat, primary.id, primary.rowid)!(); await entered.promise;
     for (let n = 0; n < 1000; n++) {
-      if (root.query("SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND harness_state='running'").get(chat)) break;
+      if (root.query("SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND phase='executing' AND harness_operation_id IS NOT NULL").get(chat)) break;
       await Bun.sleep(2);
     }
     const threadId = variant === 'screen' || variant === 'plain' ? null : primary.rowid;

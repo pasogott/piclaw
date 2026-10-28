@@ -31,7 +31,7 @@ export async function createHostController(config: HostControllerOptions, contex
   // its own deep contract snapshot synchronously below, before this function first yields.
   const acquire = config.acquireOwnership.bind(config), create = config.createStorage.bind(config);
   const r = config.runtime, recovery = config.recovery;
-  const { incarnation, sessionId, lane, generation } = r;
+  const { incarnation, sessionId } = r;
   const existingConversationIds = Object.freeze([...r.existingConversationIds]);
   const manifest = recovery.manifest.map(b => Object.freeze({ ...b }));
   const readAcceptedInput = recovery.readAcceptedInput.bind(recovery);
@@ -161,7 +161,7 @@ export async function createHostController(config: HostControllerOptions, contex
       assert();
       const all: (typeof recovered)[number][] = [];
       for (const binding of manifest) all.push(...await reconstituteAcceptedWork({ incarnation, binding,
-        runningBinding: { sessionId, lane, watchGeneration: generation }, assertOwner: assert,
+        runningBinding: { sessionId }, assertOwner: assert,
         work: recoveryWork, bindings: recoveryBindings, readAcceptedInput }));
       assert();
       return Object.freeze(all);

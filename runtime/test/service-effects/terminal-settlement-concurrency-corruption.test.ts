@@ -134,9 +134,8 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
           .prepare(
             `INSERT INTO service_effect_s01_operations(
                operation_id,chat_jid,version,phase,primary_source_seq,
-               harness_session_id,harness_lane,harness_operation_id,harness_state,
-               harness_watch_generation
-             ) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+               harness_session_id,harness_operation_id
+             ) VALUES (?,?,?,?,?,?,?)`,
           )
           .run(
             "operation-2",
@@ -145,10 +144,7 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
             "settling",
             2,
             TERMINAL_HARNESS.sessionId,
-            TERMINAL_HARNESS.lane,
             TERMINAL_HARNESS.harnessOperationId,
-            TERMINAL_HARNESS.state,
-            TERMINAL_HARNESS.watchGeneration,
           );
         subject.database
           .prepare(

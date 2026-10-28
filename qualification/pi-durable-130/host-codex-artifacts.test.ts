@@ -47,7 +47,8 @@ async function sourceRoot(body: (f: any) => Promise<void>, native = false) {
  async function accept(){
  source=value(await work.acceptSource(sealed({effect:effect('image-source'),chatJid:'web:images',sourceId:'image-source',kind:'message',payloadRef:native ? 'message-row:1' : 'input:image',targetOperationId:null,parentSourceSeq:null,acceptedAt:at,createWakeIntent:false})));
  const claimed=value(await work.claimNext(sealed({effect:effect('image-claim'),chatJid:source.chatJid,expectedFrontier:0,newOperationId:'host-images',claimedAt:at})))!;
- const bound=native ? claimed.operation : value(await work.bindHarness(sealed({effect:effect('image-bind',claimed.operation.operationId,source.sourceSeq),expectedVersion:claimed.operation.version,sessionId:'image-session',lane:'main',harnessOperationId:'1',state:'finished',watchGeneration:1})));
+ let bound=native ? claimed.operation : value(await work.bindHarness(sealed({ effect:effect('image-bind',claimed.operation.operationId,source.sourceSeq), expectedVersion:claimed.operation.version, sessionId:'image-session', harnessOperationId:'1' })));
+ if(!native){const finish={effect:{...effect('image-settle',bound.operationId,source.sourceSeq),operationId:bound.operationId},expectedVersion:bound.version,expectedHarness:bound.harness!};finish.effect.requestHash=hashCanonicalRequest({method:'finishHarness.v1',...finish} as any);bound=value(await work.finishHarness(finish));}
  operation=Object.freeze({...bound,claimedSourceSeqs:Object.freeze([...bound.claimedSourceSeqs]),harness:bound.harness ? Object.freeze({...bound.harness}) : null});
  }
  if(!native)await accept();

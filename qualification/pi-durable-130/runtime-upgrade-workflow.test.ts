@@ -184,7 +184,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
           const bytes = new TextEncoder().encode(answers.get(ref)!);
           return { ref, bytes, byteLength: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
         } } },
-        runtime: { incarnation: identity.incarnation, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions: { models: policy.models, registry: policy.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } } },
+        runtime: { incarnation: identity.incarnation, now: () => new Date().toISOString(), harnessOptions: { models: policy.models, registry: policy.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } } },
         async openImporter() {
           opens++; const database = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
           importer = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(database));

@@ -19,7 +19,7 @@ Inventory against `fc16a0c51d76b7200e263997619d434609afa043` for #1691:
 
 The removed cursor APIs previously produced/read these exclusive legacy records. Their active callers were retired by #1670–#1675. Native input, status, model selection, queue handling and settings no longer import these APIs. Historical decoders are not execution owners.
 
-EF-S01 harness correlation/mirror retirement remains separate work in #1691. This cursor change does not certify that issue complete or remove host admission, cancellation, terminal-delivery or owner-generation authority.
+[Native operation binding](native-operation-binding.md) documents EF-S01 mirror retirement and the retained admission, cancellation, terminal-delivery and ownership authority. Cursor position remains independent of those invariants.
 
 ## Owned schema transition
 

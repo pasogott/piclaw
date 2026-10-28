@@ -17,15 +17,14 @@ export function createHostOperationAuthority(root: Database, captured: Capture, 
       : root.query(`SELECT 1 FROM service_effect_s01_operations o
       JOIN service_effect_s01_chats c ON c.chat_jid=o.chat_jid AND c.active_operation_id=o.operation_id
       WHERE o.operation_id=? AND o.chat_jid=? AND o.version=? AND o.phase='executing'
-      AND o.cancellation_source_id IS NULL AND o.harness_state='running'
-      AND o.harness_operation_id=? AND o.harness_session_id=? AND o.harness_lane=? AND o.harness_watch_generation=?`)
+      AND o.cancellation_source_id IS NULL
+      AND o.harness_operation_id=? AND o.harness_session_id=?`)
       .get(operation.operationId, chatJid, operation.version, operation.harness!.harnessOperationId,
-        operation.harness!.sessionId, operation.harness!.lane, operation.harness!.watchGeneration);
+        operation.harness!.sessionId);
     if (!current) throw Error("Stale host operation authority");
     if (readonly && operation.harness && !root.query(`SELECT 1 FROM service_effect_s01_operations
-      WHERE operation_id=? AND harness_state='running' AND harness_operation_id=? AND harness_session_id=?
-      AND harness_lane=? AND harness_watch_generation=?`).get(operation.operationId, operation.harness.harnessOperationId,
-        operation.harness.sessionId, operation.harness.lane, operation.harness.watchGeneration))
+      WHERE operation_id=? AND harness_operation_id=? AND harness_session_id=?`).get(operation.operationId, operation.harness.harnessOperationId,
+        operation.harness.sessionId))
       throw Error("Stale host harness authority");
     for (const input of inputs) {
       const source = root.query(`SELECT 1 FROM service_effect_s01_sources s

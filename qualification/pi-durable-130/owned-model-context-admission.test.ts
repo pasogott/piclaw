@@ -64,9 +64,7 @@ test('real owned model tool uses current selected schemas and switches only the 
       requestHash: hashCanonicalRequest({ type: 'input', requestId: f.primaryRequestId, content: 'primary A' }) };
     const primaryId = await f.runtime!.submit(primary);
     const operation = value(await f.ports.work.getOperation(claimed.operation.operationId))!;
-    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:running`, f.incarnation, source.sourceSeq),
-      expectedVersion: operation.version, sessionId: f.incarnation, lane: 'main', harnessOperationId: String(primaryId),
-      state: 'running' as const, watchGeneration: f.generation })));
+    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:running`, f.incarnation, source.sourceSeq), expectedVersion: operation.version, sessionId: f.incarnation, harnessOperationId: String(primaryId) })));
     await entered.promise; release.release();
     await f.runtime!.wait(primary, primaryId);
     for (let i = 0; i < 300; i++) { if (!(await f.runtime!.inspectAuthority()).inspection.tasks.length) break; await Bun.sleep(5); }

@@ -13,7 +13,6 @@ import type {
 } from "../contracts/service-outbox-store.js";
 import type {
   HarnessCorrelation,
-  HarnessState,
   PiclawDisposition,
   PiclawOperationPhase,
 } from "../contracts/service-work-store.js";
@@ -51,13 +50,6 @@ const PHASES = new Set<PiclawOperationPhase>([
   "cancelling",
   "settling",
   "terminal",
-]);
-const HARNESS_STATES = new Set<HarnessState>([
-  "not_started",
-  "running",
-  "suspended",
-  "aborting",
-  "finished",
 ]);
 const DISPOSITIONS = new Set<PiclawDisposition>([
   "completed",
@@ -130,7 +122,7 @@ const REQUIRED_SCHEMA_PROBES = Object.freeze([
   "SELECT message_rowid,media_id FROM message_media LIMIT 1",
   "SELECT chat_jid,next_source_seq,consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats LIMIT 1",
   "SELECT chat_jid,source_seq,state,kind,target_operation_id,accepted_at,disposition_reason FROM service_effect_s01_sources LIMIT 1",
-  "SELECT operation_id,chat_jid,primary_source_seq,version,phase,cancellation_source_id,cancellation_source_seq,cancellation_cause,cancellation_requested_at,harness_session_id,harness_lane,harness_operation_id,harness_state,harness_watch_generation,terminal_disposition,terminal_message_row_id,terminal_error_code,terminal_committed_at FROM service_effect_s01_operations LIMIT 1",
+  "SELECT operation_id,chat_jid,primary_source_seq,version,phase,cancellation_source_id,cancellation_source_seq,cancellation_cause,cancellation_requested_at,harness_session_id,harness_operation_id,terminal_disposition,terminal_message_row_id,terminal_error_code,terminal_committed_at FROM service_effect_s01_operations LIMIT 1",
   "SELECT chat_jid,operation_id,source_seq FROM service_effect_s01_operation_sources LIMIT 1",
   "SELECT chat_jid,operation_id,source_seq,state FROM service_effect_s01_queued_inputs LIMIT 1",
   "SELECT operation_id,media_id,role FROM service_effect_operation_media LIMIT 1",
@@ -204,10 +196,7 @@ interface OperationRow {
   cancellation_cause: unknown;
   cancellation_requested_at: unknown;
   harness_session_id: unknown;
-  harness_lane: unknown;
   harness_operation_id: unknown;
-  harness_state: unknown;
-  harness_watch_generation: unknown;
   terminal_disposition: unknown;
   terminal_message_row_id: unknown;
   terminal_error_code: unknown;
@@ -1427,18 +1416,12 @@ function closeOperation(row: OperationRow): ClosedOperation {
       ? null
       : Object.freeze({
           sessionId: harnessSessionId,
-          lane: requiredText(row.harness_lane, 512),
           harnessOperationId: nullableText(row.harness_operation_id, 512),
-          state: requiredHarnessState(row.harness_state),
-          watchGeneration: requiredInteger(row.harness_watch_generation, 0),
         });
   if (
     harnessSessionId === null &&
     [
-      row.harness_lane,
       row.harness_operation_id,
-      row.harness_state,
-      row.harness_watch_generation,
     ].some((value) => value !== null)
   ) {
     throw new CorruptSettlementState();
@@ -1519,8 +1502,7 @@ function dispositionAllowed(
         request.terminalAuthorityRef !== null &&
         (operation.phase === "claimed" || operation.phase === "starting_harness") &&
         (operation.harness === null ||
-          (operation.harness.state === "not_started" &&
-            operation.harness.harnessOperationId === null))
+          operation.harness.harnessOperationId === null)
       );
     case "superseded":
       return (
@@ -1539,10 +1521,7 @@ function equalHarness(
   if (left === null || right === null) return left === right;
   return (
     left.sessionId === right.sessionId &&
-    left.lane === right.lane &&
-    left.harnessOperationId === right.harnessOperationId &&
-    left.state === right.state &&
-    left.watchGeneration === right.watchGeneration
+    left.harnessOperationId === right.harnessOperationId
   );
 }
 
@@ -1663,11 +1642,4 @@ function requiredDisposition(input: unknown): PiclawDisposition {
     throw new CorruptSettlementState();
   }
   return input as PiclawDisposition;
-}
-
-function requiredHarnessState(input: unknown): HarnessState {
-  if (typeof input !== "string" || !HARNESS_STATES.has(input as HarnessState)) {
-    throw new CorruptSettlementState();
-  }
-  return input as HarnessState;
 }

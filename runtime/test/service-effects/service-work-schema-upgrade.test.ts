@@ -132,6 +132,9 @@ const HISTORICAL_SQL = `
 function historical(path = ":memory:", ddl = HISTORICAL_SQL): Database {
   const db = new Database(path, { strict: true });
   db.exec("PRAGMA foreign_keys=ON");
+  // Match the historical installer's single atomic writer, avoiding a separate
+  // durable file commit for every fixture DDL/data statement.
+  db.transaction(() => {
   db.exec(ddl);
   applyOwnedMigrations(db, [{ owner: "fixture-older-owner", id: "retained", order: 1, sql: "SELECT 1;" }]);
   db.exec(`INSERT INTO ${P}chats(chat_jid,next_source_seq,consumed_through_source_seq) VALUES ('chat',6,5)`);
@@ -148,6 +151,7 @@ function historical(path = ":memory:", ddl = HISTORICAL_SQL): Database {
     VALUES (42,'chat','b',4,'follow_up','entry:雪','consumed'),(77,'chat','a',3,'steer',NULL,'disposed');`);
   db.query(`INSERT INTO ${P}decisions VALUES ('opaque-receipt','acceptSource',?,?)`)
     .run("b".repeat(64), '{ "kind":"source", "chatJid":"chat", "sourceSeq":1, "state":"consumed" }');
+  }).immediate();
   return db;
 }
 
@@ -206,7 +210,9 @@ describe("EF-S01 exact queue membership owned upgrade", () => {
       const before = rows(db), parent = parentIdentity(db);
       const oldReceipts = db.query("SELECT * FROM piclaw_schema_migrations").all();
       installServiceWorkSchema(db);
-      expect(rows(db)).toEqual(before);
+      const retained = before.map((table,index)=>index!==2?table:(table as Record<string,unknown>[]).map(({harness_lane,harness_state,harness_watch_generation,...row})=>row));
+      expect(rows(db)).toEqual(retained);
+      expect(db.query(`SELECT * FROM ${P}legacy_harness_v1 ORDER BY operation_rowid`).all()).toEqual((before[2] as Record<string,unknown>[]).map(row=>({operation_id:row.operation_id,operation_rowid:row.rowid,harness_lane:row.harness_lane,harness_state:row.harness_state,harness_watch_generation:row.harness_watch_generation})));
       expect(parentIdentity(db)).toEqual(parent);
       expect(db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='fixture-older-owner'").all()).toEqual(oldReceipts);
       assertFinalConstraints(db);
@@ -219,9 +225,11 @@ describe("EF-S01 exact queue membership owned upgrade", () => {
       const fresh = new Database(":memory:", { strict: true });
       try {
         installServiceWorkSchema(fresh);
-        expect(schema(fresh)).toEqual(schema(db));
-        expect(db.query("SELECT owner,id,migration_order,checksum FROM piclaw_schema_migrations WHERE owner=?").all("service_effect_s01"))
-          .toEqual(fresh.query("SELECT owner,id,migration_order,checksum FROM piclaw_schema_migrations").all());
+        expect(schema(fresh)).toEqual(schema(db).filter((row:any)=>row.tbl_name!==`${P}legacy_harness_v1`));
+        expect(db.query("SELECT owner,id,migration_order,checksum FROM piclaw_schema_migrations WHERE owner=? AND migration_order=1").all("service_effect_s01"))
+          .toEqual(fresh.query("SELECT owner,id,migration_order,checksum FROM piclaw_schema_migrations WHERE migration_order=1").all());
+        expect(db.query("SELECT id,migration_order FROM piclaw_schema_migrations WHERE owner='service_effect_s01' AND migration_order=2").get()).toEqual({id:'retire-harness-mirrors-v1',migration_order:2});
+        expect(fresh.query("SELECT id,migration_order FROM piclaw_schema_migrations WHERE owner='service_effect_s01' AND migration_order=2").get()).toEqual({id:'native-harness-binding-v1',migration_order:2});
       } finally { fresh.close(); }
     } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
