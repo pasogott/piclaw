@@ -114,6 +114,16 @@ test("registration is model-only, unsafe and sequential", () => {
   }
 });
 
+test("native exit advertises only the supported bounded reason, never an unusable resume argument", () => {
+  const f = fixture();
+  const schema = JSON.parse(JSON.stringify(f.controls.tools.find(tool => tool.name === "exit_process")!.parameters));
+  expect(Object.keys(schema.properties)).toEqual(["reason"]);
+  expect(schema.required).toEqual(["reason"]);
+  expect(schema.properties.reason).toMatchObject({ type: "string", minLength: 1, maxLength: 512, pattern: "\\S" });
+  expect(f.controls.pending()).toBe(false);
+  expect(f.stats()).toEqual({ closed: 0, inspectCalls: 0 });
+});
+
 test("exact singleton exit returns a conditional notice and terminate receipt, never immediate shutdown", async () => {
   const f = fixture(); expect(() => f.controls.assertAdmission()).not.toThrow();
   const result = await f.run();
