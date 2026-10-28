@@ -2,21 +2,17 @@ import { expect, test, spyOn } from "bun:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { AgentPool } from "../../src/agent-pool.js";
 import { initDatabase, getDb } from "../../src/db.js";
-import { createAgentPoolModelOptions } from "../model-services-fixture.js";
+import { createAgentPoolModelOptions,createLegacyCapturePoolOptions } from "../model-services-fixture.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 for (const native of [true, false]) test(`retired direct prompt boundary cannot execute or bookkeep (native=${native})`, async () => {
   initDatabase(); let factoryCalls=0, optionReads=0;
-  const pool=new AgentPool({...createAgentPoolModelOptions(),...(native?{getDurableSession:()=>undefined}:{}),
+  const pool=new AgentPool({...(native?createAgentPoolModelOptions():createLegacyCapturePoolOptions()),
     createSession:async()=>{factoryCalls++;throw Error("Retired legacy factory reached");}});
-  const options=new Proxy({},{get(){optionReads++;throw Error("Retired options read");}});
   try {
     const before=getDb().serialize();
-    for (const value of [options,{}]) {
-      expect(await pool.runAgent("No implicit continuation", "web:retired-direct",value)).toEqual({status:"error",result:null,
-        error:"Native execution requires an admitted operation",failureCategory:"non_recoverable"});
-    }
+    expect('runAgent' in pool).toBe(false);
     expect(optionReads).toBe(0);expect(factoryCalls).toBe(0);
     expect(getDb().serialize()).toEqual(before);
   } finally {await pool.shutdown();}

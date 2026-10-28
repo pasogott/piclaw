@@ -1,8 +1,9 @@
+import {runAdmittedScheduledTask} from '../helpers/admitted-scheduled-task.js';
 import { describe, expect, test } from "bun:test";
 import Database from "bun:sqlite";
 import { join } from "node:path";
 import { createTempWorkspace } from "../helpers.js";
-import { getDb, getTaskById } from "../../src/db.js";
+import { getDb, getTaskById, updateTask } from "../../src/db.js";
 import { ensureBudgetWork, getBudgetCap, saveBudgetCap, setBudgetCapEnabled, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
 import { scheduledTasks } from "../../src/extensions/scheduled-tasks.js";
 import { getScheduledTaskInspection } from "../../src/scheduled-task-query-service.js";
@@ -11,7 +12,7 @@ import { scheduledBudgetReadiness } from "../../src/budget/scheduled-readiness.j
 import { evaluateBudget } from "../../src/budget/evaluator.js";
 import { admitBudgetBoundary } from "../../src/budget/admission.js";
 import { persistProviderEvidence } from "../../src/budget/provider-evidence.js";
-import { pollScheduledRunsOnce, runScheduledTask } from "../../src/task-scheduler.js";
+import { pollScheduledRunsOnce } from "../../src/task-scheduler.js";
 import { createCurrentPiclawScheduledRunStore } from "../../src/service-effects/current-piclaw/scheduled-run-store.js";
 import { isolateBudgetTestDatabase } from "./fixture.js";
 
@@ -135,7 +136,8 @@ test("an uncapped tool-created task reaches execution through durable due dispat
   let executions = 0;
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<unknown>) => { run = fn; } },
-    agentPool: { saveSessionPosition: async () => null, getCurrentModelLabel: async () => null, restoreSessionPosition: async () => {}, runAgent: async (_prompt: string, chat: string, opts: any) => {
+    agentPool: { saveSessionPosition: async () => null, getCurrentModelLabel: async () => null, restoreSessionPosition: async () => {}, isDurableRuntime:()=>true,dispatchScheduledAgent: async (lease: any) => {
+      const chat=lease.task.chatJid,opts={budgetWorkId:'scheduled:'+lease.record.runId,budgetScheduledTaskId:lease.record.taskId};
       ensureBudgetWork({ id: opts.budgetWorkId, chatJid: chat, executionKind: "scheduled", scheduledTaskId: opts.budgetScheduledTaskId });
       expect(evaluateBudget({ workId: opts.budgetWorkId }).action).toBe("allow");
       executions++;
@@ -160,7 +162,8 @@ test("uncapped recurring tasks reach execution on every fresh run without pricin
   let modelCalls = 0;
   const pool = {
     saveSessionPosition: async () => null, getCurrentModelLabel: async () => null, restoreSessionPosition: async () => {},
-    runAgent: async (_prompt: string, chat: string, opts: any) => {
+    isDurableRuntime:()=>true,dispatchScheduledAgent: async (lease: any) => {
+      const chat=lease.task.chatJid,opts={budgetWorkId:'scheduled:'+lease.record.runId,budgetScheduledTaskId:lease.record.taskId};
       workIds.push(opts.budgetWorkId);
       ensureBudgetWork({ id: opts.budgetWorkId, chatJid: chat, executionKind: "scheduled", scheduledTaskId: opts.budgetScheduledTaskId });
       const admission = await admitBudgetBoundary({ workId: opts.budgetWorkId, boundary: "model_call", modelRuntime: { getAuth() { throw Error("No quota/auth lookup expected without provider guards"); } } as any });
@@ -171,7 +174,8 @@ test("uncapped recurring tasks reach execution on every fresh run without pricin
     },
   };
   for (let run = 0; run < 2; run++) {
-    const result = await runScheduledTask(getTaskById(created.details.id)!, { agentPool: pool, sendMessage: async (chat: string) => { sent.push(chat); } } as any);
+    updateTask(created.details.id,{next_run:new Date(Date.now()-1000).toISOString()});
+    const result = await runAdmittedScheduledTask(getTaskById(created.details.id)!, { agentPool: pool, sendMessage: async (chat: string) => { sent.push(chat); } } as any);
     expect(result.status).toBe("success");
     await Bun.sleep(2);
   }

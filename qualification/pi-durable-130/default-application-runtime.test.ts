@@ -575,8 +575,8 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     // The assertion closure is restored with the other capture spies below.
     automaticCaptureSpy = spy;
   }
-  let realRunCaptures = 0, realToolCaptures = 0;
-  const runCaptureStacks: string[] = [];
+  let realRunCaptures = 0, realToolCaptures = 0, pendingAdmissionCaptures = 0;
+  const pendingAdmissionCalls:string[]=[];
   let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
   if(scenario==='native-dream-runner-held-tool'){
@@ -605,10 +605,19 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     }));
   }
   if (nativePlan) {
+    const capturePending = HostConversationRuntime.prototype.capturePendingToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "capturePendingToolSource").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof capturePending>){
+      const captured=await capturePending.apply(this,args);
+      pendingAdmissionCaptures++;pendingAdmissionCalls.push(args[2]);
+      expect(captured.inputs[0]?.sourceId).toBe(expectedToolSource);
+      expect(captured.operation.chatJid).toBe("web:default");
+      expect(captured.runTaskId).toBeDefined();
+      return captured;
+    }));
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureRun.apply(this, args);
-      realRunCaptures++; runCaptureStacks.push(new Error("Run source capture").stack!);
+      realRunCaptures++;
       expect(captured.operation.chatJid).toBe("web:default");
       const readonly = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner(), true);
       readonly.assertCurrent();
@@ -835,7 +844,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     const configured=existsSync(getConfigPath())?JSON.parse(readFileSync(getConfigPath(),'utf8')):{};configured.domains??={};configured.domains.dream={...configured.domains.dream,model:''};writeFileSync(getConfigPath(),JSON.stringify(configured),{mode:0o600});
     const originalDreamDispatch=pool.dispatchDreamOperation.bind(pool),dreamDispatch=spyOn(pool,'dispatchDreamOperation');
     if(scenario==='native-dream-runner-original-time')dreamDispatch.mockImplementation(async request=>{await Bun.sleep(25);return originalDreamDispatch(request);});
-    const legacy=spyOn(pool,'runAgent'),modelControl=spyOn(pool,'applyControlCommand'),launch=spyOn(index,'launchWorkspaceIndexProcess').mockReturnValue(false),wait=spyOn(index,'waitForWorkspaceIndexProcess').mockResolvedValue(undefined);
+    const modelControl=spyOn(pool,'applyControlCommand'),launch=spyOn(index,'launchWorkspaceIndexProcess').mockReturnValue(false),wait=spyOn(index,'waitForWorkspaceIndexProcess').mockResolvedValue(undefined);
     const publicRows=()=>['chats','chat_branches','messages','chat_cursors'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),before=publicRows();
     let reopenedDream:Awaited<ReturnType<typeof createDefaultApplicationRuntime>>|undefined;
     let dreamClock:{mockRestore():void}|undefined,dreamAuths=0;
@@ -918,7 +927,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       }
       if(scenario==='native-dream-runner-lock-revoked'){
         expect(await pending.then(()=>null,error=>error)).toBeInstanceOf(Error);expect(calls).toBe(0);expect(readFileSync(lockFile,'utf8')).toBe('REPLACEMENT_DREAM_LOCK');
-        expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(false);expect(publicRows()).toEqual(before);expect(legacy.mock.calls).toHaveLength(0);return;
+        expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(false);expect(publicRows()).toEqual(before);expect('runAgent' in pool).toBe(false);return;
       }
       if(scenario.includes('-held-')){
         let ended=false;const observed=pending.then(()=>{ended=true;return null;},error=>{ended=true;return error;});
@@ -928,7 +937,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         if(dreamWorkSignal)expect(dreamWorkSignal.aborted).toBe(true);
         dreamWorkReleased.resolve();await closing;expect(await observed).toBeInstanceOf(Error);
         expect(existsSync(join(workspace,'notes/memory/.dream.lock'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(publicRows()).toEqual(before);
-        expect(legacy.mock.calls).toHaveLength(0);expect(modelControl.mock.calls).toHaveLength(0);
+        expect('runAgent' in pool).toBe(false);expect(modelControl.mock.calls).toHaveLength(0);
         if(restartPhase==='write'){captureRestart();return;}
         const sourceRows=root.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all(),callsBefore=calls;
         reopenedDream=await createDefaultApplicationRuntime(owner,async()=>services);
@@ -943,7 +952,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       }
       if(scenario.startsWith('native-dream-runner-scheduled')&&scenario.endsWith('-revoked')){
         const committedBeforeRevocation=scenario.includes('-final-')||scenario.includes('-index-');
-        expect(calls).toBe(committedBeforeRevocation?3:scenario.includes('-tool-')?1:0);expect(modelControl.mock.calls).toHaveLength(0);expect(legacy.mock.calls).toHaveLength(0);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(committedBeforeRevocation);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(scenario.includes('-index-'));expect(publicRows()).toEqual(before);
+        expect(calls).toBe(committedBeforeRevocation?3:scenario.includes('-tool-')?1:0);expect(modelControl.mock.calls).toHaveLength(0);expect('runAgent' in pool).toBe(false);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(committedBeforeRevocation);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(scenario.includes('-index-'));expect(publicRows()).toEqual(before);
         if(scenario.includes('-index-'))expect(root.query("SELECT path FROM workspace_files WHERE path='notes/memory/native-dream-marker.md'").all()).toEqual([]);
         expect(root.query("SELECT state FROM service_effect_s07_occurrences WHERE task_id='builtin-dream-midnight'").get()).toEqual({state:'claimed'});return;
       }
@@ -955,9 +964,9 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       if(scenario==='native-dream-runner-budget-denied'||scenario==='native-dream-runner-deadline'){
         expect(result.result).toContain('model pass failed; deterministic refresh completed');expect(calls).toBe(0);expect(dreamAuths).toBe(scenario.endsWith('-deadline')?1:0);
         expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(true);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);
-        expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:0});expect(publicRows()).toEqual(before);expect(legacy.mock.calls).toHaveLength(0);return;
+        expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:0});expect(publicRows()).toEqual(before);expect('runAgent' in pool).toBe(false);return;
       }
-      expect(legacy.mock.calls).toHaveLength(0);expect(modelControl.mock.calls).toHaveLength(0);expect(result.skipped).toBe(false);expect(result.result).toContain('factory synthetic reply');
+      expect('runAgent' in pool).toBe(false);expect(modelControl.mock.calls).toHaveLength(0);expect(result.skipped).toBe(false);expect(result.result).toContain('factory synthetic reply');
       expect(calls).toBe(scenario==='native-dream-runner-tools'?5:3);expect(requested).toEqual(Array(calls).fill(scenario.endsWith('-model')||scenario.startsWith('native-dream-runner-scheduled')?modelB.id:model.id));
       expect(requestToolNames[0]!.slice().sort()).toEqual(['read','edit','write','grep','find','ls','messages','search_workspace'].sort());
       expect(readFileSync(join(workspace,'notes/memory/native-dream-marker.md'),'utf8')).toBe('ADMITTED_NATIVE_DREAM');
@@ -989,7 +998,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         reopenedDream.stop();await reopenedDream.close();
         await(await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),getConfigPath(),true,1,1,'084d229bc038a2bdd01301f9f87135911685f88a');
       }
-    }finally{if(scenario==='native-dream-runner-scheduled-reclaim')root.exec('DROP TRIGGER IF EXISTS scheduled_dream_completion_fault');if(scenario==='native-dream-runner-unsafe-result')root.exec('DROP TRIGGER IF EXISTS native_dream_result_fault');dreamClock?.mockRestore();dreamWorkReleased.resolve();if(scenario==='native-dream-runner-lock-revoked'){rmSync(lockFile,{force:true});rmSync(movedLock,{force:true});}for(const spy of[legacy,modelControl,dreamDispatch,launch,wait,...captureSpies,...sdkSpies])spy.mockRestore();reopenedDream?.stop();await reopenedDream?.close();backend.stop();await backend.close();await base.queue.shutdown();await pool.shutdown();closeDatabase();owner.release();}return;
+    }finally{if(scenario==='native-dream-runner-scheduled-reclaim')root.exec('DROP TRIGGER IF EXISTS scheduled_dream_completion_fault');if(scenario==='native-dream-runner-unsafe-result')root.exec('DROP TRIGGER IF EXISTS native_dream_result_fault');dreamClock?.mockRestore();dreamWorkReleased.resolve();if(scenario==='native-dream-runner-lock-revoked'){rmSync(lockFile,{force:true});rmSync(movedLock,{force:true});}for(const spy of[modelControl,dreamDispatch,launch,wait,...captureSpies,...sdkSpies])spy.mockRestore();reopenedDream?.stop();await reopenedDream?.close();backend.stop();await backend.close();await base.queue.shutdown();await pool.shutdown();closeDatabase();owner.release();}return;
   }
   if (scenario.startsWith("native-code-review-lifecycle-")) {
     const phase = scenario.slice("native-code-review-lifecycle-".length);
@@ -1552,11 +1561,11 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     return;
   }
   if (scenario === "native-nonweb-admission") {
-    const {processMessages}=await import('../../runtime/src/runtime/message-loop.js');
+    const messageLoop=await import('../../runtime/src/runtime/message-loop.js');
     const {startRuntimeLoop}=await import('../../runtime/src/runtime/coordinator.js');
     const {RuntimeState}=await import('../../runtime/src/runtime/state.js');
     const state=new RuntimeState(workspace);
-    const direct=spyOn(pool,'runAgent'),control=spyOn(pool,'applyControlCommand'),slash=spyOn(pool,'applySlashCommand');
+    const control=spyOn(pool,'applyControlCommand'),slash=spyOn(pool,'applySlashCommand');
     const saves=spyOn(state,'saveTimestamps'),marked=spyOn(state,'markCommandProcessed');
     const tables=['budget_work','budget_request_reservations','service_effect_s01_chats','service_effect_s01_sources','service_effect_s01_operations','messages','chat_cursors',
       'conversations','entries','tasks','submissions','documents','document_revisions','router_state'];
@@ -1566,18 +1575,21 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
         const chat=`custom:native-unbound:${index}`;storeChatMetadata(chat,new Date().toISOString());state.chatJids.add(chat);
         storeMessage({id:`unadmitted-nonweb-${index}`,chat_jid:chat,sender:'user',sender_name:'User',content:text,timestamp:`2026-01-01T00:00:0${index}.000Z`,is_from_me:false,is_bot_message:false});
         const before=snapshot();
-        await expect(processMessages(chat,{agentPool:pool,state,assistantName:'Pi',triggerPattern:/@Pi/i})).rejects.toThrow('Native non-web message processing requires host input admission');
+        expect(messageLoop).not.toHaveProperty('processMessages');
+        const stopOne=new AbortController(),cancelOne=setTimeout(()=>stopOne.abort(),0);
+        try{await startRuntimeLoop({state,assistantName:'Pi',pollIntervalMs:60000,signal:stopOne.signal});}
+        finally{clearTimeout(cancelOne);stopOne.abort();}
         expect(snapshot()).toEqual(before);
       }
       const beforePoll=snapshot(),stop=new AbortController();
       const cancel=setTimeout(()=>stop.abort(),0);
-      try{await startRuntimeLoop({agentPool:pool,state,queue:base.queue,assistantName:'Pi',triggerPattern:/@Pi/i,pollIntervalMs:60_000,signal:stop.signal});}
+      try{await startRuntimeLoop({state,assistantName:'Pi',pollIntervalMs:60_000,signal:stop.signal});}
       finally{clearTimeout(cancel);stop.abort();}
       expect(state.lastTimestamp).toBe('');expect(base.queue.getMetrics().enqueued).toBe(0);expect(snapshot()).toEqual(beforePoll);
-      expect(state.lastAgentTimestamp).toEqual({});expect(direct).not.toHaveBeenCalled();expect(control).not.toHaveBeenCalled();expect(slash).not.toHaveBeenCalled();
+      expect(state.lastAgentTimestamp).toEqual({});expect(pool).not.toHaveProperty('runAgent');expect(control).not.toHaveBeenCalled();expect(slash).not.toHaveBeenCalled();
       expect(saves).not.toHaveBeenCalled();expect(marked).not.toHaveBeenCalled();expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
     } finally {
-      for(const spy of [direct,control,slash,saves,marked])spy.mockRestore();
+      for(const spy of [control,slash,saves,marked])spy.mockRestore();
       backend.stop();await backend.close();await channel.stop();await base.queue.shutdown();await pool.shutdown();
       for(const spy of [...captureSpies,...sdkSpies])spy.mockRestore();owner.release();closeDatabase();
     }
@@ -1588,16 +1600,9 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       "service_effect_s01_sources", "conversations", "entries", "tasks", "submissions", "documents", "document_revisions", "messages", "chat_cursors"]
       .map(table => root.query(`SELECT * FROM ${table}`).all());
     const before = rows();
-    let optionReads = 0;
     try {
-      for (const chat of ["web:default", "web:unknown", "dream:manual:fixture", "operation:fixture", "custom:room"]) {
-        const output = await pool.runAgent("unsupported direct native runner", chat, {
-          get budgetWorkId() { optionReads++; return `forbidden-native:${chat}`; },
-        });
-        expect(rows()).toEqual(before);
-        expect(output).toEqual({ status: "error", result: null, error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" });
-      }
-      expect(optionReads).toBe(0); expect(calls).toBe(0);
+      expect('runAgent' in pool).toBe(false);
+      expect(rows()).toEqual(before);expect(calls).toBe(0);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     } finally {
       backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
@@ -1892,7 +1897,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
 
   }
   if (nativeScheduler) {
-    const prohibited = [spyOn(pool, "runAgent"), spyOn(pool, "saveSessionPosition"), spyOn(pool, "restoreSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
+    const prohibited = [spyOn(pool, "saveSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
     prohibited.forEach(spy => spy.mockImplementation(() => { throw Error("legacy scheduler path"); }));
     const delivered: string[] = [];
     const scheduledStore = createCurrentPiclawScheduledRunStore(root, { hitFault: () => false, recordTrace() {} });
@@ -3229,9 +3234,15 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   }
   if (nativePlan) {
     expect(calls).toBe(2);
-    // Each model tool also has one source capture in the shared background-policy beforeTool guard.
-    expect(runCaptureStacks.filter(stack => stack.includes("capturePendingToolSource")).length).toBe(scenario === "native-codemode-plan-goal" ? 2 : 1);
-    expect(realRunCaptures, runCaptureStacks.join("\n\n")).toBe(scenario === "native-codemode-plan-goal" ? 8 : 5); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    // Two model source captures + two plan snapshots, plus the real pending
+    // beforeTool admission added by the native background-policy hook. Goal
+    // adds request snapshots and its terminal fence at both model/nested tools.
+    // None may use a legacy session owner; exact call IDs distinguish the hooks.
+    expect(pendingAdmissionCaptures).toBe(codemodePlan ? nativeGoal ? 4 : 2 : 1);
+    expect(pendingAdmissionCalls).toEqual(codemodePlan ? nativeGoal
+      ? ["factory-tool-1","factory-tool-1","factory-tool-1/c1","factory-tool-1/c1"]
+      : ["factory-tool-1","factory-tool-1/c1"] : ["factory-tool-1"]);
+    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 8 : 5); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");

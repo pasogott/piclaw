@@ -226,12 +226,10 @@ import {
 const log = createLogger("runtime.bootstrap");
 
 export type RuntimeBootstrapQueue =
-  & StartRuntimeLoopDeps["queue"]
   & SchedulerDeps["queue"]
   & ShutdownDeps["queue"];
 
 export type RuntimeBootstrapAgentPool =
-  & StartRuntimeLoopDeps["agentPool"]
   & SchedulerDeps["agentPool"]
   & RuntimeModelResolver
   & ShutdownDeps["agentPool"];
@@ -262,7 +260,7 @@ export interface RuntimeBootstrapDeps {
   initializeRuntimeEnvironment(state: RuntimeBootstrapState): { effectiveMode: "single-user" } | void;
   hydrateMcpCredentials(): Promise<HydratedMcpCredential[]>;
   clearMcpCredentials(entries: HydratedMcpCredential[]): void;
-  createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"]): Promise<RuntimeBootstrapAgentPool>;
+  createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"], legacyCapture?: true): Promise<RuntimeBootstrapAgentPool>;
   startWebChannel(queue: RuntimeBootstrapQueue, agentPool: RuntimeBootstrapAgentPool, bind?: RuntimeBackend["bind"]): Promise<RuntimeBootstrapWeb>;
   startBackgroundModelRefresh(agentPool: RuntimeBootstrapAgentPool): void;
   startOptionalPushoverChannel(): Promise<RuntimeBootstrapPushover | null>;
@@ -341,7 +339,7 @@ export function createDefaultRuntimeBootstrapDeps(
     initializeRuntimeEnvironment: () => initializeRuntimeEnvironment(base.state),
     hydrateMcpCredentials: () => hydrateMcpKeychainCredentials(WORKSPACE_DIR),
     clearMcpCredentials: clearHydratedMcpCredentials,
-    createAgentPool: async (sessionOptions) => {
+    createAgentPool: async (sessionOptions, legacyCapture) => {
       const modelServices = await models();
       installRuntimeModelExecutor(modelServices.modelRuntime);
       registerGitHubCopilotDynamicModels(modelServices.modelRuntime);
@@ -350,6 +348,7 @@ export function createDefaultRuntimeBootstrapDeps(
         modelRuntime: modelServices.modelRuntime,
         modelRegistry: modelServices.modelRegistry,
         ...sessionOptions,
+        ...(legacyCapture ? {legacyCapture:true} : {}),
       });
       refreshCoordinator = new ModelRefreshCoordinator({
         modelRuntime: modelServices.modelRuntime,
@@ -411,7 +410,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       runtimeOwner.assertCurrentOwner();
       backend = await prepareApplicationBackend(runtimeOwner);
     }
-    const agentPool = partialPool = await deps.createAgentPool(backend?.sessionOptions);
+    const agentPool = partialPool = await deps.createAgentPool(backend?.sessionOptions, deps.migrationInspection ? true : undefined);
     deps.log("=== Piclaw - Pi Coding Agent Assistant ===");
 
     const web = partialWeb = await deps.startWebChannel(queue, agentPool, backend?.bind);
@@ -456,11 +455,8 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       return;
     }
     messageLoop = deps.startRuntimeLoop({
-      queue,
       state,
-      agentPool,
       assistantName: deps.assistantName,
-      triggerPattern: deps.triggerPattern,
       pollIntervalMs: deps.pollIntervalMs,
       signal: messageLoopController.signal,
     });

@@ -29,11 +29,6 @@ async function child(fixture: string, args: string[], offline: boolean) {
   }
 }
 
-test('retired AgentPool and unadmitted schedules cannot revive public-session execution', async () => {
-  const result = await child('pi103-scheduler-agent.ts', [], true);
-  expect(result).toMatchObject({retiredRunnerDenied:true,unadmittedScheduleDenied:true,providerCalls:0,networkAttempts:0,childProcessAttempts:0});
-}, 25000);
-
 for (const shape of ['linear', 'branched', 'tools']) test(`public history soak checks ${shape} context and held controls without forced GC`, async () => {
   const entries = shape === 'tools' ? 102 : 100;
   const result = await child('pi103-history-soak.ts', [shape, String(entries), '1000'], false);

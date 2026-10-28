@@ -344,10 +344,10 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   const running = bootstrapRuntime({ ...runtimeDeps,
     initializeRuntimeEnvironment: () => {}, hydrateMcpCredentials: async () => [], clearMcpCredentials: () => {},
     startBackgroundModelRefresh: () => {}, startOptionalPushoverChannel: async () => null,
-    registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; }, startRuntimeWorkers: () => {},
+    registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; }, startRuntimeWorkers: (_queue, activePool) => { pool = activePool as AgentPool; },
     stopIpcWatcher: async () => {}, stopSchedulerLoop: () => {}, stopOptionalProviders: () => {},
-    startRuntimeLoop: async ({ agentPool, signal }) => {
-      pool = agentPool as AgentPool; ready.release();
+    startRuntimeLoop: async ({ signal }) => {
+      ready.release();
       await new Promise<void>(resolve => signal!.addEventListener("abort", () => resolve(), { once: true }));
     },
   }, lock);

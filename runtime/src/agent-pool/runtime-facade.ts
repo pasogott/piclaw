@@ -950,10 +950,6 @@ export class AgentRuntimeFacade {
     return durable.readPosition();
   }
 
-  async restoreSessionPosition(_chatJid: string, _leafId: string | null): Promise<void> {
-    throw new Error("Durable history navigation unavailable");
-  }
-
   hasProviderModels(provider: string): boolean {
     return this.options.modelRegistry.getAll().some((model) => model.provider === provider);
   }

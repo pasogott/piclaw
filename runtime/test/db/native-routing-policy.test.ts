@@ -168,7 +168,7 @@ test("native routing policy: legacy Dream cleanup cannot erase native metadata o
   const history = db.query("SELECT * FROM messages WHERE chat_jid=?").all(ghost);
   const dream = await import("../../src/dream.js"); let disposals = 0;
   await dream.runDreamAgentTurn({ chatJid: "web:default", mode: "manual", days: 1, agentPool: {
-    runAgent: async () => ({ status: "success", result: "fixture" }), disposeChatSession: async () => { disposals++; },
+    isDurableRuntime:()=>true,dispatchDreamOperation: async () => ({ status: "success", result: "fixture" }), disposeChatSession: async () => { disposals++; },
   } as any });
   expect(getChatBranchByChatJid(ghost)).toEqual(branch);
   expect(db.query("SELECT * FROM messages WHERE chat_jid=?").all(ghost)).toEqual(history);

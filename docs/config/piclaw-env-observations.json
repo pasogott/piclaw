@@ -51,7 +51,7 @@
   },
   "current": {
     "production": {
-      "referencedNames": 170,
+      "referencedNames": 146,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -60,7 +60,7 @@
       "semanticReaderOccurrences": 23
     },
     "runtimeSrc": {
-      "referencedNames": 169,
+      "referencedNames": 145,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -672,33 +672,6 @@
       }
     },
     {
-      "name": "PICLAW_AUTO_COMPACTION_SCOPE",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_AUTOSTART",
       "scopes": {
         "docsDeploy": {
@@ -943,88 +916,7 @@
       }
     },
     {
-      "name": "PICLAW_COMPACTION_BACKOFF_DECAY_FACTOR",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_COMPACTION_BACKOFF_MAX_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_COMPACTION_HARD_CEILING_PERCENT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_COMPACTION_MAX_THRESHOLD_TOKENS",
       "scopes": {
         "production": {
           "referenced": true,
@@ -1078,33 +970,6 @@
       }
     },
     {
-      "name": "PICLAW_COMPACTION_THRESHOLD_PERCENT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_COMPACTION_TIMEOUT_MS",
       "scopes": {
         "docsDeploy": {
@@ -1117,33 +982,6 @@
           ],
           "readerFiles": []
         },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_COMPACTION_WARNING_THRESHOLD",
-      "scopes": {
         "production": {
           "referenced": true,
           "directReaders": 0,
@@ -2229,33 +2067,6 @@
           "semanticReaders": 0,
           "files": [
             "scripts/docker/publish-smoke-test.sh"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
           ],
           "readerFiles": []
         }
@@ -3479,33 +3290,6 @@
       }
     },
     {
-      "name": "PICLAW_PREPROMPT_COMPACTION_FOREGROUND_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_PROGRESS_WATCHDOG_ENABLED",
       "scopes": {
         "production": {
@@ -3992,87 +3776,6 @@
       }
     },
     {
-      "name": "PICLAW_RECOVERY_LOOP_GUARD_ENABLED",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_RECOVERY_LOOP_GUARD_MAX_FAILURES",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_RECOVERY_LOOP_GUARD_WINDOW_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_RELOAD_ASYNC",
       "scopes": {
         "docsDeploy": {
@@ -4506,30 +4209,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "docs/configuration.md",
             "docs/performance/session-bootstrap-oom-analysis-2026-04-17.md"
-          ],
-          "readerFiles": []
-        },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
           ],
           "readerFiles": []
         }
@@ -4654,56 +4334,6 @@
       }
     },
     {
-      "name": "PICLAW_SESSION_MAX_COMPACTIONS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_SESSION_MAX_LINES",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_SESSION_MAX_SIZE_MB",
       "scopes": {
         "docsDeploy": {
@@ -4712,30 +4342,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "docs/configuration.md",
             "docs/performance/session-bootstrap-oom-analysis-2026-04-17.md"
-          ],
-          "readerFiles": []
-        },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
           ],
           "readerFiles": []
         }
@@ -5275,110 +4882,6 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/extensions/ssh-core.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STALE_PREFLIGHT_BACKOFF_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STALE_PREFLIGHT_RECOVERY_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STARTUP_WARM_DEFAULT_CHAT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STARTUP_WARMUP_RECENT_LIMIT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
           ],
           "readerFiles": []
         }
@@ -6434,87 +5937,6 @@
       }
     },
     {
-      "name": "PICLAW_TURN_AUTO_RECOVERY_ENABLED",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_TURN_MAX_TOOL_EXECUTIONS",
       "scopes": {
         "docsDeploy": {
@@ -6564,60 +5986,6 @@
           ],
           "readerFiles": []
         },
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_TURN_TRANSIENT_RECOVERY_ENABLED",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-runtime.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED",
-      "scopes": {
         "production": {
           "referenced": true,
           "directReaders": 0,

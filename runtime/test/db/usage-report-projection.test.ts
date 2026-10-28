@@ -275,7 +275,8 @@ test("canonical usage projection: stale and completed Dream cleanup preserve acc
     storeTokenUsage({ ...usage(), chat_jid: stale, usage_event_id: null });
     const dream = await import("../../src/dream.js");
     const result = await dream.runDreamAgentTurn({ chatJid: "web:default", mode: "manual", days: 1, agentPool: {
-      runAgent: async (_prompt: string, chat: string) => {
+      isDurableRuntime:()=>true,dispatchDreamOperation: async () => {
+        const chat='dream:manual:fixture:completed';
         storeTokenUsage({ ...usage(), chat_jid: chat, usage_event_id: "completed-dream-event" });
         storeTokenUsage({ ...usage(), chat_jid: chat, usage_event_id: null });
         return { status: "success", result: "fixture Dream complete" };

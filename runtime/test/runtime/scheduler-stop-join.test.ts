@@ -17,7 +17,7 @@ async function fixture(run: (deps: SchedulerDeps, queued: Array<() => Promise<vo
       queue: { enqueueTask: (_id: string, run: () => Promise<void>) => queued.push(run) },
       agentPool: {
         saveSessionPosition: async () => "leaf", getCurrentModelLabel: async () => null,
-        restoreSessionPosition: async () => {}, runAgent: async () => ({ status: "success", result: "done" }),
+        restoreSessionPosition: async () => {}, isDurableRuntime:()=>true,dispatchScheduledAgent: async () => ({ status: "success", result: "done" }),
       },
       sendMessage: async () => {},
     } as unknown as SchedulerDeps;
@@ -126,7 +126,7 @@ test("stop joins dispatch but not an active agent, including across restart", as
     const admitted = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<{ status: "success"; result: string }>();
     deps.queue.enqueueTask = (_id, run) => { queued.push(run); admitted.resolve(); };
-    deps.agentPool.runAgent = async () => { entered.resolve(); return await release.promise as any; };
+    deps.agentPool.dispatchScheduledAgent = async () => { entered.resolve(); return await release.promise as any; };
     const stop = startSchedulerLoop(deps);
     await admitted.promise;
     const running = queued[0]();

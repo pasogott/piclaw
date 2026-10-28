@@ -15,7 +15,6 @@ import {
 } from "../../src/addons/runtime-contributions.js";
 import { withExternalAddonRegistrationContext } from "../../src/addons/external-routes.js";
 import { createTempWorkspace, type TempWorkspace } from "../helpers.js";
-import type { RunAgentOptions } from "../../src/agent-pool/contracts.js";
 import {readAddonOperation,readAddonOperationInputSequence,readAddonOperationInputEpoch,admitAddonOperation,transitionAddonOperation,appendOperationInput,markAddonOperationInputCommitted,ADDON_OPERATION_RESUME_TEXT} from '../../src/db/addon-operations.js';
 
 let ws: TempWorkspace;
@@ -75,7 +74,7 @@ test("host policy denies disabled, unknown and unapproved callers before model w
   let calls = 0;
   const host = createOperationHost(
     {
-      runAgent: async () => {
+      isDurableRuntime:()=>true,dispatchAddonOperation: async () => {
         calls++;
         return { status: "success", result: "ok" };
       },
@@ -106,61 +105,23 @@ test("host policy denies disabled, unknown and unapproved callers before model w
   expect(calls).toBe(0);
 });
 
-test("host sends only a dedicated operation session, mandatory tool ceiling, bounded budget and caller signal", async () => {
-  const runs: Array<{
-    prompt: string;
-    chat: string;
-    options: RunAgentOptions;
-  }> = [];
-  const host = createOperationHost(
-    {
-      runAgent: async (prompt, chat, options) => {
-        runs.push({ prompt, chat, options });
-        return { status: "success", result: "public answer" };
-      },
-    },
-    () => config,
-  );
-  const service = new AddonOperationService(host),
-    client = service.bind(principal);
+test('host sends only persisted operation identity, epoch and caller signal to native dispatch',async()=>{
+  const runs:unknown[][]=[];
+  const host=createOperationHost({isDurableRuntime:()=>true,dispatchAddonOperation:async(...args)=>{runs.push(args);return{status:'success',result:'public answer'};}},()=>config);
+  const service=new AddonOperationService(host),client=service.bind(principal);
   try {
-    const admitted = await client.admit({
-      target: "echo",
-      idempotencyKey: "test",
-      text: "untrusted request",
-    });
-    await service.waitForIdle();
-    const run = runs[0];
-    expect(run.chat).toBe("operation:" + admitted.operation!.id);
-    expect(run.chat).not.toBe("web:default");
-    expect(run.options).toMatchObject({
-      requireToolCeiling: true,
-      budgetExecutionKind: "background",
-      budgetWorkId: admitted.operation!.workId,
-      maxToolCalls: 2,
-      timeoutMs: 5000,
-      skipPrePromptCompaction: true,
-    });
-    expect(run.options.toolCeilingFilter!("read")).toBe(true);
-    expect(run.options.toolCeilingFilter!("bash")).toBe(false);
-    expect(await run.options.executionAdmissionCheck!()).toBe(true);
-    config.grants[0].enabled = false;
-    expect(await run.options.executionAdmissionCheck!()).toBe(false);
-    await expect(client.get(admitted.operation!.id)).rejects.toThrow(
-      "unavailable",
-    );
-    expect(run.options.abortSignal).toBeInstanceOf(AbortSignal);
-  } finally {
-    service.shutdown();
-    await service.waitForIdle();
-  }
+    const admitted=await client.admit({target:'echo',idempotencyKey:'test',text:'untrusted request'});await service.waitForIdle();
+    expect(runs).toHaveLength(1);expect(runs[0][0]).toBe(admitted.operation!.id);expect(runs[0][1]).toBeInstanceOf(AbortSignal);expect(runs[0][2]).toBe(1);
+    expect(readAddonOperation(admitted.operation!.id)?.status).toBe('completed');
+    config.grants[0].enabled=false;await expect(client.get(admitted.operation!.id)).rejects.toThrow('unavailable');
+  }finally{service.shutdown();await service.waitForIdle();}
 });
 
 test('native input identity uses queued events rather than mutable status/input markers',async()=>{
   const epochs:(number|null)[]=[];let calls=0;
-  const host=createOperationHost({runAgent:async(_prompt,chat,options)=>{
-    const id=chat.slice('operation:'.length);epochs.push(readAddonOperationInputSequence(id));
-    options.onOperationInputCommitted?.();epochs.push(readAddonOperationInputSequence(id));calls++;
+  const host=createOperationHost({isDurableRuntime:()=>true,dispatchAddonOperation:async(id,_signal,sequence)=>{
+    epochs.push(readAddonOperationInputSequence(id));
+    markAddonOperationInputCommitted(id,sequence);epochs.push(readAddonOperationInputSequence(id));calls++;
     return calls===1?{status:'success',result:null,requiresToolEnabledContinuation:true}:{status:'success',result:'completed'};
   }},()=>config);
   const service=new AddonOperationService(host),client=service.bind(principal);
@@ -219,7 +180,7 @@ test("generic ABI registration belongs to startup package, not a caller supplied
   resetAddonRuntimeContributionsForTests();
   setAddonOperationHost(
     createOperationHost(
-      { runAgent: async () => ({ status: "success", result: "safe" }) },
+      { isDurableRuntime:()=>true,dispatchAddonOperation: async () => ({ status: "success", result: "safe" }) },
       () => config,
     ),
   );

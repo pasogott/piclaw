@@ -5,14 +5,10 @@
  * database for active tasks whose `next_run` is in the past, then enqueues
  * each task on the AgentQueue for lane-aware execution.
  *
- * Each task run:
- *   1. Saves the current session tree position so the user's conversation
- *      context is not polluted.
- *   2. Optionally switches the LLM model if the task specifies one.
- *   3. Runs the agent with the task's prompt.
- *   4. Sends the response to the task's chat and triggers a nudge notification.
- *   5. Restores the original session position and model.
- *   6. Logs the run result and computes the next_run timestamp.
+ * AI work executes only through an admitted S07 occurrence and native port.
+ * Model overrides and history isolation belong to its private native context.
+ * Host shell/internal maintenance remain separate. Results/recurrence commit
+ * with the claimed occurrence; public model/tree restoration is retired.
  *
  * Consumers:
  *   - runtime.ts calls startSchedulerLoop() at startup.
@@ -134,63 +130,6 @@ export function resetSchedulerMetricsForTests(): void {
   schedulerMetrics.taskRunsSucceeded = 0;
   schedulerMetrics.taskRunsFailed = 0;
   schedulerMetrics.lastPollAt = null;
-}
-
-/** Parse a "provider/modelId" label into its components. */
-function parseModelLabel(label: string): { provider?: string; modelId: string } {
-  const trimmed = label.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash > 0) {
-    return {
-      provider: trimmed.slice(0, slash),
-      modelId: trimmed.slice(slash + 1),
-    };
-  }
-  return { provider: undefined, modelId: trimmed };
-}
-
-/** Apply a model label to the agent pool for a specific chat. */
-async function applyModelLabel(agentPool: AgentPool, chatJid: string, label: string) {
-  const { provider, modelId } = parseModelLabel(label);
-  return agentPool.applyControlCommand(chatJid, {
-    type: "model",
-    provider,
-    modelId,
-    raw: `/model ${label}`,
-  });
-}
-
-/**
- * Switch the agent to the task's model override.
- * Returns an error message string on failure, or null on success.
- */
-async function switchTaskModel(task: ScheduledTask, deps: SchedulerDeps): Promise<string | null> {
-  if (!task.model) return null;
-  const control = await applyModelLabel(deps.agentPool, task.chat_jid, task.model);
-  if (control.status === "error") {
-    return `Model switch failed: ${control.message}`;
-  }
-  return null;
-}
-
-/** Restore the agent's model to what it was before the task ran. */
-async function restoreOriginalModel(
-  task: ScheduledTask,
-  deps: SchedulerDeps,
-  savedModel: string | null,
-  mayContinue: () => boolean,
-): Promise<void> {
-  if (!task.model || !savedModel || savedModel === task.model) return;
-  const control = await applyModelLabel(deps.agentPool, task.chat_jid, savedModel);
-  if (!mayContinue()) return;
-  if (control.status === "error") {
-    log.error("Failed to restore model after scheduled task", {
-      operation: "restore_original_model",
-      chatJid: task.chat_jid,
-      model: savedModel,
-      errorMessage: control.message,
-    });
-  }
 }
 
 const MAX_SHELL_OUTPUT_CHARS = 8000;
@@ -327,7 +266,8 @@ export async function runScheduledTask(
   deps: SchedulerDeps,
   options: { advanceTask?: boolean } = {},
 ): Promise<ScheduledTaskRunOutcome> {
-  if(deps.agentPool.isDurableRuntime?.()===true)return{status:'skipped',result:null,error:'Native scheduled execution requires an admitted occurrence',durationMs:0,taskRunLogId:null};
+  if(deps.agentPool.isDurableRuntime?.()===true || !(task.task_kind==='internal'||task.task_kind==='shell'||Boolean(task.command)) || (task.id===DREAM_TASK_ID&&parseDreamPromptToken(task.prompt).matched))
+    return{status:'skipped',result:null,error:'Native scheduled execution requires an admitted occurrence',durationMs:0,taskRunLogId:null};
   return executeScheduledTask(task, deps, options);
 }
 
@@ -391,27 +331,9 @@ async function executeScheduledTask(
         const authority = nativeAuthority;
         await scheduledSourceWrite(db, () => { authority.assertCurrent(); ensureBudgetWork({id:budgetWorkId,chatJid:task.chat_jid,executionKind:'scheduled',scheduledTaskId:task.id}); }, () => { authority.assertCurrent(); return true; });
       }
-      // Native Dream owns its exact private model; never switch the public chat.
-      const savedModel = !nativeDream&&task.model ? await deps.agentPool.getCurrentModelLabel(task.chat_jid) : null;
+      const out = await(nativeDream?withBudgetWorkContext({workId:budgetWorkId,chatJid:task.chat_jid,kind:'scheduled'},()=>runInternalTask(task,deps,nativeAuthority)):runInternalTask(task,deps));
       if (!mayContinue()) return unsupportedScheduledRun();
-      if (!nativeDream&&task.model && (!savedModel || savedModel !== task.model)) {
-        const switchErr = await switchTaskModel(task, deps);
-        if (!mayContinue()) return unsupportedScheduledRun();
-        if (switchErr) { error = switchErr; }
-      }
-      if (!error) {
-        const out = await(nativeDream?withBudgetWorkContext({workId:budgetWorkId,chatJid:task.chat_jid,kind:'scheduled'},()=>runInternalTask(task,deps,nativeAuthority)):runInternalTask(task,deps));
-        if (!mayContinue()) return unsupportedScheduledRun();
-        if (out.error) {
-          error = out.error;
-        } else {
-          result = out.result;
-        }
-      }
-      // Restore only the legacy internal task's public model.
-      if (!nativeDream&&task.model) {
-        await restoreOriginalModel(task, deps, savedModel, mayContinue);
-      }
+      if (out.error) error=out.error; else result=out.result;
     } else if (kind === "shell") {
       const out = await runShellTask(task);
       if (!mayContinue()) return unsupportedScheduledRun();
@@ -430,59 +352,30 @@ async function executeScheduledTask(
       }
     } else {
       if (!mayContinue()) return unsupportedScheduledRun();
-      // A durable dispatcher returns its isolated run; a legacy pool returns undefined.
-      const native = scheduledLease ? deps.agentPool.dispatchScheduledAgent?.(scheduledLease) : undefined;
-      const savedLeafId = native ? null : await deps.agentPool.saveSessionPosition(task.chat_jid);
-      if (!native && !mayContinue()) return unsupportedScheduledRun();
-      const savedModel = native ? null : await deps.agentPool.getCurrentModelLabel(task.chat_jid);
-      if (!native && !mayContinue()) return unsupportedScheduledRun();
-
-      try {
-        // Switch model if task specifies one.
-        if (!native && task.model) {
-          if (!savedModel || savedModel !== task.model) {
-            error = await switchTaskModel(task, deps);
+      if(!scheduledLease || !deps.agentPool.dispatchScheduledAgent)throw Error('Native scheduled dispatcher unavailable');
+      // Once entered, join the admitted occurrence even if its lease is revoked.
+      const dispatched=deps.agentPool.dispatchScheduledAgent(scheduledLease);
+      if(!dispatched)throw Error('Native scheduled dispatcher unavailable');
+      const out=await dispatched;
+      if (!mayContinue()) return unsupportedScheduledRun();
+      const recoverySummary = formatRecoverySummary(out.recovery);
+      if (out.status === "error") {
+        error = out.error || "Unknown";
+        loggedError = appendRecoverySummary(error, recoverySummary);
+        budgetBlocked = out.failureCategory === "provider_budget";
+        // The budget decision persists its own pending notification identity.
+        // Delivery happens after the run log below so a send failure cannot
+        // erase the blocked/error execution receipt.
+      } else {
+        loggedResult = appendRecoverySummary(out.result, recoverySummary);
+        if (out.result) {
+          result = out.result;
+          const t = formatOutbound(result, detectChannel(task.chat_jid));
+          if (t) {
+            await deps.sendMessage(task.chat_jid, t, { forceRoot: true, source: "scheduled" });
             if (!mayContinue()) return unsupportedScheduledRun();
+            if (notifyOnComplete) await deps.sendNudge?.(t);
           }
-        }
-
-        if (!error) {
-          // Once started, native work must be joined even if authority is revoked.
-          if (!native && !mayContinue()) return unsupportedScheduledRun();
-          const out = await (native ?? deps.agentPool.runAgent(task.prompt, task.chat_jid, {
-            budgetWorkId,
-            budgetExecutionKind: "scheduled",
-            budgetScheduledTaskId: task.id,
-          }));
-          if (!mayContinue()) return unsupportedScheduledRun();
-          const recoverySummary = formatRecoverySummary(out.recovery);
-          if (out.status === "error") {
-            error = out.error || "Unknown";
-            loggedError = appendRecoverySummary(error, recoverySummary);
-            budgetBlocked = out.failureCategory === "provider_budget";
-            // The budget decision persists its own pending notification identity.
-            // Delivery happens after the run log below so a send failure cannot
-            // erase the blocked/error execution receipt.
-          } else {
-            loggedResult = appendRecoverySummary(out.result, recoverySummary);
-            if (out.result) {
-              result = out.result;
-              const t = formatOutbound(result, detectChannel(task.chat_jid));
-              if (t) {
-                await deps.sendMessage(task.chat_jid, t, { forceRoot: true, source: "scheduled" });
-                if (!mayContinue()) return unsupportedScheduledRun();
-                if (notifyOnComplete) await deps.sendNudge?.(t);
-              }
-            }
-          }
-        }
-      } finally {
-        // Navigate back to the saved position — the task's prompt and response
-        // stay in a side branch and won't pollute the user's conversation context.
-        if (!native && mayContinue()) {
-          await deps.agentPool.restoreSessionPosition(task.chat_jid, savedLeafId);
-          // Restore the original model only while the legacy path is still allowed.
-          if (mayContinue()) await restoreOriginalModel(task, deps, savedModel, mayContinue);
         }
       }
     }

@@ -1,3 +1,4 @@
+import { runAdmittedScheduledTask } from './helpers/admitted-scheduled-task.js';
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
@@ -137,13 +138,14 @@ test("internal Dream flows keep notes/memory/days model-owned and AutoDream stay
     });
   }
 
-  await scheduler.runScheduledTask(seeded!, {
+  db.updateTask(dream.DREAM_TASK_ID,{next_run:new Date(Date.now()-1000).toISOString()});
+  await runAdmittedScheduledTask(db.getTaskById(dream.DREAM_TASK_ID)!, {
     queue: {} as any,
-    agentPool: {
-      runAgent: async () => ({ status: "success", result: "AutoDream model consolidation finished." }),
-      disposeChatSession: async () => {},
+    agentPool: {isDurableRuntime:()=>true,
+      dispatchDreamOperation:async()=>({status:'success',result:'AutoDream model consolidation finished.'}),
+      disposeChatSession:async()=>{},
     } as any,
-    sendMessage: async () => {},
+    sendMessage:async()=>{},
   });
 
   const lastResult = db.getTaskById(dream.DREAM_TASK_ID)?.last_result || "";

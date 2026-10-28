@@ -26,169 +26,28 @@ function makeMessage(chatJid: string, content: string, timestamp: string) {
   };
 }
 
-test("processMessages leaves lastAgentTimestamp unchanged when runAgent throws", async () => {
-  await withTempWorkspaceEnv("piclaw-message-loop-", { PICLAW_KEYCHAIN_KEY: "test-key" }, async () => {
-    const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
-    const loop = await importFresh<typeof import("../../src/runtime/message-loop.js")>("../src/runtime/message-loop.js");
-    db.initDatabase();
-
-    const chatJid = `wa:${Date.now()}`;
-    const timestamp = "2026-04-17T01:00:00.000Z";
-    db.storeMessage(makeMessage(chatJid, "@Pi hello", timestamp));
-
-    let saveCalls = 0;
-    const state = {
-      lastAgentTimestamp: {} as Record<string, string>,
-      wasCommandProcessed: () => false,
-      markCommandProcessed: () => {},
-      saveTimestamps: () => {
-        saveCalls += 1;
-      },
-    };
-
-    await expect(loop.processMessages(chatJid, {
-      state: state as any,
-      assistantName: "Pi",
-      triggerPattern: /@Pi/i,
-      agentPool: {
-        isDurableRuntime: () => false,
-        runAgent: async () => {
-          throw new Error("agent crashed");
-        },
-      } as any,
-    })).rejects.toThrow("agent crashed");
-
-    expect(state.lastAgentTimestamp[chatJid]).toBeUndefined();
-    expect(saveCalls).toBe(0);
+test('polling exposes no direct message processor or executable dependency',async()=>{
+  const loop=await import('../../src/runtime/message-loop.js');
+  expect(loop).not.toHaveProperty('processMessages');
+});
+for(const native of [true,false])test('pending non-web input remains replayable without queue/cursor/command effects, native='+native,async()=>{
+  await withTempWorkspaceEnv('piclaw-unadmitted-poll-',{},async()=>{
+    const db=await importFresh<typeof import('../../src/db.js')>('../src/db.js');db.initDatabase();
+    const loop=await importFresh<typeof import('../../src/runtime/message-loop.js')>('../src/runtime/message-loop.js');
+    const chat='custom:unadmitted';
+    for(const text of ['@Pi ordinary','@Pi /model test/model','@Pi /help'])db.storeMessage(makeMessage(chat,text,'2026-04-17T02:00:00.000Z'));
+    const state=pollingState([chat]);let effects=0;
+    state.saveTimestamps=()=>{effects++;};
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),0);
+    const before=db.getDb().serialize();
+    try{await loop.runMessageLoop({state,assistantName:'Pi',pollIntervalMs:60000,
+      agentPool:{isDurableRuntime:()=>native,runAgent:()=>{effects++;},applyControlCommand:()=>{effects++;}},
+      queue:{enqueue:()=>{effects++;}},processMessages:()=>{effects++;},
+    } as any,controller.signal);}finally{clearTimeout(timer);controller.abort();}
+    expect(effects).toBe(0);expect(state.lastTimestamp).toBe('');expect(db.getDb().serialize()).toEqual(before);
+    expect(db.getNewMessages([chat],'','Pi').messages).toHaveLength(3);
   });
 });
-
-test("processMessages persists lastAgentTimestamp after a recovered successful agent run", async () => {
-  await withTempWorkspaceEnv("piclaw-message-loop-", { PICLAW_KEYCHAIN_KEY: "test-key" }, async () => {
-    const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
-    const loop = await importFresh<typeof import("../../src/runtime/message-loop.js")>("../src/runtime/message-loop.js");
-    db.initDatabase();
-
-    const chatJid = `wa:${Date.now()}`;
-    const timestamp = "2026-04-17T01:05:00.000Z";
-    db.storeMessage(makeMessage(chatJid, "@Pi hello", timestamp));
-
-    let saveCalls = 0;
-    const state = {
-      lastAgentTimestamp: {} as Record<string, string>,
-      wasCommandProcessed: () => false,
-      markCommandProcessed: () => {},
-      saveTimestamps: () => {
-        saveCalls += 1;
-      },
-    };
-
-    const ok = await loop.processMessages(chatJid, {
-      state: state as any,
-      assistantName: "Pi",
-      triggerPattern: /@Pi/i,
-      agentPool: {
-        isDurableRuntime: () => false,
-        runAgent: async () => ({
-          status: "success",
-          result: "done",
-          recovery: {
-            attemptsUsed: 1,
-            totalElapsedMs: 1200,
-            recovered: true,
-            exhausted: false,
-            lastClassifier: "transient",
-            strategyHistory: ["retry"],
-          },
-        }),
-      } as any,
-    });
-
-    expect(ok).toBe(true);
-    expect(state.lastAgentTimestamp[chatJid]).toBe(timestamp);
-    expect(saveCalls).toBe(1);
-  });
-});
-
-test("processMessages treats leading path-like slash text after trigger as a normal prompt", async () => {
-  await withTempWorkspaceEnv("piclaw-message-loop-", { PICLAW_KEYCHAIN_KEY: "test-key" }, async () => {
-    const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
-    const loop = await importFresh<typeof import("../../src/runtime/message-loop.js")>("../src/runtime/message-loop.js");
-    db.initDatabase();
-
-    const chatJid = `wa:${Date.now()}`;
-    const timestamp = "2026-04-17T01:03:00.000Z";
-    db.storeMessage(makeMessage(chatJid, "@Pi /workspace/piclaw is the repo; mention /agent/keychain literally", timestamp));
-
-    const state = {
-      lastAgentTimestamp: {} as Record<string, string>,
-      wasCommandProcessed: () => false,
-      markCommandProcessed: () => {},
-      saveTimestamps: () => {},
-    };
-
-    let prompt = "";
-    const ok = await loop.processMessages(chatJid, {
-      state: state as any,
-      assistantName: "Pi",
-      triggerPattern: /@Pi/i,
-      agentPool: {
-        isDurableRuntime: () => false,
-        applySlashCommand: async () => {
-          throw new Error("path-like slash text must not execute as slash command");
-        },
-        runAgent: async (nextPrompt: string) => {
-          prompt = nextPrompt;
-          return { status: "success", result: "done" };
-        },
-      } as any,
-    });
-
-    expect(ok).toBe(true);
-    expect(prompt).toContain("/workspace/piclaw");
-    expect(prompt).toContain("/agent/keychain");
-  });
-});
-
-test("processMessages persists lastAgentTimestamp after a successful agent run", async () => {
-  await withTempWorkspaceEnv("piclaw-message-loop-", { PICLAW_KEYCHAIN_KEY: "test-key" }, async () => {
-    const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
-    const loop = await importFresh<typeof import("../../src/runtime/message-loop.js")>("../src/runtime/message-loop.js");
-    db.initDatabase();
-
-    const chatJid = `wa:${Date.now()}`;
-    const timestamp = "2026-04-17T01:05:00.000Z";
-    db.storeMessage(makeMessage(chatJid, "@Pi hello", timestamp));
-
-    let saveCalls = 0;
-    const state = {
-      lastAgentTimestamp: {} as Record<string, string>,
-      wasCommandProcessed: () => false,
-      markCommandProcessed: () => {},
-      saveTimestamps: () => {
-        saveCalls += 1;
-      },
-    };
-
-    const ok = await loop.processMessages(chatJid, {
-      state: state as any,
-      assistantName: "Pi",
-      triggerPattern: /@Pi/i,
-      agentPool: {
-        isDurableRuntime: () => false,
-        runAgent: async () => ({
-          status: "success",
-          result: "done",
-        }),
-      } as any,
-    });
-
-    expect(ok).toBe(true);
-    expect(state.lastAgentTimestamp[chatJid]).toBe(timestamp);
-    expect(saveCalls).toBe(1);
-  });
-});
-
 
 test("abort during poll sleep clears timer and listener without another poll", async () => {
   await withTempWorkspaceEnv("piclaw-poller-stop-", {}, async () => {
@@ -238,29 +97,6 @@ test("stop after readonly fetch admits nothing and leaves cursor replayable", as
   });
 });
 
-test("partially admitted batch keeps original cursor and accepted queue work runs after stop", async () => {
-  await withTempWorkspaceEnv("piclaw-poller-stop-", {}, async () => {
-    const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
-    const loop = await importFresh<typeof import("../../src/runtime/message-loop.js")>("../src/runtime/message-loop.js");
-    db.initDatabase();
-    const chats = ["wa:partial-one", "wa:partial-two"];
-    chats.forEach((chat, i) => db.storeMessage(makeMessage(chat, "@Pi hello", `2026-04-17T02:00:0${i}.000Z`)));
-    const controller = new AbortController();
-    const queue = new AgentQueue();
-    const state = pollingState(chats);
-    const accepted = Promise.withResolvers<void>();
-    const enqueue = queue.enqueue.bind(queue);
-    const intercepted = spyOn(queue, "enqueue").mockImplementation((...args) => { enqueue(...args); controller.abort(); });
-    try {
-      await loop.runMessageLoop({ agentPool: legacyPollingPool, queue, state, assistantName: "Pi", pollIntervalMs: 60_000, processMessages: async () => { accepted.resolve(); return true; } }, controller.signal);
-      expect(queue.getMetrics().enqueued).toBe(1);
-      expect(state.lastTimestamp).toBe("");
-      expect(db.getNewMessages(chats, state.lastTimestamp, "Pi").messages).toHaveLength(2);
-      await accepted.promise;
-    } finally { intercepted.mockRestore(); await queue.shutdown(); }
-  });
-});
-
 test("shutdown joins poll then waits for accepted asynchronous queue processing before pool disposal", async () => {
   await withTempWorkspaceEnv("piclaw-poller-stop-", {}, async () => {
     const db = await importFresh<typeof import("../../src/db.js")>("../src/db.js");
@@ -274,10 +110,9 @@ test("shutdown joins poll then waits for accepted asynchronous queue processing 
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
     const queueStopping = Promise.withResolvers<void>();
     const calls: string[] = [];
-    const running = loop.runMessageLoop({
-      agentPool: legacyPollingPool, queue, state: pollingState([chat]), assistantName: "Pi", pollIntervalMs: 60_000,
-      processMessages: async () => { entered.resolve(); await release.promise; calls.push("notification-complete"); return true; },
-    }, controller.signal);
+    // Accepted work comes from its own admitted source, never this readonly poller.
+    queue.enqueue(async()=>{entered.resolve();await release.promise;calls.push('notification-complete');},'accepted-native-fixture');
+    const running=loop.runMessageLoop({state:pollingState([chat]),assistantName:'Pi',pollIntervalMs:60000},controller.signal);
     const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
     let stopping: Promise<void> | undefined;
     try {

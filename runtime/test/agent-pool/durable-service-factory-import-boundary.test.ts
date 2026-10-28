@@ -46,25 +46,11 @@ for (const mode of ["bound", "empty"] as const) {
         getDurableSession: () => durablePort,
       });
 
-      const snapshot = services.sessionManager.getInstrumentationSnapshot();
-      if (snapshot.createInFlight !== 0 || snapshot.prewarmInFlight !== 0 || snapshot.branchSeedRealizationsInFlight !== 0) {
-        throw new Error("Unexpected durable instrumentation");
+      for(const field of ['sessionManager','sessionBinder','toolFactory']){
+        if(field in services)throw Error('Native lifecycle placeholder remains: '+field);
       }
-      if (services.sessionManager.prewarm("web:bound") !== false) throw new Error("Durable prewarm must fail closed");
-      if (services.sessionManager.cancelPrewarm("web:bound") !== false) throw new Error("Durable prewarm cancellation must fail closed");
-      if (services.sessionManager.hasPendingSessionWork("web:bound") !== false) throw new Error("Durable session work must stay empty");
-      if (services.sessionManager.hasProtectedRun("web:bound") !== false) throw new Error("Durable protected run must stay false");
-      if (services.sessionManager.hasActiveMemoryReclamationWork() !== false) throw new Error("Durable reclamation should stay inactive");
-      if (services.toolFactory.createCustomToolOverrides("web:bound").length !== 0) throw new Error("Durable custom tools should stay empty");
-
-      let getOrCreateBlocked = false;
-      try { await services.sessionManager.getOrCreate("web:bound"); }
-      catch (error) { getOrCreateBlocked = String(error).includes("Durable application does not construct legacy sessions"); }
-      if (!getOrCreateBlocked) throw new Error("Durable getOrCreate must fail closed");
-
       if ("turnCoordinator" in services) throw new Error("Retired turn owner must be absent");
 
-      await services.sessionManager.shutdown();
       console.log(JSON.stringify({ mode, attempts }));
     `;
 
@@ -120,8 +106,8 @@ test("legacy service-factory path reaches legacy construction fence immediately"
     const { createAgentPoolServices } = await import(source + "/agent-pool/service-factory.ts");
     const model = createAgentPoolModelOptions();
 
-    // Legacy mode: no durable callback provided.
-    createAgentPoolServices({
+    // Explicit resident-capture composition, never an omitted native callback.
+    createAgentPoolServices({legacyCapture:true,
       pool: new Map(),
       activeForkBaseLeafByChat: new Map(),
       authStorage: model.credentialStore,

@@ -1,3 +1,4 @@
+import {runAdmittedScheduledTask} from '../helpers/admitted-scheduled-task.js';
 /**
  * test/runtime/scheduler.test.ts – Tests for the task scheduler.
  *
@@ -103,7 +104,7 @@ test("runScheduledTask logs run and updates task", async () => {
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
     agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => ({ status: "success", result: "Hello" }),
       saveSessionPosition: async () => "leaf-123",
       restoreSessionPosition: async () => {},
       getCurrentModelLabel: async () => null,
@@ -118,7 +119,7 @@ test("runScheduledTask logs run and updates task", async () => {
   };
 
   const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
+  await runAdmittedScheduledTask(task, deps as any);
 
   const updated = db.getTaskById(taskId)!;
   expect(updated.last_run).not.toBeNull();
@@ -164,7 +165,7 @@ test("runScheduledTask can post task output without sending Pushover nudges", as
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
     agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => ({ status: "success", result: "Hello" }),
       saveSessionPosition: async () => "leaf-muted",
       restoreSessionPosition: async () => {},
       getCurrentModelLabel: async () => null,
@@ -179,7 +180,7 @@ test("runScheduledTask can post task output without sending Pushover nudges", as
   };
 
   const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
+  await runAdmittedScheduledTask(task, deps as any);
 
   expect(sent).toEqual(["Hello"]);
   expect(nudges).toEqual([]);
@@ -214,7 +215,7 @@ test("runScheduledTask records recovery summaries in task logs without polluting
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
     agentPool: {
-      runAgent: async () => ({
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => ({
         status: "success",
         result: "Hello",
         recovery: {
@@ -237,7 +238,7 @@ test("runScheduledTask records recovery summaries in task logs without polluting
   };
 
   const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
+  await runAdmittedScheduledTask(task, deps as any);
 
   expect(sent).toEqual(["Hello"]);
 
@@ -276,10 +277,8 @@ test("runScheduledTask still logs and advances the task after an early execution
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
     agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
-      saveSessionPosition: async () => {
-        throw new Error("save failed");
-      },
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => { throw Error("dispatch failed"); },
+      saveSessionPosition: async () => { throw Error("Legacy position lookup forbidden"); },
       restoreSessionPosition: async () => {},
       getCurrentModelLabel: async () => null,
       applyControlCommand: async () => ({ status: "success", message: "" }),
@@ -288,17 +287,17 @@ test("runScheduledTask still logs and advances the task after an early execution
   };
 
   const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
+  await runAdmittedScheduledTask(task, deps as any);
 
   const updated = db.getTaskById(taskId)!;
   expect(updated.last_run).not.toBeNull();
-  expect(updated.last_result).toContain("save failed");
+  expect(updated.last_result).toContain("dispatch failed");
   expect(updated.next_run).not.toBe(task.next_run);
 
   const logs = db.getTaskRunLogs(taskId);
   expect(logs.length).toBe(1);
   expect(logs[0].status).toBe("error");
-  expect(logs[0].error).toContain("save failed");
+  expect(logs[0].error).toContain("dispatch failed");
 
   const metrics = scheduler.getSchedulerMetrics();
   expect(metrics.taskRunsStarted).toBe(1);
@@ -336,7 +335,7 @@ test("runScheduledTask computes the next cron run from the task next_run anchor"
   const deps = {
     queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
     agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => ({ status: "success", result: "Hello" }),
       saveSessionPosition: async () => "leaf-123",
       restoreSessionPosition: async () => {},
       getCurrentModelLabel: async () => null,
@@ -346,178 +345,10 @@ test("runScheduledTask computes the next cron run from the task next_run anchor"
   };
 
   const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
+  await runAdmittedScheduledTask(task, deps as any);
 
   const updated = db.getTaskById(taskId)!;
   expect(updated.next_run).toBe("2024-01-01T00:05:00.000Z");
-});
-
-test("runScheduledTask switches and restores models", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await import("../../src/db.js");
-  db.initDatabase();
-
-  const scheduler = await import("../../src/task-scheduler.js");
-
-  const taskId = `task-model-${Date.now()}`;
-  db.createTask({
-    id: taskId,
-    chat_jid: "web:default",
-    prompt: "say hi",
-    model: "openai/gpt-4",
-    schedule_type: "interval",
-    schedule_value: "60000",
-    next_run: new Date(Date.now() - 1000).toISOString(),
-    status: "active",
-    created_at: new Date().toISOString(),
-  });
-
-  const modelCalls: any[] = [];
-  const deps = {
-    queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
-    agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
-      saveSessionPosition: async () => "leaf-456",
-      restoreSessionPosition: async () => {},
-      getCurrentModelLabel: async () => "openai/gpt-3.5",
-      applyControlCommand: async (_jid: string, payload: any) => {
-        modelCalls.push(payload);
-        return { status: "success", message: "" };
-      },
-    } as any,
-    sendMessage: async () => {},
-  };
-
-  const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
-
-  expect(modelCalls.length).toBe(2);
-  expect(modelCalls[0].raw).toBe("/model openai/gpt-4");
-  expect(modelCalls[1].raw).toBe("/model openai/gpt-3.5");
-});
-
-test("runScheduledTask stops when model switch fails", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await import("../../src/db.js");
-  db.initDatabase();
-
-  const scheduler = await import("../../src/task-scheduler.js");
-  scheduler.resetSchedulerMetricsForTests();
-
-  const taskId = `task-model-error-${Date.now()}`;
-  db.createTask({
-    id: taskId,
-    chat_jid: "web:default",
-    prompt: "say hi",
-    model: "openai/gpt-4",
-    schedule_type: "interval",
-    schedule_value: "60000",
-    next_run: new Date(Date.now() - 1000).toISOString(),
-    status: "active",
-    created_at: new Date().toISOString(),
-  });
-
-  const modelCalls: any[] = [];
-  let runCount = 0;
-  const deps = {
-    queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
-    agentPool: {
-      runAgent: async () => {
-        runCount += 1;
-        return { status: "success", result: "Hello" };
-      },
-      saveSessionPosition: async () => "leaf-789",
-      restoreSessionPosition: async () => {},
-      getCurrentModelLabel: async () => "openai/gpt-3.5",
-      applyControlCommand: async (_jid: string, payload: any) => {
-        modelCalls.push(payload);
-        if (modelCalls.length === 1) {
-          return { status: "error", message: "boom" };
-        }
-        return { status: "success", message: "" };
-      },
-    } as any,
-    sendMessage: async () => {},
-  };
-
-  const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
-
-  expect(runCount).toBe(0);
-  expect(modelCalls.length).toBe(2);
-  expect(modelCalls[1].raw).toBe("/model openai/gpt-3.5");
-
-  const metrics = scheduler.getSchedulerMetrics();
-  expect(metrics.taskRunsStarted).toBe(1);
-  expect(metrics.taskRunsSucceeded).toBe(0);
-  expect(metrics.taskRunsFailed).toBe(1);
-});
-
-test("runScheduledTask logs restore-model failures", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await import("../../src/db.js");
-  db.initDatabase();
-
-  const scheduler = await import("../../src/task-scheduler.js");
-
-  const taskId = `task-model-restore-${Date.now()}`;
-  db.createTask({
-    id: taskId,
-    chat_jid: "web:default",
-    prompt: "say hi",
-    model: "openai/gpt-4",
-    schedule_type: "interval",
-    schedule_value: "60000",
-    next_run: new Date(Date.now() - 1000).toISOString(),
-    status: "active",
-    created_at: new Date().toISOString(),
-  });
-
-  const modelCalls: any[] = [];
-  const errors: string[] = [];
-  const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: any, encodingOrCb?: any, cb?: any) => {
-    errors.push(String(chunk));
-    if (typeof encodingOrCb === "function") encodingOrCb();
-    else if (typeof cb === "function") cb();
-    return true;
-  }) as typeof process.stderr.write;
-
-  const deps = {
-    queue: { enqueueTask: (_id: string, fn: () => Promise<void>) => fn() } as any,
-    agentPool: {
-      runAgent: async () => ({ status: "success", result: "Hello" }),
-      saveSessionPosition: async () => "leaf-restore",
-      restoreSessionPosition: async () => {},
-      getCurrentModelLabel: async () => "openai/gpt-3.5",
-      applyControlCommand: async (_jid: string, payload: any) => {
-        modelCalls.push(payload);
-        if (modelCalls.length === 2) {
-          return { status: "error", message: "restore failed" };
-        }
-        return { status: "success", message: "" };
-      },
-    } as any,
-    sendMessage: async () => {},
-  };
-
-  const task = db.getTaskById(taskId)!;
-  await scheduler.runScheduledTask(task, deps as any);
-
-  process.stderr.write = originalWrite;
-
-  expect(modelCalls.length).toBe(2);
-  expect(errors.some((line) => line.includes("Failed to restore model"))).toBe(true);
-
-  const logs = db.getTaskRunLogs(taskId);
-  expect(logs.length).toBe(1);
-  expect(logs[0].status).toBe("success");
 });
 
 test("durable polling queues one runId and binds scheduled-agent source before delivery", async () => {
@@ -560,7 +391,7 @@ test("durable polling queues one runId and binds scheduled-agent source before d
       restoreSessionPosition: async () => undefined,
       getCurrentModelLabel: async () => null,
       applyControlCommand: async () => ({ status: "success", message: "" }),
-      runAgent: async () => {
+      isDurableRuntime:()=>true,dispatchScheduledAgent: async () => {
         const row = db.getDb().query("SELECT state FROM service_effect_s07_occurrences WHERE task_id=?").get(taskId) as { state: string };
         observedSourceBound = row.state === "source_bound";
         return { status: "success", result: "durable result" };

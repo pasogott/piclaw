@@ -12,7 +12,9 @@ The Core legacy `runAgentPrompt` loop is deleted. Native SDK tasks/submissions a
 | Scheduled agent/Dream work | Admitted S07 occurrence, exact lease/source identity and native dispatch. Host shell/internal maintenance remain separate. |
 | Non-web AI polling | Explicitly unsupported without host input admission; native polling refuses before queue/cursor/runner side effects. |
 
-`AgentPool.runAgent` remains a rejection-only public boundary for existing caller signatures and API users. It returns the established non-recoverable admission error in every profile, before reading options, creating sessions or changing accounting. It is not a compatibility executor. Remove this boundary and its deprecated `RunAgentOptions` shape when the remaining legacy fallback signatures in Dream/add-on/scheduler/polling are removed; supported paths already use the native ports above.
+`AgentPool.runAgent` and `RunAgentOptions` are deleted. Dream/add-on operations require their native dispatchers; missing native support cannot choose a direct runner. Scheduled AI work requires an admitted S07 occurrence and private native dispatch. It never saves/restores a public SDK branch or changes the public chat model. The now-unused throwing history-restore API is also deleted.
+
+Non-web polling has no accepted-source port. Its executable worker, queue admission, command deduplication and cursor advancement are deleted in every profile. The remaining poller reads pending input and reports the admission requirement without consuming it. Bootstrap/coordinator polling dependencies contain no pool, queue or worker callback. Host shell tasks and deterministic internal maintenance remain separate; direct AI/Dream execution without an occurrence cannot borrow those paths.
 
 ## Deleted owner and exclusive helpers
 
@@ -32,14 +34,22 @@ Two file-history primitives remain for proven consumers: `session-file-persisten
 
 Native root SDK definitions/resources, smart summary preparation, provider quota/model catalogue formatting and credential ownership remain. Native manual compaction/reset, model/thinking/auth controls and read-only history still use captured native ports, with SDK maintenance, owner/lifetime guards and accounting unchanged. The two legacy session-idle-wait environment knobs are removed from runtime configuration documentation and marked removed in the support catalogue. Stored configuration/history is untouched.
 
-#1673 stays open for remaining fallback caller signatures, exclusive configuration consumers and the #1672 composition prerequisite. Read-only legacy recovery-settings metadata still has a general-settings consumer; it grants no native retry permission. The compatibility session/resource composition and its final lifetime audit are outstanding.
+The final exclusive policy/configuration surface is retired: Core automatic recovery/loop guard and stale preflight domains, JSONL rotation storage settings, and obsolete scoped/foreground/idle trigger controls have no runtime reader, writer or UI. `recovery-policy.ts`, unused retry-settings type, protected-handoff producers and continuation-prompt selector are deleted. Historical control-intent decoders, typed reason/presentation readers and stored records remain.
 
-#1672 retains its final composition/lifetime audit. #1691/#1692 own physical legacy execution-field and UI projection retirement; no historical marker, payload, receipt or database is removed by this code deletion. No dependency upgrade, deployment, restart or live storage/configuration operation is included.
+Declared retired keys in active domains are finite read-only historical metadata: resolution ignores them, writes preserve them, new patches reject them, and all unrelated unknown keys still fail. General-setting saves containing retired fields reject before identity or other setters. Both Sessions panes retain the independent tool budget/isolation controls and no longer post obsolete knobs. Native auto-compaction remains SDK-owned on the Compaction pane.
+
+Shared Root SDK smart-summary/model/probe/watchdog/context-budget helpers retain proven resource/API consumers and their own settings, including provider-native summary backoff. They do not own a native prompt/retry/rotation lifecycle, and unsupported native compaction settings remain rejected. Removing them solely by filename would break retained utilities. Historical configuration/JSONL/logs/receipts are preserved, not reinterpreted or cleaned up.
+
+#1672 construction/lifetime acceptance is complete. #1673 acceptance spans the merged caller, prompt/manual owner, web/queue and final configuration retirement; no second executor or fallback remains.
+
+[Native host composition](native-host-composition.md) requires native lookup or an explicit historical `legacyCapture: true` selection. Native tool/binder/session lifecycle placeholders, warmup entry points and idle GC timer are deleted; unsupported native MCP live Apply cannot borrow an empty legacy shutdown certificate. The independent real native MCP/resource owner and explicit resident capture path remain separately qualified. #1672 acceptance requires merged construction/lifetime evidence. #1691/#1692 own physical legacy execution-field and UI projection retirement; no historical marker, payload, receipt or database is removed by this code deletion. No dependency upgrade, deployment, restart or live storage/configuration operation is included.
 
 ## Evidence
 
-- `retired-prompt-owner.test.ts`: all-profile direct-prompt refusal before option/factory/accounting access; sixteen module absences; unchanged shared retry settings and absence of obsolete recovery instrumentation.
+- `retired-prompt-owner.test.ts`: all-profile direct-runner API absence, unchanged factory/accounting state, sixteen module absences, unchanged shared retry settings and absence of obsolete recovery instrumentation.
+- `runner-caller-retirement.test.ts`: no public runner/options/fallback call sites; missing native add-on authority cannot choose a stale runner property. Real native caller scenarios qualify grants, quotas, lease revocation, Dream model/tool/FD lifetime, scheduled accounting and pending non-web input preservation.
 - `manual-control-retirement.test.ts`: retired module/API absence and missing native control authority refusing old runtime factories, mutation and compaction.
+- `retired-execution-policy.test.ts`: no obsolete settings or policy module, stale whole-save refusal, inert stored history preservation, strict unknown-key/patch rejection and no schema-retirement overlap. The shipped Classic/Visual browser matrix covers active controls/save/error/remount, absent retired fields and responsive authentication continuity.
 - Fresh native import/composition fences require no legacy construction and no turn-coordinator port; they also forbid the retired manual control, slash, retry and rotation modules.
 - `compact.test.ts`, `idle-model.test.ts`, `db-tree.test.ts` and `single-database.test.ts` qualify actual native compaction/reset, model fit, scoped pending work, imported history, same-task checkpoint adoption and reopen.
 - Native handler/auth/alias/fuzz tests preserve current catalogue, private credentials and one-time model activation. Retired SDK-session mutation/eviction fixtures do not certify native controls.

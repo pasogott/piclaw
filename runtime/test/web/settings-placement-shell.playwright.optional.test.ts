@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
 
 // Exercise the shipped entrypoints and API adapter, not injected hook callbacks.
-const enabled = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1";
+const enabled = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1" && process.env.PICLAW_E2E_DISPOSABLE === "1";
 const browserTest = enabled ? test : test.skip;
 const webRoot = resolve(import.meta.dir, "../../web");
 let server: ReturnType<typeof Bun.serve>;
@@ -63,7 +63,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     }, { chatJid });
     let passkeyName = 'Existing key'; let passkeyWrites = 0;
     const settings = { providers: [], toolsets: [], themes: [], colorKeys: [], uiTheme: "default", assistantName: "Fixture", userName: "Fixture User", widgetToken: 'fixture-token-initial',
-      automaticRecoveryEnabled: true, automaticRecoveryMaxAttempts: 2, automaticRecoveryTotalBudgetMs: 123000, automaticRecoveryEffectiveBudgetMs: 123000,
+      toolUseBudget:64,sessionIsolation:"none",
       instanceTotp: { configured: true, issuer: 'Fixture', label: 'Fixture User', secret: 'FIXTUREONLY', otpauth:'otpauth://totp/fixture', qrSvg:'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" /></svg>' } };
     const saves: Record<string, unknown>[] = [];
     let tokenWrites = 0, rejectToken = false, rejectSave = false;
@@ -139,7 +139,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       const nav = page.locator(skin === 'classic' ? '.settings-nav' : '.settings-panel__nav').filter({visible:true});
       const labels = (await nav.getByRole('button').allTextContents()).map(label => label.trim());
       expect(labels[labels.indexOf('General') + 1]).toBe('Appearance');
-      expect(labels[labels.indexOf('Models') + 1]).toBe('Tools');
+      expect(labels.slice(labels.indexOf('Models'),labels.indexOf('Models')+3)).toEqual(skin==='classic'?['Models','MCP','Tools']:['Models','Tools','MCP']);
       expect(labels[labels.indexOf('Environment') + 1]).toBe('Keychain');
       if (skin === 'classic') expect(labels[labels.indexOf('Keyboard') + 1]).toBe('Quick Actions');
       expect(labels).not.toContain('API access');
@@ -158,19 +158,22 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       const generalSaves=saves.slice();
       expect(generalSaves.every(patch => !Object.keys(patch).some(key => key.startsWith('automaticRecovery') || key === 'totp' || key === 'widgetToken'))).toBe(true);
       await openSection('sessions');
-      const attempts=content.getByLabel(/^(automatic recovery maximum attempts|Maximum recovery attempts)$/,{exact:true});
-      await attempts.fill('4'); await attempts.blur(); await page.waitForTimeout(1000);
-      expect(settings.automaticRecoveryMaxAttempts).toBe(4);
-      const budget=content.getByLabel(/^(automatic recovery total budget.*|Recovery time allowance.*)$/,{exact:true});
-      await budget.fill('456000'); await budget.blur(); await page.waitForTimeout(1000);
-      expect(settings.automaticRecoveryTotalBudgetMs).toBe(456000);
+      expect(await content.getByText('Agent recovery',{exact:true}).count()).toBe(0);
+      expect(await content.getByText(/Auto-rotate sessions|Session Lifecycle|Recovery time allowance/).count()).toBe(0);
+      const toolBudget=content.getByLabel(/^tool use budget$/i);
+      await toolBudget.fill('91');await toolBudget.blur();await page.waitForTimeout(1000);
+      expect(settings.toolUseBudget).toBe(91);
+      if(skin==='classic')await content.locator('select').first().selectOption('summary');
+      else{await content.getByRole('button',{name:/^None — full cross-session visibility/}).click();await page.getByRole('option',{name:'Summary',exact:true}).click();}
+      await page.waitForTimeout(1000);expect(settings.sessionIsolation).toBe('summary');
       rejectSave=true;
-      await attempts.fill('7'); await attempts.blur(); await page.waitForTimeout(1000);
-      expect(settings.automaticRecoveryMaxAttempts).toBe(4);
+      await toolBudget.fill('94');await toolBudget.blur();await page.waitForTimeout(1000);
+      expect(settings.toolUseBudget).toBe(91);
       expect(await page.getByText(/Fixture save failed|Save failed/).count()).toBeGreaterThan(0);
       rejectSave=false;
-      await openSection('general'); await openSection('sessions');
-      expect(await content.getByLabel(/^(automatic recovery maximum attempts|Maximum recovery attempts)$/,{exact:true}).inputValue()).toBe('4');
+      await openSection('general');await openSection('sessions');
+      expect(await content.getByLabel(/^tool use budget$/i).inputValue()).toBe('91');
+      expect(saves.every(patch=>!Object.keys(patch).some(key=>key.startsWith('automaticRecovery')||['sessionAutoRotate','sessionMaxSizeMb','sessionMaxLines','sessionMaxCompactions'].includes(key)))).toBe(true);
       expect(await content.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
       // The nav can be scrolled outside the accessibility viewport on narrow layouts.
       await nav.locator('button').filter({ hasText: /^Authentication$/ }).click();

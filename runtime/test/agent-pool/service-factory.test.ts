@@ -21,6 +21,7 @@ function createServicesOptions(modelServices: Awaited<ReturnType<typeof createFa
     modelRegistry: modelServices.modelRegistry,
     settingsManager: SettingsManager.inMemory(),
     workspaceDir,
+    legacyCapture:true as const,
   };
 }
 
@@ -36,7 +37,7 @@ test("createAgentPoolServices wires the extracted helper services together", asy
 
     expect(services.attachments).toBeDefined();
     expect(services.sessionBinder).toBeDefined();
-    expect(services.toolFactory).toBeDefined();
+    expect(services).not.toHaveProperty("toolFactory");
     expect(services).not.toHaveProperty("turnCoordinator");
     expect(services.sessionManager).toBeDefined();
     expect(services.runtimeFacade).toBeDefined();

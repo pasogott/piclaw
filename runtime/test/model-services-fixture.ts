@@ -53,6 +53,11 @@ export function createTestModelRuntime(models: any[] = []): ModelRuntime {
   } as unknown as ModelRuntime;
 }
 
-export function createAgentPoolModelOptions(models: any[] = []): Pick<AgentPoolOptions, "credentialStore" | "modelRuntime"> {
-  return { credentialStore: createTestCredentialStore(), modelRuntime: createTestModelRuntime(models) };
+export function createAgentPoolModelOptions(models: any[] = []): Pick<AgentPoolOptions, "credentialStore" | "modelRuntime" | "getDurableSession"> {
+  return { credentialStore: createTestCredentialStore(), modelRuntime: createTestModelRuntime(models), getDurableSession:()=>undefined };
+}
+
+/** Explicit resident SDK capture/resource fixtures only; never native admission. */
+export function createLegacyCapturePoolOptions(models:any[]=[]):Pick<AgentPoolOptions,'credentialStore'|'modelRuntime'|'getDurableSession'|'legacyCapture'>{
+  return {...createAgentPoolModelOptions(models),getDurableSession:undefined,legacyCapture:true};
 }

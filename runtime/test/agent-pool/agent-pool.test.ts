@@ -12,7 +12,7 @@ import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getAttachmentRegistry } from "../../src/agent-pool/attachments.js";
 import { createTempWorkspace, getTestWorkspace, importFresh, setEnv } from "../helpers.js";
-import { createAgentPoolModelOptions } from "../model-services-fixture.js";
+import { createLegacyCapturePoolOptions,createAgentPoolModelOptions } from "../model-services-fixture.js";
 
 let restoreEnv: (() => void) | null = null;
 
@@ -69,7 +69,7 @@ test("agent pool exposes the shared model registry and active scoped models to s
 
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
   const model = { provider: "free", id: "zero", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  const options = createAgentPoolModelOptions([model]);
+  const options = createLegacyCapturePoolOptions([model]);
   const physicalStream = { marker: "physical-stream" };
   (options.modelRuntime as any).streamSimple = (streamModel: unknown, context: unknown, streamOptions: unknown) => {
     expect(streamModel).toBe(model);
@@ -140,7 +140,7 @@ test("agent pool aggregates content-free session resource counts", async () => {
 
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
   const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => { throw new Error("unused"); },
   });
   const sessionFile = join(ws.data, "instrumentation-session.jsonl");
@@ -202,7 +202,7 @@ test("agent pool stores SSH config for future sessions when no live SSH session 
   }
 
   pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => {
       createCalls += 1;
       return createRuntime(new StubSession()) as any;
@@ -248,7 +248,7 @@ test("agent pool evicts idle sessions and recreates them", async () => {
   }
 
   const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => {
       createCalls += 1;
       return createRuntime(new StubSession()) as any;
@@ -268,133 +268,6 @@ test("agent pool evicts idle sessions and recreates them", async () => {
 
   await pool.getSessionForIntrospection("web:default");
   expect(createCalls).toBe(2);
-
-  await pool.shutdown();
-});
-
-test("agent pool schedules lightweight warmup for the most recent inactive chats", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await importFresh<typeof import("../src/db.js")>("../src/db.js");
-  db.closeDatabase(); // Recent-chat ordering must not include fixtures from earlier test files.
-  db.initDatabase();
-  db.storeChatMetadata("web:older", "2026-04-14T10:00:00.000Z", "Older");
-  db.storeChatMetadata("web:newer", "2026-04-14T11:00:00.000Z", "Newer");
-  db.storeChatMetadata("web:newest", "2026-04-14T12:00:00.000Z", "Newest");
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-
-  const created: string[] = [];
-  class StubSession {
-    subscribe(_listener: (event: any) => void) {
-      return () => {};
-    }
-    async prompt(_prompt: string) {}
-    async abort() {}
-    dispose() {}
-  }
-
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async (chatJid: string) => {
-      created.push(chatJid);
-      return createRuntime(new StubSession()) as any;
-    },
-  });
-
-  const scheduled = (pool as any).scheduleRecentChatWarmup({
-    limit: 2,
-    excludeChatJids: ["web:default", "web:newest"],
-  });
-  expect(scheduled).toEqual(["web:newer", "web:older"]);
-
-  await Bun.sleep(20);
-  expect(created).toEqual([]);
-  expect(pool.getMemoryInstrumentationSnapshot().cachedMainSessions).toBe(0);
-
-  await pool.shutdown();
-});
-
-test("agent pool recent-chat warmup skips internal maintenance chats", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await importFresh<typeof import("../src/db.js")>("../src/db.js");
-  db.closeDatabase(); // Recent-chat ordering must not include fixtures from earlier test files.
-  db.initDatabase();
-  db.storeChatMetadata("web:ipc-fts-123", "2099-04-14T14:00:00.000Z", "IPC");
-  db.storeChatMetadata("dream:auto:web-default:123", "2099-04-14T13:00:00.000Z", "Dream");
-  db.storeChatMetadata("control:/compact", "2099-04-14T12:00:00.000Z", "Control");
-  db.storeChatMetadata("web:user", "2099-04-14T11:00:00.000Z", "User");
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime({ subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, dispose() {} }) as any,
-  });
-
-  const scheduled = (pool as any).scheduleRecentChatWarmup({ limit: 4, excludeChatJids: ["web:default"] });
-  expect(scheduled).toContain("web:user");
-  expect(scheduled).not.toContain("web:ipc-fts-123");
-  expect(scheduled).not.toContain("dream:auto:web-default:123");
-  expect(scheduled).not.toContain("control:/compact");
-
-  await pool.shutdown();
-});
-
-test("agent pool keeps expanding recent-chat warmup past already-warm top rows", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await importFresh<typeof import("../src/db.js")>("../src/db.js");
-  db.closeDatabase(); // Recent-chat ordering must not include fixtures from earlier test files.
-  db.initDatabase();
-  const baseTimeMs = Date.parse("2026-04-14T23:59:00.000Z");
-  for (let index = 0; index < 101; index += 1) {
-    const chatJid = `web:chat-${String(index).padStart(3, "0")}`;
-    db.storeChatMetadata(chatJid, new Date(baseTimeMs - index * 60_000).toISOString(), `Chat ${index}`);
-  }
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime({ subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, dispose() {} }) as any,
-  });
-
-  for (let index = 0; index < 100; index += 1) {
-    const chatJid = `web:chat-${String(index).padStart(3, "0")}`;
-    (pool as any).pool.set(chatJid, { runtime: createRuntime({ dispose() {} }), lastUsed: Date.now() });
-  }
-
-  const scheduled = (pool as any).scheduleRecentChatWarmup({
-    limit: 1,
-    excludeChatJids: ["web:default", "web:user", "web:newest", "web:newer", "web:older"],
-  });
-  expect(scheduled).toEqual(["web:chat-100"]);
-
-  await pool.shutdown();
-});
-
-test("agent pool explicit warmup still materializes a live runtime", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-  const created: string[] = [];
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async (chatJid: string) => {
-      created.push(chatJid);
-      return createRuntime({ subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, dispose() {} }) as any;
-    },
-  });
-
-  expect(pool.scheduleChatWarmup("web:default", { priority: true })).toBe(true);
-  await Bun.sleep(20);
-
-  expect(created).toEqual(["web:default"]);
-  expect(pool.getMemoryInstrumentationSnapshot().cachedMainSessions).toBe(1);
 
   await pool.shutdown();
 });
@@ -436,7 +309,7 @@ test("agent pool cleanup timer applies the shorter memory-pressure idle TTL", as
     }
 
     const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
       createSession: async () => createRuntime(new StubSession()) as any,
     });
 
@@ -464,7 +337,7 @@ test("agent pool coalesces forced GC and defers it until protected work is idle"
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data, PICLAW_MAIN_SESSION_PRESSURE_RSS_BYTES: "1" });
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-  const pool = new AgentPool({ ...createAgentPoolModelOptions(), createSession: async () => { throw Error("unused"); } });
+  const pool = new AgentPool({ ...createLegacyCapturePoolOptions(), createSession: async () => { throw Error("unused"); } });
   const originalGc = Bun.gc;
   let collections = 0;
   Bun.gc = (() => { collections++; return 0; }) as typeof Bun.gc;
@@ -507,7 +380,7 @@ test("agent pool applies the pressure pool cap immediately after acquiring a sec
   }
 
   const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => createRuntime(new StubSession()) as any,
   });
 
@@ -555,7 +428,7 @@ test("agent pool enables the default pressure trim path at the 512MB threshold",
     }
 
     const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
       createSession: async () => createRuntime(new StubSession()) as any,
     });
 
@@ -601,7 +474,7 @@ test("agent pool trims cached main sessions more aggressively when RSS crosses t
   }
 
   const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => createRuntime(new StubSession()) as any,
   });
 
@@ -615,29 +488,6 @@ test("agent pool trims cached main sessions more aggressively when RSS crosses t
   expect((pool as any).pool.has("web:two")).toBe(true);
   expect(pool.getMemoryInstrumentationSnapshot().cachedMainSessions).toBe(1);
   expect(disposed).toBe(1);
-
-  await pool.shutdown();
-});
-
-test("agent pool rate-limits repeated recent-chat warmup for the same chat", async () => {
-  const ws = createTempWorkspace("piclaw-recent-warmup-cooldown-");
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const db = await importFresh<typeof import("../src/db.js")>("../src/db.js");
-  db.initDatabase();
-  db.storeChatMetadata("web:only", "2026-04-14T12:00:00.000Z", "Only");
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime({ subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, dispose() {} }) as any,
-  });
-
-  const first = (pool as any).scheduleRecentChatWarmup({ limit: 1, excludeChatJids: ["web:default"] });
-  const second = (pool as any).scheduleRecentChatWarmup({ limit: 1, excludeChatJids: ["web:default"] });
-
-  expect(first).toEqual(["web:only"]);
-  expect(second).toEqual([]);
 
   await pool.shutdown();
 });
@@ -710,7 +560,7 @@ test("agent pool refuses to prune an active branch session", async () => {
   }
 
   const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
+    ...createLegacyCapturePoolOptions(),
     createSession: async () => createRuntime(new ActiveBranchSession()) as any,
   });
 

@@ -44,21 +44,17 @@ for (const mode of ["durable", "legacy"] as const) {
         });
       }});
       const { AgentPool } = await import(source + "/agent-pool.ts");
-      const { createAgentPoolModelOptions } = await import(${JSON.stringify(resolve(import.meta.dir, "../model-services-fixture.ts"))});
+      const { createAgentPoolModelOptions,createLegacyCapturePoolOptions } = await import(${JSON.stringify(resolve(import.meta.dir, "../model-services-fixture.ts"))});
       const { initDatabase } = await import(source + "/db.ts");
       initDatabase();
       const mode = ${JSON.stringify(mode)};
-      const pool = new AgentPool({ ...createAgentPoolModelOptions(),
-        ...(mode === "durable" ? { getDurableSession: () => undefined } : {}) });
+      const pool = new AgentPool(mode === "durable" ? createAgentPoolModelOptions() : createLegacyCapturePoolOptions());
       try {
         if (attempts.length) throw new Error("Construction evaluated a forbidden local module");
         if (mode === "durable") {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected durable rejection"); }
           catch (error) { if (!String(error).includes("Durable application does not construct legacy sessions")) throw error; }
-          const runResult = await pool.runAgent("must not load legacy orchestration", "web:load-boundary");
-          if (runResult.status !== "error" || runResult.error !== "Native execution requires an admitted operation") {
-            throw new Error("Unexpected durable runAgent result: " + JSON.stringify(runResult));
-          }
+          if ('runAgent' in pool) throw Error('Retired direct runner API remains');
           if (attempts.length) throw new Error("Durable lookup evaluated a forbidden local module");
         } else {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected load fence rejection"); }

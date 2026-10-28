@@ -18,7 +18,6 @@ import type { PiclawCredentialStore } from "./credential-store.js";
 import { McpCodemodeController } from "./mcp-codemode-runtime.js";
 import { createRequire } from "node:module";
 
-const DURABLE_LEGACY_MESSAGE = "Durable application does not construct legacy sessions";
 const require = createRequire(import.meta.url);
 
 /** Shared logger callbacks used across extracted AgentPool services. */
@@ -30,6 +29,7 @@ export interface AgentPoolLogHooks {
 
 /** Inputs required to assemble the extracted AgentPool helper services. */
 export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
+  legacyCapture?:true;
   pool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
   authStorage: PiclawCredentialStore;
@@ -58,9 +58,8 @@ type BranchManagerService = Pick<AgentBranchManager,
 export interface AgentPoolServices {
   mcpSettings: McpCodemodeController;
   attachments: ReturnType<typeof getAttachmentRegistry>;
-  sessionBinder: SessionBinderService;
-  toolFactory: ToolFactoryService;
-  sessionManager: SessionManagerService;
+  sessionBinder?: SessionBinderService;
+  sessionManager?: SessionManagerService;
   runtimeFacade: AgentRuntimeFacade;
   branchManager: BranchManagerService;
 }
@@ -90,34 +89,30 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
     throw new Error("Durable service factory lookup must be callable");
   }
+  if (options.legacyCapture !== undefined && options.legacyCapture !== true) throw Error("Invalid legacy capture selection");
+  if (options.legacyCapture && options.getDurableSession !== undefined) throw Error("Native host cannot select legacy capture composition");
+  if (!options.legacyCapture && options.getDurableSession === undefined) throw Error("Native host requires a durable session lookup; legacy capture must be explicit");
   const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
 
   const durable = getDurableSession !== undefined;
-  const unavailable = () => { throw new Error(DURABLE_LEGACY_MESSAGE); };
 
-  const sessionBinder: SessionBinderService = durable ? {
-    setBinder: () => undefined,
-    bindSession: async () => undefined,
-  } : new (require("./session-binder.js") as { AgentSessionBinder: new (...args: any[]) => SessionBinderService }).AgentSessionBinder({
+  const sessionBinder: SessionBinderService | undefined = durable ? undefined : new (require("./session-binder.js") as { AgentSessionBinder: new (...args: any[]) => SessionBinderService }).AgentSessionBinder({
     pool: options.pool,
     onError: options.onError,
   });
 
-  const toolFactory: ToolFactoryService = durable ? {
-    createDefaultTools: unavailable,
-    createCustomToolOverrides: () => [],
-  } : new (require("./tool-factory.js") as { AgentToolFactory: new (...args: any[]) => ToolFactoryService }).AgentToolFactory({
+  const toolFactory: ToolFactoryService | undefined = durable ? undefined : new (require("./tool-factory.js") as { AgentToolFactory: new (...args: any[]) => ToolFactoryService }).AgentToolFactory({
     workspaceDir: options.workspaceDir,
     bashOperations: options.bashOperations,
   });
 
-  let sessionManager: SessionManagerService;
+  let sessionManager: SessionManagerService | undefined;
   let branchManager: BranchManagerService;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
     getDurableSession,
-    acquireCommandProtection: chatJid => sessionManager.acquireEvictionProtection(chatJid),
+    ...(durable ? {} : { acquireCommandProtection: (chatJid:string) => sessionManager!.acquireEvictionProtection(chatJid) }),
     modelRegistry: options.modelRegistry,
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
@@ -127,34 +122,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onError: options.onError,
   });
 
-  sessionManager = durable ? {
-    assertLegacyCaptureIdle: () => undefined,
-    blockMcpAdmissions: () => undefined,
-    fenceMcpAndSnapshot: async () => [],
-    resumeMcpAdmissions: () => undefined,
-    quarantineMcpRuntime: async () => undefined,
-    acquireEvictionProtection: () => () => undefined,
-    getOrCreate: async () => { throw new Error(DURABLE_LEGACY_MESSAGE); },
-    refreshRuntime: async () => undefined,
-    prewarm: () => false,
-    cancelPrewarm: () => false,
-    hasPendingSessionWork: () => false,
-    recreate: async () => { throw new Error(DURABLE_LEGACY_MESSAGE); },
-    hasProtectedRun: () => false,
-    hasActiveMemoryReclamationWork: () => false,
-    getInstrumentationSnapshot: () => ({
-      branchSeedRealizationsInFlight: 0,
-      createInFlight: 0,
-      evictionProtectedChats: 0,
-      invalidDeferredSeedErrors: 0,
-      prewarmInFlight: 0,
-      queuedPrewarms: 0,
-      prewarmQueueLength: 0,
-      prewarmCooldowns: 0,
-    }),
-    evictIdle: () => undefined,
-    shutdown: async () => undefined,
-  } : new (require("./session-manager.js") as { AgentSessionManager: new (...args: any[]) => SessionManagerService }).AgentSessionManager({
+  sessionManager = durable ? undefined : new (require("./session-manager.js") as { AgentSessionManager: new (...args: any[]) => SessionManagerService }).AgentSessionManager({
     getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
@@ -162,13 +130,13 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
     createSession: options.createSession,
-    createDefaultTools: () => toolFactory.createDefaultTools(),
-    createCustomToolOverrides: (chatJid: string) => toolFactory.createCustomToolOverrides(chatJid),
+    createDefaultTools: () => toolFactory!.createDefaultTools(),
+    createCustomToolOverrides: (chatJid: string) => toolFactory!.createCustomToolOverrides(chatJid),
     getSessionExtensionFactories: (chatJid: string) => resolveSessionExtensionFactories(chatJid),
     bindSession: async (runtime: AgentSessionRuntime, chatJid: string) => {
       (require("./usage.js") as { installSessionUsageRecorder: (session: unknown, chatJid: string, onWarn?: AgentPoolLogHooks["onWarn"]) => void })
         .installSessionUsageRecorder(runtime.session, chatJid, options.onWarn);
-      await sessionBinder.bindSession(runtime, chatJid);
+      await sessionBinder!.bindSession(runtime, chatJid);
     },
     ensureBranchRegistration: (chatJid: string, session?: AgentSession | null) => {
       branchManager.ensureBranchRegistration(chatJid, session);
@@ -181,21 +149,18 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   branchManager = new AgentBranchManager({
     pool: options.pool,
     activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
-    getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
-    refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
+    ...(durable ? {} : { getOrCreateRuntime: (chatJid:string) => sessionManager!.getOrCreate(chatJid) }),
     isActive: (chatJid) => runtimeFacade.isActive(chatJid),
-    scheduleSessionWarmup: (chatJid) => sessionManager.prewarm(chatJid),
-    cancelSessionWarmup: (chatJid) => sessionManager.cancelPrewarm(chatJid),
-    hasPendingSessionWork: (chatJid) => sessionManager.hasPendingSessionWork(chatJid),
+    ...(durable ? {} : { scheduleSessionWarmup: (chatJid:string) => sessionManager!.prewarm(chatJid),
+      cancelSessionWarmup: (chatJid:string) => sessionManager!.cancelPrewarm(chatJid),
+      hasPendingSessionWork: (chatJid:string) => sessionManager!.hasPendingSessionWork(chatJid) }),
     onWarn: options.onWarn,
   });
 
   return {
     mcpSettings: new McpCodemodeController(sessionManager),
     attachments,
-    sessionBinder,
-    toolFactory,
-    sessionManager,
+    ...(durable ? {} : {sessionBinder,sessionManager}),
     runtimeFacade,
     branchManager,
   };

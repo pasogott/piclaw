@@ -145,7 +145,7 @@ test("attach_file reports missing file", async () => {
   expect(result.content[0].text).toContain("File not found");
 });
 
-test("web admits attachment blocks without reviving the retired runAgent path", async () => {
+test("web processChat stores attachment content blocks", async () => {
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
@@ -173,16 +173,23 @@ test("web admits attachment blocks without reviving the retired runAgent path", 
   });
 
   const webMod = await import("../../src/channels/web.js");
-  let legacyCalls = 0;
-  const web = new webMod.WebChannel({
+  const web = new (webMod.WebChannel as any)({
+    // Publisher double only; native source identity/settlement is separately qualified.
+    dispatchAcceptedInput: (chatJid:string,messageId:string,rowId:number)=>async()=>{
+      expect(db.getMessageRowIdById(chatJid,messageId)).toBe(rowId);
+      const {storeAgentTurn}=await import("../../src/channels/web/messaging/agent-message-store.js");
+      const stored=storeAgentTurn(web,{response:()=>{}} as any,{chatJid,text:"Here is the report.",channelName:"web",threadId:rowId,
+        attachments:[{id:mediaId,name:"report.txt",contentType:"text/plain",size:6,kind:"file",sourcePath:"/tmp/report.txt"}],
+        isTerminalAgentReply:true,dispatchWebPushNotification:async()=>{}});
+      expect(stored).toBeGreaterThan(0);return "settled" as const;
+    },
     queue: { enqueue: () => {} },
-    agentPool: { runAgent: async () => { legacyCalls++; throw Error("retired runner must not execute"); }, getContextUsageForChat: async () => null },
-  } as any);
-  await expect(web.processChat("web:default", "default")).rejects.toThrow("Native input dispatch is unavailable");
-  expect(legacyCalls).toBe(0);
-  await web.admitMessage("web:default", "Here is the report.", true, [mediaId], [
-    {type:"file", name:"report.txt", mime_type:"text/plain", size:6},
-  ], () => {});
+    agentPool: {
+      getContextUsageForChat: async () => null,
+    },
+  });
+
+  await (web as any).processChat("web:default", "default");
 
   const timeline = db.getTimeline("web:default", 10);
   const last = timeline[timeline.length - 1];

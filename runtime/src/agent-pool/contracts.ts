@@ -2,7 +2,7 @@
  * agent-pool/contracts.ts – Shared public contracts for AgentPool and its helpers.
  */
 
-import type { AgentSessionEvent, AgentSessionRuntime, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, AgentSessionRuntime, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessageEvent,
   Usage,
@@ -130,90 +130,6 @@ export interface SidePromptOptions {
   budgetParentWorkId?: string | null;
 }
 
-/** @deprecated Legacy adapter argument shape. AgentPool.runAgent rejects without
- * inspecting any of these fields; admitted native ports own execution policy.
- * Retained until the remaining legacy caller signatures are retired. */
-export interface RunAgentOptions {
-  /** Server-owned execution provenance; never accept directly from browser/model payloads. */
-  executionProvenance?: import("../core/execution-context.js").ExecutionProvenance;
-  /** Server-owned budget work identity. Nested retries/continuations retain it. */
-  budgetWorkId?: string;
-  /** Parent budget work for delegated/nested execution. */
-  budgetParentWorkId?: string | null;
-  /** Explicit execution class when provenance alone is insufficient. */
-  budgetExecutionKind?: import("../budget/types.js").BudgetExecutionKind;
-  /** Scheduled task definition that owns this run. */
-  budgetScheduledTaskId?: string | null;
-  /** Internal server-owned admission hook. Never populate from client payloads. */
-  budgetBeforeModelCall?: (boundary: string, prompt: string, providerId?: string) => Promise<string | null>;
-  onEvent?: (event: AgentSessionEvent) => void;
-  /** Called when a completed assistant message can be committed, including before tool dispatch. */
-  onTurnComplete?: (turn: TurnOutput) => void;
-  /** Stable runtime turn identifier for observability/correlation. */
-  turnId?: string;
-  /** Optional browser/user correlation identifier supplied by the caller. */
-  userId?: string;
-  /** Optional browser session correlation identifier supplied by the caller. */
-  sessionId?: string;
-  /** Optional browser tab/client correlation identifier supplied by the caller. */
-  clientId?: string;
-  /** Optional runtime session/fork leaf identity for observability correlation. */
-  sessionLeafId?: string;
-  /** Override the default timeout (ms). Use 0 or a negative value to disable. */
-  timeoutMs?: number;
-  /** Bound this caller's startup wait; defaults to the run timeout. Shared creation remains owned. */
-  startupTimeoutMs?: number;
-  /** Abort after this many tool calls complete. Undefined means no cap. */
-  maxToolCalls?: number;
-  /**
-   * Skip Piclaw-managed pre-prompt compaction for this run.
-   *
-   * Used by callers that perform preflight compaction themselves before
-   * promoting a pending message into normal inflight run state.
-   */
-  skipPrePromptCompaction?: boolean;
-  /**
-   * Run an idle auto-compaction check after a successful terminal turn when
-   * the completed turn leaves the session near the context threshold.
-   */
-  scheduleIdleAutoCompaction?: boolean;
-  /**
-   * If set, the active tool set is clamped to names passing this predicate for
-   * the entire run. The predicate is also enforced against any
-   * setActiveToolsByName calls made by the agent during the run, preventing
-   * LLM-driven self-escalation beyond the ceiling.
-   */
-  toolCeilingFilter?: (toolName: string) => boolean;
-  /** Host-owned restricted operations must fail closed when tool controls are unavailable. */
-  requireToolCeiling?: boolean;
-  /** Restricted-run hook: SDK has built its model context with the submitted user input. */
-  onOperationInputCommitted?: () => void;
-  /** Caller cancellation bound to this run, not a session-wide external abort API. */
-  abortSignal?: AbortSignal;
-  /** Host-owned revocation check, evaluated before each budget/model admission boundary. */
-  executionAdmissionCheck?: () => Promise<boolean> | boolean;
-  /**
-   * Let the caller durably persist a protected-recovery continuation instead
-   * of running it inline. Web uses this to order queue intent before terminal
-   * message and cursor finalization.
-   */
-  deferToolEnabledContinuation?: boolean;
-  /** This run is a typed ordinary continuation after protected recovery. */
-  protectedRecoveryContinuation?: boolean;
-  /** One-based depth of the bounded protected-recovery handoff chain. */
-  protectedRecoveryContinuationDepth?: number;
-  /** Validated safe evidence carried from the handoff that created this continuation. */
-  protectedRecoveryHandoffContext?: ProtectedRecoveryHandoffMetadata;
-  /** Stable source-message identity used to partition repeated-failure suppression. */
-  recoverySourceId?: string;
-  /** Bounded progress generation within one source-message recovery chain. */
-  recoveryGeneration?: number;
-}
-
-export interface RetrySettingsProvider {
-  getRetrySettings?: SettingsManager["getRetrySettings"];
-}
-
 /** Data-only accepted native identity; no SDK handle or execution permission. */
 export interface PreparedNativeBackgroundInput {
   incarnation:string;conversationId:number;chatJid:string;branchId:string;operationId:string;sourceSeq:number;
@@ -228,6 +144,8 @@ export interface NativeDreamRequest {
 
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  /** Trusted explicit historical resident-capture/test composition, never native fallthrough. */
+  legacyCapture?: true;
   dispatchDreamOperation?: (request:NativeDreamRequest)=>Promise<AgentOutput>;
   /** Host-owned add-on admission; policy is derived from its persisted owner/grant. */
   prepareAddonOperation?: (operationId:string,signal?:AbortSignal)=>Promise<PreparedNativeBackgroundInput>;
