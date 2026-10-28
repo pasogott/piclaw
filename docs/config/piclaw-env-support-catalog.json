@@ -131,24 +131,20 @@
       "bounds": "positive milliseconds",
       "allowedValues": [],
       "secret": false,
-      "persistence": [
-        "env",
-        "dotenv",
-        "json-config"
-      ],
+      "persistence": [],
       "precedence": [
         "process.env",
         ".env",
         "json-config",
         "defaults"
       ],
-      "status": "supported",
-      "compatibilityAliasFor": "domains.logging.cleanupIntervalMs",
-      "deprecation": "compatibility env alias for domains.logging.cleanupIntervalMs",
-      "removalVersion": "3.0.0",
+      "status": "removed",
+      "compatibilityAliasFor": null,
+      "deprecation": "Retired unused agent-log env control under #1279; historical JSON keys remain accepted without a runtime getter or cleanup owner.",
+      "removalVersion": null,
       "bootstrapAllowed": false,
-      "source": "runtime/src/core/config-integrations.ts domain schema (#753A1)",
-      "migrationDisposition": "migrated-to-domain-config"
+      "source": "Former config-integrations.ts domain env alias; agent-log producer retired under #1673, unused control retired under #1279.",
+      "migrationDisposition": "remove"
     },
     {
       "name": "PICLAW_AGENT_LOG_RETENTION_DAYS",
@@ -158,11 +154,7 @@
       "bounds": "positive days, capped by retention max",
       "allowedValues": [],
       "secret": false,
-      "persistence": [
-        "env",
-        "dotenv",
-        "json-config"
-      ],
+      "persistence": [],
       "precedence": [
         "process.env(PICLAW_AGENT_LOG_RETENTION_MS)",
         "process.env",
@@ -170,13 +162,13 @@
         "json-config",
         "defaults"
       ],
-      "status": "supported",
-      "compatibilityAliasFor": "domains.logging.retentionMs",
-      "deprecation": "compatibility env alias for domains.logging.retentionMs",
-      "removalVersion": "3.0.0",
+      "status": "removed",
+      "compatibilityAliasFor": null,
+      "deprecation": "Retired unused agent-log env control under #1279; historical JSON keys remain accepted without a runtime getter or cleanup owner.",
+      "removalVersion": null,
       "bootstrapAllowed": false,
-      "source": "runtime/src/core/config-integrations.ts domain schema (#753A1)",
-      "migrationDisposition": "migrated-to-domain-config"
+      "source": "Former config-integrations.ts domain env alias; agent-log producer retired under #1673, unused control retired under #1279.",
+      "migrationDisposition": "remove"
     },
     {
       "name": "PICLAW_AGENT_LOG_RETENTION_MS",
@@ -186,24 +178,20 @@
       "bounds": "positive milliseconds, capped by retention max",
       "allowedValues": [],
       "secret": false,
-      "persistence": [
-        "env",
-        "dotenv",
-        "json-config"
-      ],
+      "persistence": [],
       "precedence": [
         "process.env",
         ".env",
         "json-config",
         "defaults"
       ],
-      "status": "supported",
-      "compatibilityAliasFor": "domains.logging.retentionMs",
-      "deprecation": "compatibility env alias for domains.logging.retentionMs",
-      "removalVersion": "3.0.0",
+      "status": "removed",
+      "compatibilityAliasFor": null,
+      "deprecation": "Retired unused agent-log env control under #1279; historical JSON keys remain accepted without a runtime getter or cleanup owner.",
+      "removalVersion": null,
       "bootstrapAllowed": false,
-      "source": "runtime/src/core/config-integrations.ts domain schema (#753A1)",
-      "migrationDisposition": "migrated-to-domain-config"
+      "source": "Former config-integrations.ts domain env alias; agent-log producer retired under #1673, unused control retired under #1279.",
+      "migrationDisposition": "remove"
     },
     {
       "name": "PICLAW_AGENT_TIMEOUT",

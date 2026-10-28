@@ -51,7 +51,7 @@
   },
   "current": {
     "production": {
-      "referencedNames": 146,
+      "referencedNames": 143,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -60,7 +60,7 @@
       "semanticReaderOccurrences": 23
     },
     "runtimeSrc": {
-      "referencedNames": 145,
+      "referencedNames": 142,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 64
     },
     "docsDeploy": {
-      "referencedNames": 154,
+      "referencedNames": 157,
       "directReaderNames": 18,
       "directReaderOccurrences": 42,
       "helperReaderNames": 0,
@@ -235,25 +235,14 @@
     {
       "name": "PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS",
       "scopes": {
-        "production": {
+        "docsDeploy": {
           "referenced": true,
           "directReaders": 0,
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
+            "docs/development/receipts/retired-agent-log-controls-1279.json",
+            "docs/development/retired-agent-log-controls.md"
           ],
           "readerFiles": []
         }
@@ -262,25 +251,14 @@
     {
       "name": "PICLAW_AGENT_LOG_RETENTION_DAYS",
       "scopes": {
-        "production": {
+        "docsDeploy": {
           "referenced": true,
           "directReaders": 0,
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
+            "docs/development/receipts/retired-agent-log-controls-1279.json",
+            "docs/development/retired-agent-log-controls.md"
           ],
           "readerFiles": []
         }
@@ -289,25 +267,14 @@
     {
       "name": "PICLAW_AGENT_LOG_RETENTION_MS",
       "scopes": {
-        "production": {
+        "docsDeploy": {
           "referenced": true,
           "directReaders": 0,
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/core/config-integrations.ts",
-            "runtime/src/core/config-sources.ts"
+            "docs/development/receipts/retired-agent-log-controls-1279.json",
+            "docs/development/retired-agent-log-controls.md"
           ],
           "readerFiles": []
         }

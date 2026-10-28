@@ -323,13 +323,13 @@ describe("core config", () => {
         domains: {
           agent: { timeoutMs: 1111, backgroundTimeoutMs: 2222, toolUseMessageBudget: 23 },
           session: { maxSizeMb: 48, maxLines: 9000, maxCompactionsBeforeRotation: 5, autoRotate: false },
-          logging: { retentionMs: 123456, cleanupIntervalMs: 654321 },
+          logging: { level: "warn", retentionMs: 123456, cleanupIntervalMs: 654321 },
         },
       });
       const persisted = runConfigSubprocess(workspace, [
         "call:getAgentRuntimeConfig",
         "call:getToolUseMessageBudget",
-        "call:getAgentLogConfig",
+        "call:getLoggingConfig",
       ], {
         env: {
           PICLAW_AGENT_TIMEOUT: undefined,
@@ -341,19 +341,18 @@ describe("core config", () => {
           PICLAW_SESSION_MAX_LINES: undefined,
           PICLAW_SESSION_MAX_COMPACTIONS: undefined,
           PICLAW_SESSION_AUTO_ROTATE: undefined,
-          PICLAW_AGENT_LOG_RETENTION_MS: undefined,
-          PICLAW_AGENT_LOG_RETENTION_DAYS: undefined,
-          PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS: undefined,
+          PICLAW_LOG_LEVEL: undefined,
+          LOG_LEVEL: undefined,
         },
       }).snapshot;
       expect(persisted["call:getAgentRuntimeConfig"]).toEqual({ timeoutMs: 1111, backgroundTimeoutMs: 2222 });
       expect(persisted["call:getToolUseMessageBudget"]).toBe(23);
-      expect(persisted["call:getAgentLogConfig"]).toEqual({ retentionMs: 123456, cleanupIntervalMs: 654321 });
+      expect(persisted["call:getLoggingConfig"]).toEqual({ level: "warn" });
 
       const { snapshot, stderr } = runConfigSubprocess(workspace, [
         "call:getAgentRuntimeConfig",
         "call:getToolUseMessageBudget",
-        "call:getAgentLogConfig",
+        "call:getLoggingConfig",
       ], {
         env: {
           PICLAW_AGENT_TIMEOUT: undefined,
@@ -365,20 +364,18 @@ describe("core config", () => {
           PICLAW_SESSION_MAX_LINES: "10000",
           PICLAW_SESSION_MAX_COMPACTIONS: "7",
           PICLAW_SESSION_AUTO_ROTATE: "1",
-          PICLAW_AGENT_LOG_RETENTION_MS: "malformed",
-          PICLAW_AGENT_LOG_RETENTION_DAYS: "2",
-          PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS: "7000",
+          PICLAW_LOG_LEVEL: "debug",
+          LOG_LEVEL: undefined,
         },
       });
       expect(snapshot["call:getAgentRuntimeConfig"]).toEqual({ timeoutMs: 3333, backgroundTimeoutMs: 4444 });
       expect(snapshot["call:getToolUseMessageBudget"]).toBe(31);
-      expect(snapshot["call:getAgentLogConfig"]).toEqual({ retentionMs: 2 * 24 * 60 * 60 * 1000, cleanupIntervalMs: 7000 });
+      expect(snapshot["call:getLoggingConfig"]).toEqual({ level: "debug" });
       for (const envKey of [
         "AGENT_TIMEOUT",
         "PICLAW_BACKGROUND_AGENT_TIMEOUT",
         "PICLAW_TURN_MAX_TOOL_USE_MESSAGES",
-        "PICLAW_AGENT_LOG_RETENTION_DAYS",
-        "PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS",
+        "PICLAW_LOG_LEVEL",
       ]) expectCompatWarningOnce(stderr, envKey);
       expect(stderr).not.toContain('"envKey":"PICLAW_AGENT_LOG_RETENTION_MS"');
       expect(stderr).not.toContain('"envKey":"AGENT_TIMEOUT_BACKGROUND"');
@@ -1367,38 +1364,24 @@ describe("core config", () => {
   test("retention and cleanup integer env rejects malformed suffixes without changing fallback policy", () => {
     const workspace = createTempWorkspace("piclaw-config-");
     try {
-      const malformed = loadConfigInSubprocess(workspace, ["call:getAgentLogConfig", "call:getToolOutputConfig"], {
+      const malformed = loadConfigInSubprocess(workspace, ["call:getToolOutputConfig"], {
         env: {
-          PICLAW_AGENT_LOG_RETENTION_MS: "60000oops",
-          PICLAW_AGENT_LOG_RETENTION_DAYS: "2",
-          PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS: "120000oops",
           PICLAW_TOOL_OUTPUT_RETENTION_MS: undefined,
           PICLAW_TOOL_OUTPUT_RETENTION_DAYS: "2oops",
           PICLAW_TOOL_OUTPUT_CLEANUP_INTERVAL_MS: "30000oops",
         },
-      });
-      expect(malformed["call:getAgentLogConfig"]).toEqual({
-        retentionMs: 2 * 24 * 60 * 60 * 1000,
-        cleanupIntervalMs: 60 * 60 * 1000,
       });
       expect(malformed["call:getToolOutputConfig"]).toEqual({
         retentionMs: 30 * 24 * 60 * 60 * 1000,
         cleanupIntervalMs: 15 * 60 * 1000,
       });
 
-      const precedenceAndCap = loadConfigInSubprocess(workspace, ["call:getAgentLogConfig", "call:getToolOutputConfig"], {
+      const precedenceAndCap = loadConfigInSubprocess(workspace, ["call:getToolOutputConfig"], {
         env: {
-          PICLAW_AGENT_LOG_RETENTION_MS: "60000",
-          PICLAW_AGENT_LOG_RETENTION_DAYS: "2",
-          PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS: "120000",
           PICLAW_TOOL_OUTPUT_RETENTION_MS: undefined,
           PICLAW_TOOL_OUTPUT_RETENTION_DAYS: "45",
           PICLAW_TOOL_OUTPUT_CLEANUP_INTERVAL_MS: "30000",
         },
-      });
-      expect(precedenceAndCap["call:getAgentLogConfig"]).toEqual({
-        retentionMs: 60_000,
-        cleanupIntervalMs: 120_000,
       });
       expect(precedenceAndCap["call:getToolOutputConfig"]).toEqual({
         retentionMs: 30 * 24 * 60 * 60 * 1000,
