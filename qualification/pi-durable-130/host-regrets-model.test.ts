@@ -88,8 +88,8 @@ for (const outcome of ["success", "error", "cancel", "revoke"] as const) {
       const bindings = { historyDatabase: root, cwd: "/fixture", accessMode: () => "single-user", allowAllChats: () => false,
         async readFile() { return undefined; }, async admitConversationInput() { throw Error("Tool must not admit input"); } };
       const nativeApi = addon.createLateNightRegrets(createHostRegretsBindings({ ...bindings, root, chat: captured.operation.chatJid,
-        assertCurrent: authority.assertCurrent, transactionalWrite: authority.write, readExchanges: addon.readExchanges, accountedDecision: port }));
-      nativeApi.setConfig({ enabled: true, review_scope: "current", decision_model: "openai-codex/synthetic" });
+        assertCurrent: authority.assertCurrent, transactionalWrite: authority.admitWrite, readExchanges: addon.readExchanges, accountedDecision: port }));
+      await nativeApi.setConfig({ enabled: true, review_scope: "current", decision_model: "openai-codex/synthetic" });
       root.query("INSERT INTO chats(jid) VALUES(?)").run(captured.operation.chatJid);
       root.query("INSERT INTO messages(id,chat_jid,sender,sender_name,content,timestamp,is_bot_message) VALUES('regrets-human',?,'human','Human','Please be concise',?,0)").run(captured.operation.chatJid,new Date(Date.now()-1000).toISOString());
       let captures = 0;

@@ -87,8 +87,11 @@ async function materializePromptContext(conversation: Conversation, taskId: Task
   }
   const missing = view.messages.slice(request.length);
   if (missing.length > trailing) throw Error(`Unowned ${snapshot.label} request suffix`);
-  const previousIndex = view.entries.findLastIndex(entry => entry.kind === snapshot.kind &&
-    (entry.data as { chatJid?: string } | undefined)?.chatJid === chatJid);
+  let previousIndex = view.entries.length - 1;
+  for (; previousIndex >= 0; previousIndex--) {
+    const entry = view.entries[previousIndex]!;
+    if (entry.kind === snapshot.kind && (entry.data as { chatJid?: string } | undefined)?.chatJid === chatJid) break;
+  }
   const previous = view.entries[previousIndex];
   if (previous) assertSnapshot(previous);
   if (!Array.isArray(content) || !content.length || !content.every(part => part.type === "text" && typeof part.text === "string"))

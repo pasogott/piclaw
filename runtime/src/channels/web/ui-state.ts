@@ -1,3 +1,5 @@
+import { admitSqliteWrite } from "../../db/sqlite-async-admission.js";
+import { getDb } from "../../db/connection.js";
 /**
  * web/ui-state.ts – Server-persisted web UI preferences.
  *
@@ -76,11 +78,7 @@ function kvGet<T>(key: string): T | null {
 }
 
 function kvSet(key: string, value: unknown): void {
-  try {
-    extensionKvSet(UI_EXTENSION_ID, key, value, "global");
-  } catch {
-    return;
-  }
+  extensionKvSet(UI_EXTENSION_ID, key, value, "global");
 }
 
 export function getServerUiThemeConfig(): ServerUiThemeConfig {
@@ -91,20 +89,29 @@ export function getServerUiThemeConfig(): ServerUiThemeConfig {
   };
   const stored = kvGet<unknown>(THEME_KEY);
   if (stored !== null) return normalizeThemeConfig(stored, fallback);
-  kvSet(THEME_KEY, fallback);
   return fallback;
 }
 
-export function setServerUiThemeConfig(patch: { theme?: string; tint?: string | null }): ServerUiThemeConfig {
+function writeServerUiThemeConfig(patch: { theme?: string; tint?: string | null }): ServerUiThemeConfig {
   const current = getServerUiThemeConfig();
   const next: ServerUiThemeConfig = {
     theme: patch.theme !== undefined ? normalizeThemeValue(patch.theme, "default") : current.theme,
     tint: patch.tint !== undefined ? normalizeTintValue(patch.tint) : current.tint,
   };
   kvSet(THEME_KEY, next);
-  // Keep the legacy config in sync for older code paths and downgrade safety.
-  setLegacyUiThemeConfig(next);
   return next;
+}
+
+/** The legacy SDK setTheme API is synchronous; native/HTTP callers use admission below. */
+export function setServerUiThemeConfig(patch: { theme?: string; tint?: string | null }): ServerUiThemeConfig {
+  const next = writeServerUiThemeConfig(patch); setLegacyUiThemeConfig(next); return next;
+}
+
+export async function admitServerUiThemeConfig(patch: { theme?: string; tint?: string | null }, authorise: () => void = () => {}, signal?: AbortSignal): Promise<ServerUiThemeConfig> {
+  patch = structuredClone(patch);
+  const next = await admitSqliteWrite(getDb(), () => writeServerUiThemeConfig(patch), authorise, signal);
+  authorise(); signal?.throwIfAborted();
+  setLegacyUiThemeConfig(next); return next;
 }
 
 export function getServerUiMetersConfig(): ServerUiMetersConfig {
@@ -138,4 +145,14 @@ export function getServerUiState(): { ui_theme: ServerUiThemeConfig; ui_meters: 
     ui_meters: getServerUiMetersConfig(),
     ui_output: getServerUiOutputConfig(),
   };
+}
+
+export async function admitServerUiOutputConfig(patch: { outputPad?: number }, authorise: () => void = () => {}, signal?: AbortSignal): Promise<ServerUiOutputConfig> {
+  const captured = structuredClone(patch);
+  return admitSqliteWrite(getDb(), () => setServerUiOutputConfig(captured), authorise, signal);
+}
+
+export async function admitServerUiMetersConfig(patch: Partial<ServerUiMetersConfig>, authorise: () => void = () => {}, signal?: AbortSignal): Promise<ServerUiMetersConfig> {
+  const captured = structuredClone(patch);
+  return admitSqliteWrite(getDb(), () => setServerUiMetersConfig(captured), authorise, signal);
 }

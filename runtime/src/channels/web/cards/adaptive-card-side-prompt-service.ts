@@ -1,3 +1,6 @@
+import { getDb } from "../../../db/connection.js";
+import { admitSqliteWrite } from "../../../db/sqlite-async-admission.js";
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 import {
   DEFAULT_WEB_USER_ID,
   createWebSession,
@@ -72,7 +75,7 @@ interface JsonResponder {
   json(payload: unknown, status?: number): Response;
 }
 
-interface AuthGatewayLike {
+interface AuthGatewayLike extends Partial<Pick<WebChannelLike["authGateway"], "isAuthEnabled" | "isInternalSecretEnabled" | "verifyInternalSecret" | "getPrincipal">> {
   setTotpSecret(secret: string): void;
   createTotpContext(): {
     buildSessionCookie(sessionToken: string, req: Request): string;
@@ -181,6 +184,7 @@ export class WebAdaptiveCardSidePromptService {
 
   async handleAdaptiveCardAction(req: Request): Promise<Response> {
     if (!isSingleUserAccess()) return this.denyUnscopedAction();
+    const authorise = captureWebRequestAuthority(this.options.authGateway, req);
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -260,7 +264,7 @@ export class WebAdaptiveCardSidePromptService {
           const nextBlocks = nextCard ? (blocks ?? []).map((block: any) => block === card ? nextCard : block)
             : markAdaptiveCardState(blocks, normalized.cardId, "completed", submittedAt, { title: "Authentication action" });
           if (!nextBlocks) throw new Error("Authentication card unavailable");
-          const updated = replaceMessageContent(chatJid, sourcePostId, sourceInteraction.data?.content || "", { contentBlocks: nextBlocks });
+          const updated = await admitSqliteWrite(getDb(), () => replaceMessageContent(chatJid, sourcePostId, sourceInteraction.data?.content || "", { contentBlocks: nextBlocks }), authorise, req.signal);
           if (!updated) throw new Error("Authentication card unavailable");
           commitPrivateProviderAuthResponse();
           // Only the safe opaque card is persisted/broadcast. Sensitive presentation
@@ -321,23 +325,25 @@ export class WebAdaptiveCardSidePromptService {
       ? (normalized.actionData as Record<string, unknown>)
       : null;
     const submissionData = sanitizedSubmissionData as Record<string, unknown> | null;
-    const updateSourceCard = (contentBlocks: unknown[] | null) => {
+    const persistSourceCard = (contentBlocks: unknown[] | null) => {
       if (!contentBlocks) return null;
-      const interaction = replaceMessageContent(chatJid, sourcePostId, sourceInteraction.data?.content || "", {
+      return replaceMessageContent(chatJid, sourcePostId, sourceInteraction.data?.content || "", {
         contentBlocks,
         linkPreviews: Array.isArray(sourceInteraction.data?.link_previews) ? sourceInteraction.data.link_previews : undefined,
         mediaIds: Array.isArray(sourceInteraction.data?.media_ids) ? sourceInteraction.data.media_ids : undefined,
       });
-      if (interaction) {
-        this.options.interactionBroadcaster.broadcastInteractionUpdated(interaction);
-      }
+    };
+    const updateSourceCard = async (contentBlocks: unknown[] | null) => {
+      if (!contentBlocks) return null;
+      const interaction = await admitSqliteWrite(getDb(), () => persistSourceCard(contentBlocks), authorise, req.signal);
+      if (interaction) this.options.interactionBroadcaster.broadcastInteractionUpdated(interaction);
       return interaction;
     };
 
     if (isLoginFlow && loginData) {
       const updatedCardInteraction = submitBehavior === "keep_active"
         ? null
-        : updateSourceCard(updatedCardBlocks);
+        : await updateSourceCard(updatedCardBlocks);
 
       const routePrefix = loginData.intent === "login-step1" ? "__step1 "
         : loginData.intent === "login-step1-method" ? "__step1method "
@@ -391,7 +397,7 @@ export class WebAdaptiveCardSidePromptService {
 
     const isRecoveryContinue = rawSubmissionData && rawSubmissionData.intent === "recovery-continue";
     if (isRecoveryContinue) {
-      updateSourceCard(
+      await updateSourceCard(
         markAdaptiveCardState(
           sourceInteraction.data?.content_blocks,
           normalized.cardId,
@@ -420,7 +426,7 @@ export class WebAdaptiveCardSidePromptService {
 
     const isRecoveryRetryClean = rawSubmissionData && rawSubmissionData.intent === "recovery-retry-clean";
     if (isRecoveryRetryClean) {
-      updateSourceCard(
+      await updateSourceCard(
         markAdaptiveCardState(
           sourceInteraction.data?.content_blocks,
           normalized.cardId,
@@ -461,7 +467,7 @@ export class WebAdaptiveCardSidePromptService {
           sendMessage: (content, options = {}) => this.options.sendMessage(chatJid, content, { threadId: options.threadId != null ? Number(options.threadId) : threadId }),
         });
         if (handledAddonIntent) {
-          updateSourceCard(
+          await updateSourceCard(
             markAdaptiveCardState(
               sourceInteraction.data?.content_blocks,
               normalized.cardId,
@@ -546,7 +552,7 @@ export class WebAdaptiveCardSidePromptService {
 
       const parsedTotp = parseTotpCardToken(token);
       if (!parsedTotp.ok) {
-        completeTotpCard("failed");
+        await completeTotpCard("failed");
         const message = parsedTotp.error === "expired"
           ? "TOTP validation failed: this confirmation card expired. No changes were made. Run /totp again."
           : "TOTP validation failed: this confirmation card is invalid. No changes were made. Run /totp again.";
@@ -569,25 +575,33 @@ export class WebAdaptiveCardSidePromptService {
         );
       }
 
+      const rotate = parsedTotp.state.flow === "setup" || parsedTotp.state.flow === "reset";
       const feedback = parsedTotp.state.flow === "setup"
-        ? (() => {
-            setWebTotpSecret(parsedTotp.state.secret);
-            this.options.authGateway.setTotpSecret(parsedTotp.state.secret);
-            deleteAllWebSessions();
-            return "TOTP setup confirmed. Secret saved. Existing web sessions were invalidated. This browser is now TOTP-authenticated.";
-          })()
+        ? "TOTP setup confirmed. Secret saved. Existing web sessions were invalidated. This browser is now TOTP-authenticated."
         : parsedTotp.state.flow === "reset"
-          ? (() => {
-              setWebTotpSecret(parsedTotp.state.secret);
-              this.options.authGateway.setTotpSecret(parsedTotp.state.secret);
-              deleteAllWebSessions();
-              return "TOTP reset confirmed. New secret saved. Existing web sessions were invalidated. This browser is now TOTP-authenticated.";
-            })()
+          ? "TOTP reset confirmed. New secret saved. Existing web sessions were invalidated. This browser is now TOTP-authenticated."
           : "TOTP device validation succeeded. Existing secret unchanged. This browser is now TOTP-authenticated.";
-
-      completeTotpCard("completed");
       const sessionToken = randomSessionToken();
-      createWebSession(sessionToken, DEFAULT_WEB_USER_ID, this.getWebSessionTtlSeconds(), "totp");
+      const completedBlocks = markAdaptiveCardState(sourceInteraction.data?.content_blocks, normalized.cardId, "completed", submittedAt, safeSubmissionMeta);
+      const updated = await admitSqliteWrite(getDb(), () => {
+        const latest = getMessageByRowId(chatJid, sourcePostId);
+        const active = latest?.data?.content_blocks?.find((block: any) => block?.type === "adaptive_card" && block.card_id === normalized.cardId) as { state?: string } | undefined;
+        if (!active || (active.state && active.state !== "active")) throw Error("TOTP confirmation card is no longer active");
+        if (rotate) deleteAllWebSessions();
+        createWebSession(sessionToken, DEFAULT_WEB_USER_ID, this.getWebSessionTtlSeconds(), "totp");
+        return persistSourceCard(completedBlocks);
+      }, phase => {
+        req.signal.throwIfAborted();
+        if (!isSingleUserAccess() || !parseTotpCardToken(token).ok || hashTotpSecret((this.options.webRuntimeConfig.totpSecret || "").trim()) !== parsedTotp.state.previousSecretHash)
+          throw Error("TOTP confirmation authority changed");
+        // Rotation intentionally revokes this request's old cookie. The signed
+        // one-use card and unchanged prior secret remain the commit authority.
+        if (phase === "before") authorise();
+      }, req.signal);
+      // Invalidate old cookies first. No old session can authenticate during
+      // writer admission after the secret changes; publish the new cookie last.
+      if (rotate) { setWebTotpSecret(parsedTotp.state.secret); this.options.authGateway.setTotpSecret(parsedTotp.state.secret); }
+      if (updated) this.options.interactionBroadcaster.broadcastInteractionUpdated(updated);
       const setCookie = this.options.authGateway.createTotpContext().buildSessionCookie(sessionToken, req);
       return await sendTotpFeedback(feedback, "completed", setCookie);
     }
@@ -630,7 +644,7 @@ export class WebAdaptiveCardSidePromptService {
 
     const updatedInteraction = submitBehavior === "keep_active"
       ? null
-      : replaceMessageContent(
+      : await admitSqliteWrite(getDb(), () => replaceMessageContent(
           chatJid,
           sourcePostId,
           sourceInteraction.data?.content || "",
@@ -639,7 +653,7 @@ export class WebAdaptiveCardSidePromptService {
             linkPreviews: Array.isArray(sourceInteraction.data?.link_previews) ? sourceInteraction.data.link_previews : undefined,
             mediaIds: Array.isArray(sourceInteraction.data?.media_ids) ? sourceInteraction.data.media_ids : undefined,
           },
-        );
+        ), authorise, req.signal);
     if (updatedInteraction) {
       this.options.interactionBroadcaster.broadcastInteractionUpdated(updatedInteraction);
     }

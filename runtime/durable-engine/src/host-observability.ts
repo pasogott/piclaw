@@ -6,7 +6,7 @@ import type { HostConversationRuntime } from "./host-runtime.js";
 export interface ObservabilityNativeExports {
   prepareObservabilityRuntime(assertCurrent: () => void): Promise<void>;
   buildObservabilitySystemPrompt(): string;
-  bindObservabilityConfiguration(port: { assertCurrent(): void; read(): Record<string, unknown> | null; write(config: unknown): void }): () => void;
+  bindObservabilityConfiguration(port: { assertCurrent(): void; read(): Record<string, unknown> | null; write(config: unknown): void | Promise<void> }): () => void;
 }
 
 /** Refresh request context through the SDK hook, never a legacy session event. */

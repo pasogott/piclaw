@@ -1,8 +1,9 @@
 import {expect,test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {join} from 'node:path';
+import {renameSync,writeFileSync} from 'node:fs';
 import {createTempWorkspace} from '../helpers.js';
-import {admitSqliteWrite} from '../../src/db/sqlite-async-admission.js';
+import {admitSqliteWrite,isSqliteContention} from '../../src/db/sqlite-async-admission.js';
 
 async function fixture(run:(db:Database,blocker:Database)=>Promise<void>){
   const ws=createTempWorkspace('async-admission-');const path=join(ws.base,'fixture.db');
@@ -11,6 +12,25 @@ async function fixture(run:(db:Database,blocker:Database)=>Promise<void>){
 }
 const count=(db:Database)=>(db.query('SELECT count(*) AS n FROM input').get() as {n:number}).n;
 const timeout=(db:Database)=>(db.query('PRAGMA busy_timeout').get() as {timeout:number}).timeout;
+
+test('shared contention classification covers extended codes without invoking error getters',()=>{
+  for(const code of ['SQLITE_BUSY','SQLITE_BUSY_SNAPSHOT','SQLITE_LOCKED_SHAREDCACHE',5,261,6,262]) expect(isSqliteContention({code})).toBe(true);
+  expect(isSqliteContention({errno:517})).toBe(true);
+  expect(isSqliteContention(Error('database is locked'))).toBe(false);
+  expect(isSqliteContention({code:'SQLITE_CONSTRAINT'})).toBe(false);
+  let reads=0;
+  expect(isSqliteContention({get code(){reads++;throw Error('getter');}})).toBe(false);
+  expect(reads).toBe(0);
+});
+
+test('the shared helper rejects a replaced database file before entering its callback',async()=>fixture(async(db,blocker)=>{
+  const path=(db.query('PRAGMA database_list').all() as {name:string;file:string}[]).find(row=>row.name==='main')!.file;
+  blocker.exec('BEGIN IMMEDIATE');let entered=0;
+  const pending=admitSqliteWrite(db,()=>{entered++;db.exec("INSERT INTO input VALUES('stale')");});
+  await Bun.sleep(0);renameSync(path,path+'.displaced');writeFileSync(path,'replacement');
+  blocker.exec('ROLLBACK');await expect(pending).rejects.toThrow('database file changed');
+  expect(entered).toBe(0);expect(count(db)).toBe(0);expect(db.inTransaction).toBe(false);expect(timeout(db)).toBe(5000);
+}));
 
 test('contended admission yields while locked and commits once only after release',async()=>fixture(async(db,blocker)=>{
   blocker.exec('BEGIN IMMEDIATE');let auth=0,operations=0;

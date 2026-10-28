@@ -69,7 +69,7 @@ for(const threshold of ['background','blocking'] as const) applicationTest(`nati
     expect((await first.status(context)).id).toBe(first.id);
     expect((await second.status(context)).id).toBe(second.id);
     process.env.PICLAW_AUTO_COMPACTION_ENABLED='1';
-    expect(()=>policy.set('autoCompact',false)).toThrow('overridden by PICLAW_AUTO_COMPACTION_ENABLED');
+    await expect(policy.set('autoCompact',false)).rejects.toThrow('overridden by PICLAW_AUTO_COMPACTION_ENABLED');
     expect(policy.read().autoCompact).toBe(true);
   }finally{
     release.release(); await harness?.close(context); root.close();owner.releaseAfterClose();owner.closeConnection();

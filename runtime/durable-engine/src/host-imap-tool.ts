@@ -24,7 +24,7 @@ export function createHostImapTool(addon: ImapNativeExports, options: {
       if (!args || typeof args !== "object" || (Object.getPrototypeOf(args) !== Object.prototype && Object.getPrototypeOf(args) !== null)) throw Error("Plain Imap arguments required");
       const params = structuredClone(args) as Record<string, unknown>;
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
-      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, false);
+      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, false, call.signal);
       authority.assertCurrent();
       if (params.chat_jid && params.chat_jid !== captured.operation.chatJid) throw Error("Foreign chat profile denied");
       const native = addon.createImapTool({ assertCurrent: authority.assertCurrent, chatJid: captured.operation.chatJid, signal: call.signal });

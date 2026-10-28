@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { apply } from "@earendil-works/chord/delta";
 import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
 import type { QueuedFollowupLifecycleService, QueuedInputSourceAdmission } from "../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
@@ -66,7 +67,7 @@ export function createApplicationHostInput(options: {
       throw Error("Exact native session target required");
     return found;
   }
-  function admitApplicationInput(raw: ApplicationHostInput) {
+  async function admitApplicationInput(raw: ApplicationHostInput) {
     // Copy all persisted authority before callbacks can mutate caller-owned objects.
     const input = { ...raw, target: { ...raw.target }, principal: { ...raw.principal } };
     if (!["remote_peer", "regrets.command"].includes(input.source) || (input.mode !== undefined && input.mode !== "queue"))
@@ -81,8 +82,7 @@ export function createApplicationHostInput(options: {
       if (result !== undefined) { void Promise.resolve(result).catch(() => {}); throw Error("Application input guard must be synchronous"); }
       options.assertCurrent(); resolve(input.target);
     };
-    return root.transaction(() => {
-      check();
+    return admitSqliteWrite(root, () => {
       const admit = options.admission(input.target.chatJid);
       if (!admit) throw Error("Native input admission unavailable");
       const rowId = options.followups.enqueueAcceptedFollowupOnce(input.sourceId, input.target.chatJid,
@@ -92,16 +92,15 @@ export function createApplicationHostInput(options: {
           clientId: JSON.stringify({ principalRevision: input.principal.revision, target: input.target }),
           sourceMessageId: input.sourceId,
         } }, stored => { check(); admit(stored); check(); });
-      check();
       if (rowId === null) throw Error("Application input admission unavailable");
       return Object.freeze({ sourceId: input.sourceId, chatJid: input.target.chatJid, rowId, target: Object.freeze(input.target) });
-    }).immediate();
+    }, check);
   }
   async function steerApplicationInput(input: ApplicationHostInput) {
     if (!options.steer) throw Error("Native steering unavailable");
     const snapshot = { ...input, target: { ...input.target }, principal: { ...input.principal } };
     const check = () => { options.assertCurrent(); resolve(snapshot.target); snapshot.assertCurrent(); options.assertCurrent(); resolve(snapshot.target); };
-    const receipt = admitApplicationInput(snapshot);
+    const receipt = await admitApplicationInput(snapshot);
     return options.steer(snapshot, receipt, check);
   }
   return Object.freeze({ steerApplicationInput, sessionTargets: Object.freeze({ list, resolve }), admitApplicationInput });

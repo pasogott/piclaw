@@ -1,3 +1,4 @@
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 /**
  * channels/web/agent-control-plane-service.ts – WebChannel control-plane wrapper seam.
  *
@@ -95,6 +96,7 @@ type ControlPlaneQueuedLifecycle = Pick<
 >;
 
 export interface WebAgentControlPlaneServiceOptions {
+  captureWriteAuthority?(req: Request): () => void;
   getAcceptedQueuedSteering?: (chatJid: string) => import('../../../agent-pool/durable-queued-steering.js').AcceptedQueuedSteering | undefined;
   getQueuedInputSourceWithdrawal?: (chatJid: string) => import('../runtime/queued-followup-lifecycle-service.js').QueuedInputSourceAdmission | undefined;
   defaultChatJid: string;
@@ -121,6 +123,7 @@ export interface WebAgentControlPlaneServiceOptions {
 }
 
 export interface WebAgentControlPlaneChannelLike {
+  authGateway?: Parameters<typeof captureWebRequestAuthority>[0];
   getAcceptedQueuedSteering?: WebAgentControlPlaneServiceOptions['getAcceptedQueuedSteering'];
   getQueuedInputSourceWithdrawal?: WebAgentControlPlaneServiceOptions['getQueuedInputSourceWithdrawal'];
   json(payload: unknown, status?: number): Response;
@@ -148,6 +151,7 @@ export function createWebAgentControlPlaneService(
   return new WebAgentControlPlaneService({
     defaultChatJid: defaults.defaultChatJid,
     defaultAgentId: defaults.defaultAgentId,
+    captureWriteAuthority: req => captureWebRequestAuthority(channel.authGateway, req),
     json: (payload, status = 200) => channel.json(payload, status),
     broadcastEvent: (eventType, data) => channel.broadcastEvent(eventType, data),
     queue: channel.queue,
@@ -263,6 +267,7 @@ export class WebAgentControlPlaneService {
   }
 
   async handleAgentQueueRemove(req: Request): Promise<Response> {
+    const authorise = this.options.captureWriteAuthority?.(req);
     const selectWithdrawal = this.options.getQueuedInputSourceWithdrawal;
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
@@ -277,7 +282,8 @@ export class WebAgentControlPlaneService {
 
       const withdrawAcceptedSource = selectWithdrawal?.(chatJid);
       const { removed } = await this.options.queuedFollowupLifecycle.removeQueuedFollowupForAction(chatJid, rowId, {
-        withdrawAcceptedSource,
+        withdrawAcceptedSource, authorise,
+        signal: req.signal,
       });
       if (!removed) {
         return this.options.json({ status: "ok", removed: false, count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
@@ -302,6 +308,7 @@ export class WebAgentControlPlaneService {
   }
 
   async handleAgentQueueReorder(req: Request): Promise<Response> {
+    const authorise = this.options.captureWriteAuthority?.(req);
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -311,7 +318,7 @@ export class WebAgentControlPlaneService {
       const fromIndex = typeof payload.from_index === "number" ? payload.from_index : -1;
       const toIndex = typeof payload.to_index === "number" ? payload.to_index : -1;
 
-      const reordered = this.options.queuedFollowupLifecycle.reorderQueuedFollowupItems(chatJid, fromIndex, toIndex);
+      const reordered = await this.options.queuedFollowupLifecycle.reorderQueuedFollowupItems(chatJid, fromIndex, toIndex, { authorise, signal: req.signal });
       return this.options.json({ status: "ok", reordered });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

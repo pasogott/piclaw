@@ -16,7 +16,7 @@ export interface CodexArtifactBinding {
   readonly hostOperationId: string;
   readonly chatJid: string;
   assertCurrent(): void;
-  write<T>(body: () => T): T;
+  write<T>(body: () => T): T | Promise<T>;
 }
 export interface CodexImageActivity {
   kind: 'image';
@@ -52,7 +52,7 @@ export function createHostCodexArtifactStore(root: Database, operation: CodexOpe
       if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel) || resolve(workspace, image.relativePath) !== path || !rel.startsWith('.pi/openai-codex-images/')) throw Error('Image outside actual workspace');
       const bytes = await readFile(path); check();
       const ref: CodexArtifactRef = { codexOperationId: operation.id, path: rel, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, callId: image.callId, responseId: image.responseId, mimeType: `image/${image.outputFormat}` };
-      binding.write(() => {
+      await binding.write(() => {
         check();
         const refs = read();
         const prior = refs.find(r => r.path === ref.path);

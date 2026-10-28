@@ -73,17 +73,17 @@ export interface MaterializedAnswer {
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
-  readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void;
+  readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void | Promise<void>;
   /** New work is sealed while an exact native shutdown request settles. */
   readonly assertAdmission?: (input?: AcceptedInput) => void;
   /** Host timeline root for this exact accepted input, including queued messages. */
   readonly replyThreadFor?: (input: AcceptedInput) => number | null;
   /** Public evidence preparation outside SQLite; effect is invocation-local. */
   readonly prepareTerminalEffect?: (input: AcceptedInput, answer?: SettledAnswer) => Promise<TerminalDatabaseEffect | undefined>;
-  readonly onMaintenanceSettled?: (workId: string) => void;
-  readonly cancelSideSource?: (input: AcceptedInput) => void;
+  readonly onMaintenanceSettled?: (workId: string) => void | Promise<void>;
+  readonly cancelSideSource?: (input: AcceptedInput) => void | Promise<void>;
   /** Atomically persist operator cancellation against this exact operation version. */
-  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number, cause?:'background_cancelled'|'background_timeout') => void;
+  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number, cause?: 'background_cancelled' | 'background_timeout') => void | Promise<void>;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   readonly withSessionResetGuard?: <T>(chatJid: string, body: () => Promise<T>) => Promise<T>;
@@ -902,7 +902,7 @@ export class HostConversationRuntime {
           const view = await conversation.context(context); assertOwner();
           if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || (!scoped && view.head?.id !== entryId)) throw new Error("Compaction context not committed");
         }
-        o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`);
+        await o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`); assertOwner();
         return { compacted: entryId !== undefined };
       };
       return settleTask();
@@ -1038,7 +1038,7 @@ export class HostConversationRuntime {
         if (entryId === undefined) return;
         const entry = await this.harness.commit(tx => tx.entry(entryId!), context);
         this.fence();
-        if (entry?.kind === "pi.compaction" && entry.conversationId === copy.conversationId) this.options.onMaintenanceSettled?.(workId);
+        if (entry?.kind === "pi.compaction" && entry.conversationId === copy.conversationId) { await this.options.onMaintenanceSettled?.(workId); this.fence(); }
       })().catch(() => { /* Uncertain closure retains its durable accounting work. */ });
       return { chatJid: copy.chatJid, workId, assertCurrent };
     });
@@ -1911,7 +1911,7 @@ export class HostConversationRuntime {
       let taskId = await readAbortTask(); this.fence();
       if (retryOnly && taskId === undefined) return false;
       // A racing attachment/completion rejects this SQL CAS before any SDK abort.
-      o.cancelOperationSource(copy, state.operation.version, retryOnly ? taskId : undefined); this.fence();
+      await o.cancelOperationSource(copy, state.operation.version, retryOnly ? taskId : undefined); this.fence();
       await this.progress(copy);
       for (const id of ids) { await this.harness.abortSubmission(id, this.context, copy.conversationId); this.fence(); }
       while (taskId !== undefined) {
@@ -2007,7 +2007,7 @@ export class HostConversationRuntime {
       const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
       if(!record||record.parent||record.owner)throw Error('Exact private background abort required');
       const completed=state.status?.status==='done';
-      if(!completed&&!state.operation.cancellation)o.cancelOperationSource(copy,state.operation.version,undefined,cause);
+      if(!completed&&!state.operation.cancellation)await o.cancelOperationSource(copy,state.operation.version,undefined,cause);
       this.fence();await this.progress(completed?undefined:copy);
       const conversation=await this.harness.conversation(copy.conversationId,this.context);this.fence();
       if(!conversation)throw Error('Missing private background conversation');
@@ -2028,7 +2028,7 @@ export class HostConversationRuntime {
       if (state.operation.terminal) return;
       const record = await this.harness.commit(tx => tx.conversation(copy.conversationId), this.context); this.fence();
       if (record?.parent?.conversationId !== o.conversationFor(copy.chatJid, copy.branchId) || record.owner) throw Error("Exact isolated side prompt required");
-      if (!state.operation.cancellation) o.cancelSideSource(copy);
+      if (!state.operation.cancellation) await o.cancelSideSource(copy);
       this.fence();
       const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
       if (!conversation) throw Error("Missing side conversation");
@@ -2137,7 +2137,7 @@ export class HostConversationRuntime {
   private async settleInput(input: AcceptedInput) {
     const primary = await this.readState(input); const o = this.options;
     if (primary.operation.terminal) {
-      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId, primary.answer?.processExit); return terminal;
+      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); await o.onOperationSettled?.(input.operationId, primary.answer?.processExit); this.fence(); return terminal;
     }
     const initialVersion = primary.operation.version;
     const primarySubmissionId = primary.submissionId;
@@ -2202,7 +2202,7 @@ export class HostConversationRuntime {
     if (modelFailed) log.warn("Native turn failed; no automatic replay", { operation: "durable_turn.model_failed",
       chatJid: input.chatJid, operationId: input.operationId, conversationId: input.conversationId, submissionId: state.submissionId,
       ...(parseModelFailure(state.status?.status === "unanswered" ? state.status.detail : undefined) ?? { category: "unknown" }) });
-    o.onOperationSettled?.(input.operationId, state.answer?.processExit); return terminal;
+    await o.onOperationSettled?.(input.operationId, state.answer?.processExit); this.fence(); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.

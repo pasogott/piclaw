@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { compactGoalInput } from "./host-goal-input.js";
 import type Database from "bun:sqlite";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
@@ -17,15 +18,19 @@ export function createHostGoalConfig(addon: {
   root: Database; assertAdmission(chat: string): void;
   admit(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }): number | null;
 }) {
-  const scoped = <T>(chatJid: string, body: () => T): T => {
+  const scoped = async <T>(chatJid: string, body: () => T, writing: boolean): Promise<T> => {
     options.assertAdmission(chatJid);
     const authority = { extensionId: "goal", chatJid, assertCurrent() { options.assertAdmission(chatJid); },
-      write<T>(run: () => T): T { return options.root.transaction(() => { this.assertCurrent(); const result = run(); this.assertCurrent(); return result; }).immediate(); } };
-    return authority.write(() => withExtensionKvAuthority(authority, body));
+      write<T>(run: () => T): T { this.assertCurrent();
+        if (!options.root.inTransaction) throw Error("Admitted Goal write transaction required");
+        const result = run(); this.assertCurrent(); return result; } };
+    return writing ? admitSqliteWrite(options.root, () => withExtensionKvAuthority(authority, body), authority.assertCurrent)
+      : withExtensionKvAuthority(authority, body);
   };
   return {
-    get(chatJid: string) { return scoped(chatJid, () => addon.goalResponse(addon.loadThreadGoal(chatJid))); },
+    get(chatJid: string) { return scoped(chatJid, () => addon.goalResponse(addon.loadThreadGoal(chatJid)), false); },
     set(chatJid: string, body: Record<string, unknown>) {
+      body = structuredClone(body);
       return scoped(chatJid, () => {
         const result = addon.applyGoalConfig(chatJid, body);
         if (result.continuation) {
@@ -36,7 +41,7 @@ export function createHostGoalConfig(addon: {
             text: compactGoalInput(addon, result.continuation, prepared), queuedAt: goal.updated_at }) === null) throw Error("Goal Settings continuation admission unavailable");
         }
         return { ...result.response, continuationQueued: Boolean(result.continuation), continuationReason: result.reason };
-      });
+      }, true);
     },
   };
 }

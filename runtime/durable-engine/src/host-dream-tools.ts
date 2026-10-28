@@ -1,6 +1,6 @@
 import { defineTool,type ConversationId,type TaskId } from '@earendil-works/pi-durable';
 import type { JsonValue } from '@earendil-works/chord';
-import { MessagesSchema,runRegisteredMessagesTool } from '../../src/extensions/messages-crud.js';
+import { MessagesSchema,admitRegisteredMessagesTool } from '../../src/extensions/messages-crud.js';
 import { WorkspaceSearchSchema } from '../../src/extensions/workspace-search.js';
 import { searchWorkspace } from '../../src/workspace-search.js';
 import { withWorkspaceIndexAuthority } from '../../src/core/workspace-index-access.js';
@@ -19,9 +19,7 @@ export function createHostDreamTools(options:{
         owner();context.abortSignal?.throwIfAborted();
         const source=await capture({conversationId:api.conversationId,taskId:api.taskId,toolCallId:api.callId});
         const assert=()=>{owner();context.abortSignal?.throwIfAborted();source.assertCurrent();};
-        // The entire shared-store implementation is synchronous. No await may
-        // separate this effect fence from its first query/mutation.
-        assert();const result=runRegisteredMessagesTool(args,source.chatJid);assert();
+        const result=await admitRegisteredMessagesTool(args,source.chatJid,assert,context.abortSignal);assert();
         return{output:result.content,details:result.details as JsonValue,isError:result.isError};
         }catch{throw Error("Native Dream tool failed");}
       }}),

@@ -43,9 +43,9 @@ applicationTest("owned public SDK bundle admits authenticated host inputs, not G
     const input = { source: "remote_peer" as const, sourceId: `peer:${crypto.randomUUID()}`, text: "verified peer message",
       queuedAt: new Date().toISOString(), principal: { id: "authenticated-peer", revision: "policy-1" }, target,
       assertCurrent() { checks++; expect(root.inTransaction).toBe(true); if (!allowed) throw Error("revoked principal"); } };
-    const receipt = bundle.admitApplicationInput(input);
+    const receipt = await bundle.admitApplicationInput(input);
     expect(checks).toBeGreaterThanOrEqual(4);
-    expect(bundle.admitApplicationInput(input)).toEqual(receipt);
+    expect(await bundle.admitApplicationInput(input)).toEqual(receipt);
     const queued = getDeferredQueuedFollowups(chat).find(i => i.source_id === input.sourceId)!;
     expect(queued.source).toBe("remote_peer"); expect(queued.source_accepted).toBe(true);
     expect(queued.queuedBy?.userId).toBe("authenticated-peer");
@@ -53,25 +53,25 @@ applicationTest("owned public SDK bundle admits authenticated host inputs, not G
     const source = root.query("SELECT kind,target_operation_id,parent_source_seq,provenance_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, input.sourceId) as any;
     expect(source.kind).toBe("message"); expect(source.target_operation_id).toBeNull(); expect(source.parent_source_seq).toBeNull();
     expect(source.provenance_ref).toStartWith("application:queued:");
-    expect(() => bundle.admitApplicationInput({ ...input, text: "changed replay" })).toThrow("conflict");
-    expect(() => bundle.admitApplicationInput({ ...input, target: { ...target, revision: "wrong" } })).toThrow("Exact native");
-    expect(() => bundle.admitApplicationInput({ ...input, target: { ...target, sessionId: "fake" } })).toThrow("Exact native");
+    await expect(bundle.admitApplicationInput({ ...input, text: "changed replay" })).rejects.toThrow("conflict");
+    await expect(bundle.admitApplicationInput({ ...input, target: { ...target, revision: "wrong" } })).rejects.toThrow("Exact native");
+    await expect(bundle.admitApplicationInput({ ...input, target: { ...target, sessionId: "fake" } })).rejects.toThrow("Exact native");
     allowed = false;
-    expect(() => bundle.admitApplicationInput({ ...input, sourceId: "revoked" })).toThrow("revoked");
+    await expect(bundle.admitApplicationInput({ ...input, sourceId: "revoked" })).rejects.toThrow("revoked");
     allowed = true;
     let n = 0;
-    expect(() => bundle.admitApplicationInput({ ...input, sourceId: "commit-revoked", assertCurrent() { if (++n === 3) throw Error("revoked at commit"); } })).toThrow("commit");
+    await expect(bundle.admitApplicationInput({ ...input, sourceId: "commit-revoked", assertCurrent() { if (++n === 3) throw Error("revoked at commit"); } })).rejects.toThrow("commit");
     expect(root.query("SELECT 1 FROM service_effect_s01_sources WHERE source_id='commit-revoked'").get()).toBeNull();
     expect(getDeferredQueuedFollowups(chat).some(i => i.source_id === "commit-revoked")).toBe(false);
-    bundle.admitApplicationInput({ ...input, source: "regrets.command", sourceId: "regrets-command" });
+    await bundle.admitApplicationInput({ ...input, source: "regrets.command", sourceId: "regrets-command" });
     expect(getDeferredQueuedFollowups(chat).some(i => i.source === "goal.continuation")).toBe(false);
-    expect(() => bundle.admitApplicationInput({ ...input, mode: "steer" as any })).toThrow("Unsupported");
+    await expect(bundle.admitApplicationInput({ ...input, mode: "steer" as any })).rejects.toThrow("Unsupported");
     const newChat = `${chat}:new`; storeChatMetadata(newChat, new Date().toISOString());
     const ports = bundle.bind({ queue: {} as any, agentPool: {} as any });
     await ports.prepareInputSourceAdmission!(newChat);
     const added = bundle.sessionTargets.list().find(t => t.chatJid === newChat)!;
     expect(added.sessionId).toBe("new-real-session"); expect(bundle.sessionTargets.resolve(added)).toEqual(added);
-    bundle.admitApplicationInput({ ...input, sourceId: "new-chat", target: added });
+    await bundle.admitApplicationInput({ ...input, sourceId: "new-chat", target: added });
     expect(getDeferredQueuedFollowups(newChat)[0]!.source_accepted).toBe(true);
     expect(base.host.modelCalls).toBe(0); expect(base.host.credentialLookups).toBe(0);
   } finally { await bundle.close(); closeDatabase(); lock.release(); await rm(dir, { recursive: true, force: true }); }

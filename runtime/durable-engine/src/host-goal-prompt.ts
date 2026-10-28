@@ -68,7 +68,8 @@ export function createHostGoalPrompt(addon: {
       authority.assertCurrent();
       if (receipts.length) {
         const writer = createHostOperationAuthority(options.root, captured, options.assertOwner);
-        accountCommittedGoalBatch(addon, { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof, source);
+        await writer.admitWrite(() => accountCommittedGoalBatch(addon,
+          { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof, source));
         if (!terminalProof && !budgetWrapup() && texts.some(text => scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled")))
           throw Error("Goal usage changed input lifecycle");
       }
@@ -78,7 +79,7 @@ export function createHostGoalPrompt(addon: {
       const goal = scope(() => load(captured.operation.chatJid))!;
       if (!goal.budget_limit_reported) {
         const writer = createHostOperationAuthority(options.root, captured, options.assertOwner);
-        writer.write(() => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, () =>
+        await writer.admitWrite(() => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, () =>
           addon.claimGoalBudgetWrapup(captured.operation.chatJid, { goalId: goal.goal_id, generation: goal.lifecycle_generation })));
       }
     }

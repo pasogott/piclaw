@@ -28,6 +28,7 @@ interface AuthGatewayLike {
   verifyInternalSecret(req: Request): boolean;
   isAuthenticated(req: Request): boolean;
   getPrincipal?(req: Request, refresh?: boolean): import("../auth/principal.js").AuthenticatedPrincipal | null;
+  preparePrincipal?(req: Request): Promise<void>;
   isTotpSession(req: Request): boolean;
   createTotpContext(): TotpAuthContext;
   createWebauthnContext(): WebauthnAuthContext;
@@ -74,6 +75,8 @@ export interface WebChannelLike
   getQueuedInputSourceWithdrawal?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
   getQueuedInputSourceAdmission?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
   dispatchAcceptedInput?: import("../../../agent-pool/durable-queue-dispatch.js").AcceptedQueueDispatch;
+  admitMessage?(chatJid: string, content: string, isBot: boolean, mediaIds: number[], contentBlocks: unknown[] | undefined,
+    authorise: () => void, signal?: AbortSignal): Promise<InteractionRow | null>;
   admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
     authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
   agentPool: AgentPool & {

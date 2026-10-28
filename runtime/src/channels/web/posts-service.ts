@@ -52,12 +52,12 @@ export function normalizeMediaIds(ids: unknown): number[] {
 }
 
 /** Store a user post, attach media, trigger link previews, and broadcast. */
-export function storePost(
+export async function storePost(
   channel: WebChannelLike,
   chatJid: string,
   data: PostPayload,
-  options: { isReply: boolean }
-): { status: number; body: unknown } {
+  options: { isReply: boolean; authorise?: (phase?: "before" | "after") => void; signal?: AbortSignal }
+): Promise<{ status: number; body: unknown }> {
   if (options.isReply && !data.thread_id) {
     return { status: 400, body: { error: "Missing 'thread_id' field" } };
   }
@@ -66,11 +66,14 @@ export function storePost(
   const contentBlocks = sanitizePublicInboundContentBlocks(data.content_blocks);
   const linkPreviews = Array.isArray(data.link_previews) ? data.link_previews : undefined;
 
-  const interaction = channel.storeMessage(chatJid, data.content || "", false, mediaIds, {
-    contentBlocks,
-    linkPreviews,
+  const storeOptions = {
+    contentBlocks, linkPreviews,
     threadId: options.isReply && data.thread_id ? Number(data.thread_id) : undefined,
-  });
+  };
+  const interaction = channel.admitUserMessage
+    ? await channel.admitUserMessage(chatJid, data.content || "", mediaIds, storeOptions,
+      options.authorise ?? (() => {}), options.signal ?? new AbortController().signal)
+    : channel.storeMessage(chatJid, data.content || "", false, mediaIds, storeOptions);
   if (!interaction) return { status: 500, body: { error: "Failed to store message" } };
 
   if (options.isReply && data.thread_id) interaction.data.thread_id = Number(data.thread_id);

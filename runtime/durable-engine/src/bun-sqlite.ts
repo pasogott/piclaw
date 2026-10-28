@@ -1,3 +1,4 @@
+import { isSqliteContention } from '../../src/db/sqlite-async-admission.js';
 import { registerSqliteCheckpoint } from "../../src/db/sqlite-checkpoint.js";
 import { openSqliteRole } from "../../src/db/sqlite-role-policy.js";
 import { Database } from "bun:sqlite";
@@ -165,7 +166,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
         // lose to a checkpoint and cannot safely replay its callback.
         try { this.db.exec("BEGIN IMMEDIATE"); break; }
         catch (error) {
-          if ((error as { code?: string }).code !== "SQLITE_BUSY" || Date.now() >= deadline) throw error;
+          if (!isSqliteContention(error) || Date.now() >= deadline) throw error;
           await new Promise(resolve => setTimeout(resolve, 25));
         }
       }

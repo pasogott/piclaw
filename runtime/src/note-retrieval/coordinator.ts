@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../db/sqlite-async-admission.js";
 import { randomUUID } from 'node:crypto';
 import { workspaceIndexPolicySnapshot } from '../core/workspace-index-policy.js';
 import { lstatSync } from 'node:fs';
@@ -20,14 +21,15 @@ export function noteIndexStatus(): {state:string;lastComplete:number|null;genera
   return {state:!bound?'never_indexed':row.state==='ready'&&overdue?'stale':row.state,lastComplete:row.last_complete,generation:bound?row.published:null,scopeDirty:row.dirty,coverage:row.coverage};
 }
 /** Metadata invalidation only; never reads or writes note content. */
-export function markNoteIndexDirty(paths?: string[]): void {
+export function markNoteIndexDirty(paths?: string[]): void | Promise<void> {
   const {validate}=admitNoteIndexStore();validate();if(!tableExists())return;
   const accepted=paths?.filter(admittedNotePath);if(paths&&!accepted?.length)return;
-  const db=getDb();db.transaction(()=>{validate();db.query("UPDATE note_retrieval_state SET dirty=dirty+1,coverage=coverage+1,state='stale' WHERE id=1").run();
+  const db=getDb();const write=()=>{validate();db.query("UPDATE note_retrieval_state SET dirty=dirty+1,coverage=coverage+1,state='stale' WHERE id=1").run();
     const revision=state().dirty;
     for(const name of accepted||['*']) db.query('INSERT INTO note_retrieval_dirty VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET revision=excluded.revision,reason=excluded.reason').run(name,revision,'refresh_pending');
     validate();
-  }).immediate();
+  };
+  if(db.inTransaction) write(); else return admitSqliteWrite(db,write,validate);
 }
 
 /** Sole content writer: requires and consumes the coordinator-owned inherited pipe. */

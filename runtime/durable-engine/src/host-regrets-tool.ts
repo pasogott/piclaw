@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import type { Database } from "bun:sqlite";
 import { createHostTool } from "./host-tools.js";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
@@ -46,7 +47,7 @@ export function createBoundHostRegretsTool<E>(addon: RegretsNativeExports<Return
   return createHostRegretsTool(addon, { ...options,
     bind(operation, authority) {
       return createHostRegretsBindings({ ...options.bindings, root: options.root,
-        chat: operation.operation.chatJid, assertCurrent: authority.assertCurrent, transactionalWrite: authority.write,
+        chat: operation.operation.chatJid, assertCurrent: authority.assertCurrent, transactionalWrite: body => admitSqliteWrite(options.root, body, authority.assertCurrent),
         readExchanges: addon.readExchanges, accountedDecision: options.accountedDecision?.(operation, authority) });
     },
   });
