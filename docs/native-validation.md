@@ -80,7 +80,7 @@ Explicit offline maintenance may initialise the owned SDK application manifest, 
 
 Exit 0 requires successful type projects and a fresh parent-specific JUnit artifact plus a terminal positive-pass Bun report for required integration and every native file. The launcher owns its reporter flags; remove custom `--reporter` and `--reporter-outfile` options. Nested-child reports cannot certify an unfinished parent. Normal test skips are allowed alongside passing tests; skipped-only files and skipped mandatory stages fail.
 
-Files have a 300-second wall-clock budget. The shared contract gives `default-application-runtime.test.ts` 600 seconds for its 110 serial cold-start cases; each scenario retains its 30-second deadline and its own completion launcher. Other file budgets are unchanged. Timeouts still fail qualification.
+Files have a 300-second wall-clock budget. The shared contract gives `default-application-runtime.test.ts` 900 seconds for its 200-case serial cold-start matrix and lifecycle checks; each scenario retains its 30-second deadline and its own completion launcher. Other file budgets are unchanged. Timeouts still fail qualification.
 
 The launcher and outer gate bound stdout/stderr draining after process exit. Leaked descriptors, interruption, timeout, missing files and zero-test runs fail qualification. The receipt records tracked changes and untracked source bytes; source changes during the run invalidate it. Keep the printed receipt and complete logs with the exact source revision.
 
