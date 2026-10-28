@@ -7,7 +7,7 @@ function fixture() {
   const db = new Database(":memory:");
   // A collector-only fixture. Native storage/paused restore is qualified separately.
   db.exec(`CREATE TABLE service_effect_s01_sources(chat_jid TEXT,source_seq INTEGER,kind TEXT,source_id TEXT,payload_ref TEXT);
-    CREATE TABLE service_effect_s01_operations(operation_id TEXT,chat_jid TEXT,harness_state TEXT,terminal_disposition TEXT,terminal_message_row_id INTEGER);
+    CREATE TABLE service_effect_s01_operations(operation_id TEXT,chat_jid TEXT,phase TEXT,terminal_disposition TEXT,terminal_message_row_id INTEGER);
     CREATE TABLE piclaw_durable_bindings_v1(incarnation TEXT,submission_id INTEGER,operation_id TEXT,chat_jid TEXT,source_seq INTEGER,conversation_id INTEGER DEFAULT 1,request_id TEXT DEFAULT 'primary');
     CREATE TABLE piclaw_durable_intent_bindings_v1(incarnation TEXT,submission_id INTEGER,operation_id TEXT,chat_jid TEXT,source_seq INTEGER,conversation_id INTEGER,request_id TEXT);
     CREATE TABLE extension_kv(extension_id TEXT,scope TEXT,scope_key TEXT,key TEXT,value TEXT);
@@ -19,7 +19,7 @@ test("recovery references distinguish native files, DB-owned input and adapter p
   try {
     db.query("INSERT INTO service_effect_s01_sources VALUES('web:x',1,'internal',?,?)").run(id,id);
     db.exec(`INSERT INTO service_effect_s01_sources VALUES('web:y',1,'message','user-1','message-row:17');
-      INSERT INTO service_effect_s01_operations VALUES('side','web:x','finished','completed',NULL),('main','web:y','finished','failed',18);
+      INSERT INTO service_effect_s01_operations VALUES('side','web:x','terminal','completed',NULL),('main','web:y','terminal','failed',18);
       INSERT INTO piclaw_durable_bindings_v1(incarnation,submission_id,operation_id,chat_jid,source_seq) VALUES('domain',8,'side','web:x',1),('domain',9,'main','web:y',1);
       INSERT INTO service_effect_s05_outbox VALUES('opaque:notification','private'),('opaque:notification','private');`);
     const before = db.serialize();
@@ -36,7 +36,7 @@ test("recovery references retain cancelled input but do not invent cancelled/fai
   const db = fixture();
   try {
     db.query("INSERT INTO service_effect_s01_sources VALUES('web:x',1,'internal',?,?)").run(id,id);
-    db.exec("INSERT INTO service_effect_s01_operations VALUES('side','web:x','finished','cancelled',NULL); INSERT INTO piclaw_durable_bindings_v1(incarnation,submission_id,operation_id,chat_jid,source_seq) VALUES('domain',8,'side','web:x',1)");
+    db.exec("INSERT INTO service_effect_s01_operations VALUES('side','web:x','terminal','cancelled',NULL); INSERT INTO piclaw_durable_bindings_v1(incarnation,submission_id,operation_id,chat_jid,source_seq) VALUES('domain',8,'side','web:x',1)");
     expect(collectNativeRecoveryReferences(db)).toEqual([{ owner:"native-side-input",ref:id,location:"answers",mediaType:"text/plain",redactionClass:"private" }]);
     db.exec("UPDATE service_effect_s01_operations SET terminal_disposition='failed'");
     expect(collectNativeRecoveryReferences(db)).toHaveLength(1);
@@ -55,7 +55,7 @@ test("recovery references select the published attached SDK input by placement o
   const db=fixture();
   try{
     db.exec(`INSERT INTO service_effect_s01_sources VALUES('web:x',1,'message','main','message-row:1');
-      INSERT INTO service_effect_s01_operations VALUES('op','web:x','finished','completed',2);
+      INSERT INTO service_effect_s01_operations VALUES('op','web:x','terminal','completed',2);
       INSERT INTO piclaw_durable_bindings_v1 VALUES('domain',8,'op','web:x',1,1,'primary');
       INSERT INTO piclaw_durable_intent_bindings_v1 VALUES('domain',9,'op','web:x',2,1,'intent');`);
     const primary={id:8,conversationId:1,requestId:'primary',type:'input',status:'done',entry:20};
