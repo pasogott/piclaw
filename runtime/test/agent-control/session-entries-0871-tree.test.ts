@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildSessionTreeSnapshot } from '../../src/agent-control/session-tree-snapshot.js';
-import { handleTree } from '../../src/agent-control/handlers/tree.js';
+import { createNativeControlFixture } from './native-control-fixture.js';
 
 const stamp = '2026-09-06T00:00:00.000Z';
 const entries = [
@@ -18,9 +18,12 @@ test('snapshot describes 0.87.1 usage, replacement and omission records', () => 
 });
 
 test('text tree describes the same entries', async () => {
-  const session = { sessionManager: { getLeafId: () => 'omit', getTree: () => roots } };
-  const result = await handleTree(session as any, { type: 'tree', mode: 'head', limit: 10 } as any);
-  expect(result.message).toContain('[usage cache_warm: test/fixture]');
-  expect(result.message).toContain('[context replace message]');
-  expect(result.message).toContain('[context omit message]');
+  const session = { sessionId: 'historical-tree-fixture', sessionManager: { getLeafId: () => 'omit', getTree: () => roots } };
+  const control = createNativeControlFixture(session, {modelRuntime:{}});
+  try {
+    const result = await control.facade.applyControlCommand('web:default', {type:'tree',mode:'head',limit:10} as any);
+    expect(result.message).toContain('[usage cache_warm: test/fixture]');
+    expect(result.message).toContain('[context replace message]');
+    expect(result.message).toContain('[context omit message]');
+  } finally {control.dispose();}
 });
