@@ -1,3 +1,4 @@
+import { admitSqliteWrite, isSqliteContention as isBusy } from '../../db/sqlite-async-admission.js';
 import type Database from "bun:sqlite";
 import type { ScheduledRunRetentionOwner, ScheduledRetentionPlan, ScheduledRetentionCursor } from "./scheduled-run-retention.js";
 import { writeScheduledTaskHead } from "../../db/scheduled-task-head.js";
@@ -132,10 +133,6 @@ function parseSnapshot(row: RevisionRow | undefined): ScheduledTaskSnapshot {
 
 function parseDecision(row: DecisionRow): unknown {
   try { return JSON.parse(row.result_json); } catch { throw new CorruptState(); }
-}
-
-function isBusy(error: unknown): boolean {
-  return error instanceof Error && /busy|locked/i.test(error.message);
 }
 
 export function createCurrentPiclawScheduledRunStore(
@@ -326,7 +323,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
     await previous;
     try {
       if (this.runtime.hitFault("before_effect", method)) return this.failed(method, effectId, operationId, version, errorOf("storage_unavailable"), sourceSeq);
-      const result = action();
+      const result = await admitSqliteWrite(this.database, action);
       if (!result.ok) return this.failed(method, effectId, operationId, version, result.error, sourceSeq);
       if (this.runtime.hitFault("effect_then_lost_acknowledgement", method)) {
         return this.failed(method, effectId, operationId, version, errorOf("storage_unavailable", "unknown", true), sourceSeq);

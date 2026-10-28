@@ -1,9 +1,10 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import type { Database } from "bun:sqlite";
 import type { HostConversationRuntime } from "./host-runtime.js";
 
 type Capture = Awaited<ReturnType<HostConversationRuntime["captureToolSource"]>>;
 /** Host-private constructor: capture MUST come from captureToolSource, not arguments. */
-export function createHostOperationAuthority(root: Database, captured: Capture, assertAllowed: () => void, readonly = false) {
+export function createHostOperationAuthority(root: Database, captured: Capture, assertAllowed: () => void, readonly = false, signal?: AbortSignal) {
   const { operation, inputs } = captured;
   const chatJid = operation.chatJid;
   if (!readonly && !operation.harness) throw Error("Bound host harness required for writes");
@@ -34,11 +35,15 @@ export function createHostOperationAuthority(root: Database, captured: Capture, 
     }
   };
   return Object.freeze({ assertCurrent,
+    async admitWrite<T>(body: () => T): Promise<T> {
+      if (readonly) throw Error("Read-only host operation authority");
+      return admitSqliteWrite(root, body, assertCurrent, signal);
+    },
     write: <T>(body: () => T): T => {
       if (readonly) throw Error("Read-only host operation authority");
-      return root.transaction(() => {
-        assertCurrent(); const result = body(); assertCurrent(); return result;
-      }).immediate();
+      assertCurrent();
+      if (!root.inTransaction) throw Error("Admitted host write transaction required");
+      const result = body(); assertCurrent(); return result;
     },
   });
 }

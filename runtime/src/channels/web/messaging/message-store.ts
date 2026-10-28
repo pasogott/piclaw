@@ -1,3 +1,4 @@
+import { bindAddonLocalMessage } from "../../../addons/local-dispatch.js";
 /**
  * web/message-store.ts – Database operations for web-channel messages.
  *
@@ -211,6 +212,7 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
 
   const rowId = storeMessage(msg);
   if (rowId <= 0) throw new Error("Failed to persist web message row");
+  if (!params.isBot) bindAddonLocalMessage(params.chatJid, { id: msg.id, content: msg.content, content_blocks: msg.content_blocks });
 
   if (allMediaIds.length > 0) {
     attachMediaToMessage(rowId, allMediaIds);
@@ -279,6 +281,18 @@ export function storeWebMessage(channel: LinkPreviewChannel, params: StoreWebMes
   let committed: CommittedWebMessage;
   try { committed = getDb().transaction(() => writePreparedWebMessage(prepared)).immediate(); }
   catch { return null; }
+  return finishWebMessage(channel, committed);
+}
+
+/** Internal posts share the existing preparation/commit/publication split. */
+export async function admitWebMessage(channel: LinkPreviewChannel, params: StoreWebMessageParams, options: StoreWebMessageOptions,
+  authorise: () => void, signal?: AbortSignal): Promise<InteractionRow | null> {
+  const database = getDb(), prepared = prepareWebMessage(params, options);
+  const check = () => {
+    authorise();
+    if (getDb() !== database || readAccessConfig().mode !== "single-user") throw Error("Message post authority changed");
+  };
+  const committed = await admitSqliteWrite(database, () => writePreparedWebMessage(prepared), check, signal);
   return finishWebMessage(channel, committed);
 }
 

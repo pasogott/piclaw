@@ -20,8 +20,8 @@ test("actual Delegate: approved exact synthetic CLI via durable host context, pe
   const files = ["index", "delegate", "compat/extension-kv"];
   const hash = createHash("sha256");
   for (const file of files) { hash.update(file + "\0"); hash.update(await Bun.file(resolve(root, "addons/delegate", file + ".ts")).text()); }
-  expect(hash.digest("hex")).toBe("d76c40e6887526ef9d1b19193b617fb25302b8bebbe5b98632b1bb0eea46d584");
-  expect((await Bun.file(resolve(root, "addons/delegate/package.json")).json()).version).toBe("0.2.20");
+  expect(hash.digest("hex")).toBe("4ef64555202d0f96c9cc647c4c8ba9cb6491e8c8afa8fb95c87be537946970bc");
+  expect((await Bun.file(resolve(root, "addons/delegate/package.json")).json()).version).toBe("0.2.21");
   const dir = mkdtempSync(join(tmpdir(), "durable-actual-delegate-"));
   const copy = mkdtempSync(resolve(import.meta.dir, "pinned-delegate-copy-"));
   const globals = globalThis as any;

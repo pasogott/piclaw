@@ -1,4 +1,5 @@
 import type Database from 'bun:sqlite';
+import { admitSqliteWrite } from '../../src/db/sqlite-async-admission.js';
 import { assertAutoCompactionSettingWritable, getCompactionRuntimeConfig, setCompactionRuntimeConfig } from '../../src/core/config.js';
 
 /** Host-wide settings, matching /auto-compact's existing scope. SDK reads these
@@ -11,16 +12,16 @@ export function createHostCommandPolicy(root: Database, assertCurrent: () => voi
     if (saved && !['on', 'off'].includes(saved.value)) throw Error('Native retry policy is unreadable');
     return { autoCompact: getCompactionRuntimeConfig().autoCompactionEnabled, autoRetry: saved?.value === 'on' };
   };
-  const set = (name: 'autoCompact' | 'autoRetry', enabled: boolean) => {
+  const set = async (name: 'autoCompact' | 'autoRetry', enabled: boolean): Promise<void> => {
     assertCurrent();
     if (typeof enabled !== 'boolean') throw Error('Boolean native policy required');
     if (name === 'autoCompact') {
       assertAutoCompactionSettingWritable(enabled);
       setCompactionRuntimeConfig({autoCompactionEnabled: enabled});
     }
-    else if (name === 'autoRetry') root.transaction(() => {
-      assertCurrent(); root.query('INSERT OR REPLACE INTO router_state (key,value) VALUES (?,?)').run(key, enabled ? 'on' : 'off'); assertCurrent();
-    }).immediate();
+    else if (name === 'autoRetry') await admitSqliteWrite(root, () => {
+      root.query('INSERT OR REPLACE INTO router_state (key,value) VALUES (?,?)').run(key, enabled ? 'on' : 'off');
+    }, assertCurrent, undefined, undefined, assertCurrent);
     else throw Error('Unknown native policy');
     assertCurrent();
   };

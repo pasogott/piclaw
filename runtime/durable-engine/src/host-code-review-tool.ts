@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -15,10 +16,11 @@ export interface CodeReviewNativeExports {
       chatIncarnation: string; reference: { addonId: "code-review"; intentId: string } };
     workspaceRoot: string;
     assertCurrent(): void;
-    write?<T>(body: () => T): T;
+    write?<T>(body: () => T): T | Promise<T>;
   }> }): ToolDefinition<TSchema, JsonValue>;
   reviewService(): unknown;
-  setReviewDatabaseSource(source: { database: Database; assertOwner(): void }): () => void;
+  prepareReviewService(): Promise<unknown>;
+  setReviewDatabaseSource(source: { database: Database; assertOwner(): void; admitWrite?<T>(body: () => T): Promise<T> }): () => void;
   closeReviewServices(): void;
 }
 const unavailable = () => ({ content: [{ type: "text" as const, text: "Unsupported Code Review action or arguments." }],
@@ -84,13 +86,14 @@ export function createHostCodeReviewTool(addon: CodeReviewNativeExports, options
         check();
         if (resolveReference() !== intentId) throw Error("Code Review dispatch changed");
         const assertCurrent = () => { check(); if (resolveReference() !== intentId) throw Error("Code Review dispatch changed"); };
-        return Object.freeze({ service: addon.reviewService(), workspaceRoot,
+        const service = await addon.prepareReviewService(); assertCurrent();
+        return Object.freeze({ service, workspaceRoot,
           identity: Object.freeze({ ownerId: "default", actorId: primary!.branchId, kind: "agent" as const, workspaceId: createHash("sha256").update(workspaceRoot).digest("hex"),
             chatId: primary!.chatJid, chatIncarnation: primary!.branchId, reference: Object.freeze({ addonId: "code-review" as const, intentId }) }),
           assertCurrent,
-          ...(writing ? { write: <T>(body: () => T): T => authority.write(() => {
+          ...(writing ? { write: <T>(body: () => T): Promise<T> => admitSqliteWrite(options.root, () => {
             assertCurrent(); const result = body(); assertCurrent(); return result;
-          }) } : {}),
+          }, assertCurrent, call.signal) } : {}),
         });
       } });
       const result = await native.execute(call.toolCallId, params, call.signal, call.onUpdate, undefined as never);

@@ -1,3 +1,4 @@
+import { isSqliteContention } from './sqlite-async-admission.js';
 import { performance } from "node:perf_hooks";
 import type { Database } from "bun:sqlite";
 
@@ -20,7 +21,7 @@ export function enableSqliteWal(database: Database): void {
         if (row?.journal_mode?.toLowerCase() !== "wal") throw new Error("SQLite did not enable WAL journal mode.");
         return;
       } catch (error) {
-        if ((error as { code?: string })?.code !== "SQLITE_BUSY" || performance.now() >= deadline) throw error;
+        if (!isSqliteContention(error) || performance.now() >= deadline) throw error;
         Atomics.wait(waitCell, 0, 0, Math.min(10, Math.max(0, deadline - performance.now())));
       }
     }

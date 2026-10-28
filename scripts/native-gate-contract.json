@@ -3,7 +3,7 @@
   "fixtures": {
     "native": {
       "repository": "rcarmo/piclaw-addons",
-      "ref": "e8aac2399148cbef638764ba2b5a1cd916cc5ecc"
+      "ref": "ad7ad0a4b63ee37090b6bee4309fa5c458ec6510"
     },
     "contract": {
       "repository": "rcarmo/piclaw-addons",
@@ -54,6 +54,7 @@
     "goal-usage.test.ts",
     "host-addon-resources.test.ts",
     "host-builtins.test.ts",
+    "host-code-review-write-admission.test.ts",
     "host-codex-artifacts.test.ts",
     "host-codex-model-services.test.ts",
     "host-codex-output.test.ts",
@@ -61,6 +62,7 @@
     "host-codex-provider-tools.test.ts",
     "host-codex-tool-group.test.ts",
     "host-codex-turn-routing.test.ts",
+    "host-command-policy.test.ts",
     "host-controller.test.ts",
     "host-delegate-files.test.ts",
     "host-delegate-progress.test.ts",

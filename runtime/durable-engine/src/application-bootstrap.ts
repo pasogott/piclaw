@@ -1,5 +1,6 @@
 // Single-root application composition; execution and recovery remain SDK-owned.
 import type { Database } from "bun:sqlite";
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { readScheduledDefinition } from "../../src/db/scheduled-task-definitions.js";
 import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { parseModelFailure } from './host-model-failure.js';
@@ -107,14 +108,14 @@ export interface ApplicationBootstrapOptions {
    * still requires current active host policy; copied/import plans stay strict. */
   historicalBindings?: boolean;
   /** Publish the existing runtime before recovery can schedule any provider. */
-  onMaintenanceSettled?: (workId: string) => void;
+  onMaintenanceSettled?: (workId: string) => void | Promise<void>;
   onOperationSettled?: RuntimeOptions["onOperationSettled"];
   prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
   materializeAnswer?: RuntimeOptions["materializeAnswer"];
   dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
   requestProcessExit?: (reason: string) => Promise<void>;
   readExecutionPolicy?: () => {autoCompact: boolean; autoRetry: boolean};
-  setExecutionPolicy?: (name: "autoCompact" | "autoRetry", enabled: boolean) => void;
+  setExecutionPolicy?: (name: "autoCompact" | "autoRetry", enabled: boolean) => void | Promise<void>;
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   assertAdmission?: RuntimeOptions["assertAdmission"];
@@ -259,8 +260,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         replyThreadFor(input) { assert(); return resolveAcceptedMessageThread(root, input); },
-        cancelOperationSource(input, expectedVersion, retryTaskId, cause) {
-          root.transaction(() => {
+        async cancelOperationSource(input, expectedVersion, retryTaskId, cause) {
+          await admitSqliteWrite(root, () => {
             assert();
             const operation = root.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=? AND chat_jid=?")
               .get(input.operationId, input.chatJid) as { version: number; phase: string; cancellation_source_seq: number | null } | null;
@@ -277,10 +278,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
               kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
               acceptedAt: r.now(), createWakeIntent: false }), expectedVersion, cause??"operator_abort", root);
             assert();
-          }).immediate();
+          }, assert);
         },
-        cancelSideSource(input) {
-          root.transaction(() => {
+        async cancelSideSource(input) {
+          await admitSqliteWrite(root, () => {
             assert();
             const operation = root.query("SELECT version,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?").get(input.operationId) as { version: number; cancellation_source_seq: number | null } | null;
             if (!operation) throw Error("Missing side operation");
@@ -290,7 +291,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
               kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
               acceptedAt: r.now(), createWakeIntent: false }), operation.version, "side_prompt_cancelled", root);
             assert();
-          }).immediate();
+          }, assert);
         },
         withPromptContextGuard: (check, body) => candidateDatabase.withAdmissionGuard(check, body),
         withIdleModelGuard: body => candidateDatabase.withAdmissionGuard(() => { assert(); config.assertAdmission?.(); },
@@ -450,7 +451,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assertCurrent, lifetimeSignal: shutdown.signal,
         ...(config.readExecutionPolicy && config.setExecutionPolicy ? {
           readExecutionPolicy: async () => { assertCurrent(); return config.readExecutionPolicy!(); },
-          setExecutionPolicy: async (name: "autoCompact" | "autoRetry", enabled: boolean) => { assertCurrent(); config.assertAdmission?.(); config.setExecutionPolicy!(name, enabled); },
+          setExecutionPolicy: async (name: "autoCompact" | "autoRetry", enabled: boolean) => { assertCurrent(); config.assertAdmission?.(); await config.setExecutionPolicy!(name, enabled); assertCurrent(); },
         } : {}),
         ...(config.requestProcessExit ? { requestExit: async (reason: string) => {
           assertCurrent(); config.assertAdmission?.();
@@ -538,7 +539,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         }
         if(scope.contextKey!==identity.contextKey||scope.branchId!==identity.branchId)throw Error('Background owner context changed');
         const context=scope;
-        const accepted=root.transaction(()=>{
+        const accepted=await admitSqliteWrite(root,()=>{
           check();const current=work.getAcceptedSource(identity.chatJid,identity.sourceId);
           if(current){
             const row=root.query('SELECT source_seq,request_hash,conversation_id FROM piclaw_durable_bindings_v1 WHERE domain=? AND incarnation=? AND operation_id=?')
@@ -558,7 +559,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
             VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(r.incarnation,r.incarnation,context.conversationId,identity.chatJid,identity.branchId,identity.operationId,claimed.source.sourceSeq,sourceId,sourceId,sourceId,hashCanonicalRequest({type:'input',requestId:sourceId,content:payload.prompt}));
           ensureBudgetWork({id:operationBudgetWorkId(identity.operationId),chatJid:identity.chatJid,executionKind:'background',parentWorkId:payload.policy.workId},root);
           check();return claimed.source.sourceSeq;
-        }).immediate();
+        },check,signal);
         const input:AcceptedInput=Object.freeze({incarnation:r.incarnation,conversationId:context.conversationId,chatJid:identity.chatJid,branchId:identity.branchId,operationId:identity.operationId,
           sourceSeq:accepted,sourceId,payloadRef:sourceId,requestId:sourceId,requestHash:hashCanonicalRequest({type:'input',requestId:sourceId,content:payload.prompt})});
         check();if(resolveBackground(input)!==input.conversationId)throw Error('Accepted background correlation failed');return input;
@@ -956,7 +957,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       assertParent();
       // Immutable payload may outlive denied admission; it never grants authority.
       await config.answers.put(sourceId, prompt); checkScope(); options.signal?.throwIfAborted();
-      const claimed = root.transaction(() => {
+      const claimed = await admitSqliteWrite(root, () => {
         checkScope(); assertParent();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
         const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
@@ -972,7 +973,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         }
         ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId: retryId ?? parentWorkId }, root);
         checkScope(); return accepted;
-      }).immediate();
+      }, () => { checkScope(); assertParent(); }, options.signal);
       let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {
         assertLive();

@@ -51,7 +51,7 @@ for (const mode of ["valid", "foreign", "owner", "version", "source", "binding",
           kv.get("imap", "settings", "global");
           expect(() => kv.get("foreign", "settings", "global")).toThrow();
           expect(() => kv.get("imap", "profile", "chat", "web:foreign")).toThrow();
-          kv.set("imap", "authority-probe", true, "global");
+          await kv.write!("imap", () => kv.set("imap", "authority-probe", true, "global"));
           options.assertCurrent(); effects++;
           expect(options.chatJid).toBe(captured.operation.chatJid);
           return { content: [{ type: "text" as const, text: "synthetic" }], details: {} };

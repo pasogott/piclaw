@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from '../../db/sqlite-async-admission.js';
 import { createHash } from "node:crypto";
 import type Database from "bun:sqlite";
 import {
@@ -757,15 +758,13 @@ export class CurrentPiclawServiceOutboxStore implements ServiceOutboxStore {
       ) {
         throw new BeforeTransactionFault();
       }
-      const outcome = this.database
-        .transaction(() => {
+      const outcome = await admitSqliteWrite(this.database, () => {
           const value = apply(request);
           if (!value.ok) return value;
           if (faultObservation.checkpoint === "in_transaction")
             throw new RollbackFault();
           return value;
-        })
-        .immediate();
+        });
       if (!outcome.ok) return this.finish(context, outcome);
       if (this.exactLostAcknowledgement(method))
         return this.finish(

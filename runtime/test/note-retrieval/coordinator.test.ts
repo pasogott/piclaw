@@ -65,7 +65,7 @@ test('new paths skip staged deletes; incremental replacements still delete all t
  put('a.md','alpha');put('b.md','beta');
  const fresh=await run(binding(),false,false,true);expect(fresh.code,fresh.errors).toBe(0);expect(fresh.pathDeletes).toBe(0);
  const initial=chunks();put('a.md','replacement');put('new.md','new source');
- expect(await childEval(`const {initDatabase}=await import('./src/db/connection.ts');const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');initDatabase();markNoteIndexDirty(['notes/a.md','notes/new.md'])`)).toBe(0);
+ expect(await childEval(`const {initDatabase}=await import('./src/db/connection.ts');const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');initDatabase();await markNoteIndexDirty(['notes/a.md','notes/new.md'])`)).toBe(0);
  const changed=await run(binding(),false,false,true);expect(changed.code,changed.errors).toBe(0);expect(changed.pathDeletes).toBe(3);
  expect(chunks()).toHaveLength(3);expect(chunks().find(c=>c.path==='notes/b.md')).toEqual(initial.find(c=>c.path==='notes/b.md'));
  expect(sql("SELECT count(*) n FROM note_retrieval_fts WHERE path='notes/a.md'")).toEqual({n:1});
@@ -82,7 +82,7 @@ test('independent WAL reader keeps one published generation across dirty refresh
  try{
   const before=await waitFor(ready);expect(before).toMatchObject({published,chunk_id:original.chunk_id,content:original.content,state:'ready'});
   put('a.md','# Entry\nnew source');
-  expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();markNoteIndexDirty(['notes/a.md'])`)).toBe(0);
+  expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();await markNoteIndexDirty(['notes/a.md'])`)).toBe(0);
   expect(snapshot().state).toBe('stale');
   expect((await run()).code).toBe(0);
   const current=chunks()[0];expect(current.chunk_id).not.toBe(original.chunk_id);expect(snapshot().published).toBeGreaterThan(published);
@@ -101,13 +101,13 @@ test('excluded private roots, symlinks, hardlinks, invalid UTF8 and oversized fi
 });
 test('dirty generation and overdue status are independent of legacy index ready status',async()=>{
  put('a.md','alpha');expect((await run()).code).toBe(0);const old=snapshot();
- expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();markNoteIndexDirty(['notes/new.md'])`)).toBe(0);expect(snapshot().dirty).toBe(old.dirty+1);expect(snapshot().state).toBe('stale');
+ expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();await markNoteIndexDirty(['notes/new.md'])`)).toBe(0);expect(snapshot().dirty).toBe(old.dirty+1);expect(snapshot().state).toBe('stale');
  expect((await run()).code).toBe(0);{const db=database();db.query('UPDATE note_retrieval_state SET last_complete=?').run(Date.now()+60000);db.close();}expect(await childEval(`const {noteIndexStatus}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();process.exit(noteIndexStatus().state==='stale'?0:1)`)).toBe(0);
 });
 test('dirty incremental refresh preserves unaffected IDs and defers unknown external additions to a full reconciliation',async()=>{
  put('a.md','alpha');put('b.md','beta');expect((await run()).code).toBe(0);const before=chunks();
  put('a.md','ALPHA');put('external.md','new external note');
- expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();markNoteIndexDirty(['notes/a.md'])`)).toBe(0);
+ expect(await childEval(`const {markNoteIndexDirty}=await import('./src/note-retrieval/coordinator.ts');const {initDatabase}=await import('./src/db/connection.ts');initDatabase();await markNoteIndexDirty(['notes/a.md'])`)).toBe(0);
  expect((await run()).code).toBe(0);const incremental=chunks();expect(incremental.find(c=>c.path==='notes/a.md').chunk_id).not.toBe(before.find(c=>c.path==='notes/a.md').chunk_id);expect(incremental.find(c=>c.path==='notes/b.md').chunk_id).toBe(before.find(c=>c.path==='notes/b.md').chunk_id);expect(incremental.some(c=>c.path==='notes/external.md')).toBe(false);
  {const db=database();db.query('UPDATE note_retrieval_state SET last_complete=?').run(Date.now()-300001);db.close();}
  expect((await run()).code).toBe(0);expect(chunks().some(c=>c.path==='notes/external.md')).toBe(true);

@@ -32,7 +32,7 @@ import {
 } from "../../../core/config.js";
 import { generateTotpQr } from "../../../utils/totp-qr.js";
 import { ensureAvatarCache, resolveAvatarUrl, type AvatarKind } from "../media/avatar-service.js";
-import { getServerUiOutputConfig, getServerUiThemeConfig, setServerUiOutputConfig, setServerUiThemeConfig } from "../ui-state.js";
+import { getServerUiOutputConfig, getServerUiThemeConfig, admitServerUiOutputConfig, admitServerUiThemeConfig } from "../ui-state.js";
 
 export interface GeneralSettingsData {
   assistantName: string;
@@ -205,7 +205,9 @@ export function rotateWidgetTokenSettings(): GeneralSettingsData {
 
 const RETIRED_EXECUTION_SETTINGS=["sessionAutoRotate","sessionMaxSizeMb","sessionMaxLines","sessionMaxCompactions","automaticRecoveryEnabled","automaticRecoveryMaxAttempts","automaticRecoveryTotalBudgetMs","automaticRecoveryEffectiveBudgetMs"] as const;
 
-export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<GeneralSettingsData> {
+export async function saveGeneralSettings(input: GeneralSettingsInput, authorise: () => void = () => {}, signal?: AbortSignal): Promise<GeneralSettingsData> {
+  const current = () => { signal?.throwIfAborted(); authorise(); };
+  current();
   const retired=RETIRED_EXECUTION_SETTINGS.filter(key=>Object.hasOwn(input,key));
   if(retired.length)throw Error('Unsupported native general settings: '+retired.join(', ')+'. No settings were changed.');
   const nextAssistantName = normalizeOptionalString(input.assistantName);
@@ -216,7 +218,7 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
   const nextAssistantAvatar = normalizeOptionalString(input.assistantAvatar);
   if (nextAssistantAvatar !== undefined) {
     const effectiveAvatar = nextAssistantAvatar || "";
-    await maybePrecacheAvatar("agent", effectiveAvatar);
+    await maybePrecacheAvatar("agent", effectiveAvatar); current();
     setAssistantAvatar(effectiveAvatar);
   }
 
@@ -228,7 +230,7 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
   const nextUserAvatar = normalizeOptionalString(input.userAvatar);
   if (nextUserAvatar !== undefined) {
     const effectiveAvatar = nextUserAvatar || "";
-    await maybePrecacheAvatar("user", effectiveAvatar);
+    await maybePrecacheAvatar("user", effectiveAvatar); current();
     setUserAvatar(effectiveAvatar);
     if (nextUserAvatar === null) {
       setUserAvatarBackground("");
@@ -282,15 +284,15 @@ export async function saveGeneralSettings(input: GeneralSettingsInput): Promise<
       ? input.uiTint.trim()
       : null;
   if (nextUiTheme !== undefined || nextUiTint !== undefined) {
-    setServerUiThemeConfig({
+    await admitServerUiThemeConfig({
       ...(nextUiTheme !== undefined ? { theme: nextUiTheme || "default" } : {}),
       ...(nextUiTint !== undefined ? { tint: nextUiTint } : {}),
-    });
+    }, current, signal);
   }
 
   const nextOutputPad = normalizeOptionalInt(input.outputPad, 0, 24);
   if (nextOutputPad !== undefined) {
-    setServerUiOutputConfig({ outputPad: nextOutputPad });
+    await admitServerUiOutputConfig({ outputPad: nextOutputPad }, current, signal);
   }
 
   return getGeneralSettingsData();

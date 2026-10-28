@@ -20,14 +20,14 @@ for (const mode of ["approved", "shadow", "dirty", "version", "handler", "execut
       hash.update(file + "\0"); hash.update(bytes);
       writeFileSync(join(pkg, `${file}.ts`), bytes);
     }
-    expect(hash.digest("hex")).toBe("d76c40e6887526ef9d1b19193b617fb25302b8bebbe5b98632b1bb0eea46d584");
+    expect(hash.digest("hex")).toBe("4ef64555202d0f96c9cc647c4c8ba9cb6491e8c8afa8fb95c87be537946970bc");
     copyFileSync(join(source, "addons/delegate/package.json"), join(pkg, "package.json"));
     if (mode === "shadow") writeFileSync(join(pkg, "delegate.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
 export default function() {}\n`);
     if (mode === "dirty") writeFileSync(join(pkg, "delegate.ts"), readFileSync(join(pkg, "delegate.ts"), "utf8") + "\n// unapproved\n");
     if (mode === "version") {
       const manifest = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
-      manifest.version = "0.2.21"; writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
+      manifest.version = "99.0.0"; writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     }
     let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
     try {

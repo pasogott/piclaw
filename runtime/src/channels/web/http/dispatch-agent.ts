@@ -1,3 +1,4 @@
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 import { createLogger } from '../../../utils/logger.js';
 import { getKeychainStatus } from '../../../secure/keychain.js';
 const keychainLog=createLogger('web.keychain');
@@ -38,7 +39,7 @@ import { getQuickActionsSettingsData, saveQuickActionsSettings } from "../handle
 import { handleScheduledTasksManagementAction, handleScheduledTasksManagementList } from "../handlers/scheduled-tasks-management.js";
 import { getWorkspaceSettingsData, saveWorkspaceSettings } from "../handlers/workspace-settings.js";
 import { handleWorkspaceIndexingSettings } from "../handlers/workspace-indexing.js";
-import { getServerUiState, setServerUiMetersConfig, setServerUiOutputConfig, setServerUiThemeConfig } from "../ui-state.js";
+import { getServerUiState, admitServerUiMetersConfig, admitServerUiOutputConfig, admitServerUiThemeConfig } from "../ui-state.js";
 import {
   clearEnvironmentOverride,
   getEnvironmentSettingsData,
@@ -370,32 +371,33 @@ const EXACT_AGENT_ROUTES: ExactAgentRoute[] = [
     method: "POST",
     path: "/agent/ui-state",
     handle: async (channel, req) => {
+      const authorise = captureWebRequestAuthority(channel.authGateway, req);
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
       const response: Record<string, unknown> = { ok: true };
       if (body?.ui_theme && typeof body.ui_theme === "object") {
         const themeBody = body.ui_theme as Record<string, unknown>;
-        const nextTheme = setServerUiThemeConfig({
+        const nextTheme = await admitServerUiThemeConfig({
           ...(typeof themeBody.theme === "string" ? { theme: themeBody.theme } : {}),
           ...(themeBody.tint !== undefined ? { tint: typeof themeBody.tint === "string" ? themeBody.tint : null } : {}),
-        });
+        }, authorise, req.signal);
         response.ui_theme = nextTheme;
         channel.broadcastEvent("ui_theme", { ...nextTheme });
       }
       if (body?.ui_meters && typeof body.ui_meters === "object") {
         const metersBody = body.ui_meters as Record<string, unknown>;
-        const nextMeters = setServerUiMetersConfig({
+        const nextMeters = await admitServerUiMetersConfig({
           ...(typeof metersBody.enabled === "boolean" ? { enabled: metersBody.enabled } : {}),
           ...(typeof metersBody.collapsed === "boolean" ? { collapsed: metersBody.collapsed } : {}),
-        });
+        }, authorise, req.signal);
         response.ui_meters = nextMeters;
         channel.broadcastEvent("ui_meters", { mode: "set", ...nextMeters });
       }
       if (body?.ui_output && typeof body.ui_output === "object") {
         const outputBody = body.ui_output as Record<string, unknown>;
         const parsedPad = Number(outputBody.outputPad ?? outputBody.output_pad);
-        const nextOutput = setServerUiOutputConfig({
+        const nextOutput = await admitServerUiOutputConfig({
           ...(Number.isFinite(parsedPad) ? { outputPad: parsedPad } : {}),
-        });
+        }, authorise, req.signal);
         response.ui_output = nextOutput;
         channel.broadcastEvent("ui_theme", { outputPad: nextOutput.outputPad });
       }
@@ -499,8 +501,9 @@ const EXACT_AGENT_ROUTES: ExactAgentRoute[] = [
     path: "/agent/settings/general",
     handle: async (channel, req) => {
       try {
+        const authorise = captureWebRequestAuthority(channel.authGateway, req);
         const body = await req.json().catch(() => ({}));
-        const saved = await saveGeneralSettings((body && typeof body === "object") ? body as Record<string, unknown> : {});
+        const saved = await saveGeneralSettings((body && typeof body === "object") ? body as Record<string, unknown> : {}, authorise, req.signal);
         channel.broadcastEvent("ui_theme", { theme: saved.uiTheme, tint: saved.uiTint, outputPad: saved.outputPad });
         channel.broadcastEvent("profile_update", buildGeneralSettingsProfileUpdate(saved));
         return channel.json({ ok: true, settings: saved });

@@ -66,7 +66,7 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   let revokeDuringCapture = false;
   let factoryCalls = 0;
   let acceptedText = "Explicit user request";
-  const tools = createHostGoalTools((resolveChat) => { factoryCalls++; return addon.createGoalTools(resolveChat); }, { root: db, assertOwner() {}, resolveGoalInput: addon.resolveGoalInput, runtime: () => ({ async readCapturedInputText() { return [acceptedText]; }, async captureToolSource() {
+  const tools = createHostGoalTools((resolveChat, policy) => { factoryCalls++; return addon.createGoalTools(resolveChat, policy); }, { root: db, assertOwner() {}, resolveGoalInput: addon.resolveGoalInput, runtime: () => ({ async readCapturedInputText() { return [acceptedText]; }, async captureToolSource() {
     await Promise.resolve();
     if (revokeDuringCapture) db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=?").run(chat);
     return captured;

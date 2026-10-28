@@ -32,6 +32,7 @@ interface WebChannelLifecycleDefaults {
 }
 
 export interface WebChannelPrototypeMembers extends WebChannelLike {
+  admitMessage: WebChannelRuntimePublicSurfaceService["admitMessage"];
   readonly sse: WebSessionBroadcastService["sse"];
   readonly uiBridge: WebSessionBroadcastService["uiBridge"];
   readonly server: Bun.Server<WebSocketSessionData> | null;
@@ -715,6 +716,10 @@ export function installWebChannelPrototype(
           consumeDeferredFollowupRowId?: number | null;
         } = {},
       ): InteractionRow | null => service.storeMessage(chatJid, content, isBot, mediaIds, options)),
+    },
+    admitMessage: {
+      configurable: true, writable: true,
+      value: withRuntimePublicSurface((service, ...args: Parameters<WebChannelRuntimePublicSurfaceService["admitMessage"]>) => service.admitMessage(...args)),
     },
     admitUserMessage: {
       configurable: true,

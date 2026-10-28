@@ -409,7 +409,7 @@ async function refreshWorkspaceSearchIndex(checkCurrent?:()=>void): Promise<bool
     checkCurrent?.();
     // Re-check Dream authority through the established index boundary before
     // touching new note-index metadata or launching the private writer.
-    markNoteIndexDirty();
+    await markNoteIndexDirty();
     launchWorkspaceIndexProcess({ scope: "notes" });
     await waitForWorkspaceIndexProcess();checkCurrent?.();
     return true;

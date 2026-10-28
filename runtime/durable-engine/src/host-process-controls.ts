@@ -1,4 +1,5 @@
 import type Database from "bun:sqlite";
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, defineExtension, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
@@ -133,7 +134,8 @@ export function createHostProcessControls(options: Options) {
         // Final revalidation and latch have no asynchronous gap and share the
         // writer exclusion used by native/host admission. COMMIT uncertainty
         // remains sealed until a committed failed round or operator reconcile.
-        root.transaction(() => { assertSqlIdle(scope); context.abortSignal?.throwIfAborted(); pending = receipt; }).immediate();
+        await admitSqliteWrite(root, () => { assertSqlIdle(scope); context.abortSignal?.throwIfAborted(); pending = receipt; },
+          assertOwner, context.abortSignal, 5000, assertOwner, () => { pending = undefined; });
         return { output: [{ type: "text" as const, text: nativeExitNotice(reason) }], details: { ...receipt, input: { ...receipt.input } },
           control: { terminate: true as const } };
       } catch {
@@ -198,7 +200,8 @@ export function createHostProcessControls(options: Options) {
   async function requestCommandExit(reason: string) {
     assertAdmission();
     if (!reason.trim() || reason.length > 512) throw Error("A short exit reason is required");
-    root.transaction(() => { assertSqlIdle(); commandPending = true; }).immediate();
+    await admitSqliteWrite(root, () => { assertSqlIdle(); commandPending = true; },
+      assertOwner, undefined, 5000, assertOwner, () => { commandPending = false; });
     try {
       await inspect();
       assertSqlIdle();

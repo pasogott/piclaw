@@ -46,18 +46,18 @@ test('native bash rejects stale ownership before spawn', async()=>fixture(async(
 
 }));
 
-test('native policy getters drive current SDK settings and retry persists without replay',()=>{
+test('native policy getters drive current SDK settings and retry persists without replay',async()=>{
  const priorAutoOverride=process.env.PICLAW_AUTO_COMPACTION_ENABLED;delete process.env.PICLAW_AUTO_COMPACTION_ENABLED;
  const db=new Database(':memory:');db.exec('CREATE TABLE router_state(key TEXT PRIMARY KEY,value TEXT)');let owner=true;
  const policy=createHostCommandPolicy(db,()=>{if(!owner)throw Error('owner lost');});
  try {
   expect(resolveSettings(policy.settings).retry.enabled).toBe(false);
-  policy.set('autoRetry',true);expect(resolveSettings(policy.settings).retry.enabled).toBe(true);
+  await policy.set('autoRetry',true);expect(resolveSettings(policy.settings).retry.enabled).toBe(true);
   const reopened=createHostCommandPolicy(db,()=>{});expect(reopened.read().autoRetry).toBe(true);
-  policy.set('autoRetry',false);expect(resolveSettings(policy.settings).retry.enabled).toBe(false);
-  policy.set('autoCompact',false);expect(resolveSettings(policy.settings).compaction.enabled).toBe(false);
-  policy.set('autoCompact',true);expect(resolveSettings(policy.settings).compaction.enabled).toBe(true);
-  owner=false;expect(()=>policy.set('autoRetry',true)).toThrow('owner lost');expect(()=>policy.read()).toThrow('owner lost');
+  await policy.set('autoRetry',false);expect(resolveSettings(policy.settings).retry.enabled).toBe(false);
+  await policy.set('autoCompact',false);expect(resolveSettings(policy.settings).compaction.enabled).toBe(false);
+  await policy.set('autoCompact',true);expect(resolveSettings(policy.settings).compaction.enabled).toBe(true);
+  owner=false;await expect(policy.set('autoRetry',true)).rejects.toThrow('owner lost');expect(()=>policy.read()).toThrow('owner lost');
   db.query('UPDATE router_state SET value=? WHERE key=?').run('invalid','native.auto-retry.v1');expect(()=>reopened.read()).toThrow('unreadable');
  }finally{db.close();if(priorAutoOverride===undefined)delete process.env.PICLAW_AUTO_COMPACTION_ENABLED;else process.env.PICLAW_AUTO_COMPACTION_ENABLED=priorAutoOverride;}
 });
