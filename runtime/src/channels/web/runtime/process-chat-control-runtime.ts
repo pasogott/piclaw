@@ -12,14 +12,12 @@ import { readAccessConfig } from "../../../core/config-access.js";
 import { parseControlCommand } from "../../../agent-control/index.js";
 import type { AgentControlCommand, AgentControlResult } from "../../../agent-control/index.js";
 import {
-  clearFailedRun,
   getChatCursor,
-  getFailedRun,
   getMessagesSince,
   setChatCursor,
   type InteractionRow,
 } from "../../../db.js";
-import type { FailedRunRecord } from "../../../db/chat-cursors.js";
+
 import { formatOutbound } from "../../../router.js";
 import { createUuid } from "../../../utils/ids.js";
 import { createLogger } from "../../../utils/logger.js";
@@ -46,9 +44,6 @@ export interface DeferredControlExecutionMessage {
 
 export interface ProcessChatMessageSelectionStore {
   getMessagesSince(chatJid: string, sinceTimestamp: string, assistantName: string): NewMessage[];
-  getFailedRun(chatJid: string): FailedRunRecord | undefined;
-  clearFailedRun(chatJid: string): void;
-  setChatCursor(chatJid: string, ts: string): void;
 }
 
 export interface ProcessChatCursorStore {
@@ -65,14 +60,6 @@ export interface ProcessChatSelectedMessage {
   effectiveThreadRootId: number | null;
 }
 
-export interface ProcessChatClearedStaleFailedRun {
-  kind: "stale_failed_run_cleared";
-  pendingMessages: NewMessage[];
-  currentMessage: NewMessage;
-  failedRun: FailedRunRecord;
-  shouldResume: boolean;
-}
-
 export interface ProcessChatNoPendingMessages {
   kind: "no_messages";
   pendingMessages: NewMessage[];
@@ -80,7 +67,6 @@ export interface ProcessChatNoPendingMessages {
 
 export type ProcessChatMessageSelection =
   | ProcessChatSelectedMessage
-  | ProcessChatClearedStaleFailedRun
   | ProcessChatNoPendingMessages;
 
 export interface ResolvedCommandModelState {
@@ -98,7 +84,6 @@ export interface DeferredControlCommandRuntime {
   getAgentStatus?(chatJid: string): Record<string, unknown> | null;
   broadcastEvent(eventType: string, data: unknown): void;
   saveState?(): void;
-  retryFailedOnModelSwitch(chatJid: string): boolean;
   resumeChat(chatJid: string, threadRootId?: number | null): void;
 }
 
@@ -141,9 +126,6 @@ export type MaterializeDeferredFollowupsResult =
 
 const defaultSelectionStore: ProcessChatMessageSelectionStore = {
   getMessagesSince,
-  getFailedRun,
-  clearFailedRun,
-  setChatCursor,
 };
 
 const defaultCursorStore: ProcessChatCursorStore = {
@@ -179,19 +161,6 @@ export function selectProcessChatMessage(options: {
   }
 
   const currentMessage = pendingMessages[0]!;
-  const failedRun = store.getFailedRun(options.chatJid);
-  if (failedRun && failedRun.messageId === currentMessage.id) {
-    store.clearFailedRun(options.chatJid);
-    store.setChatCursor(options.chatJid, currentMessage.timestamp);
-    return {
-      kind: "stale_failed_run_cleared",
-      pendingMessages,
-      currentMessage,
-      failedRun,
-      shouldResume: pendingMessages.length > 1,
-    };
-  }
-
   const messageThreadId = currentMessage.thread_id ?? null;
   return {
     kind: "message",
@@ -238,17 +207,6 @@ export async function resolveAndBroadcastModelStateForCommand(
     supports_thinking: state.supportsThinking,
   });
   return state;
-}
-
-export function resumeFailedRunAfterModelSwitch(
-  channel: Pick<DeferredControlCommandRuntime, "retryFailedOnModelSwitch" | "resumeChat">,
-  chatJid: string,
-  command: ModelControlCommand,
-): boolean {
-  if (command.type !== "model" && command.type !== "cycle_model") return false;
-  if (!channel.retryFailedOnModelSwitch(chatJid)) return false;
-  channel.resumeChat(chatJid);
-  return true;
 }
 
 export async function executeDeferredControlCommand(
@@ -385,12 +343,6 @@ export async function executeDeferredControlCommand(
   }
   cursorStore.setChatCursor(chatJid, message.timestamp);
   channel.saveState?.();
-
-  if (result.status === "success" && isModelControlCommand(command)) {
-    if (resumeFailedRunAfterModelSwitch(channel, chatJid, command)) {
-      return "resumed";
-    }
-  }
 
   const cursorNow = cursorStore.getChatCursor(chatJid);
   const remainingPersisted = cursorStore.getMessagesSince(chatJid, cursorNow, assistantName);

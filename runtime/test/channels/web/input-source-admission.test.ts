@@ -129,7 +129,7 @@ test("autonomous stable follow-up yields to pending sources and legacy queue ite
   expect(f.db.query('SELECT source_id FROM service_effect_s01_sources').all()).toEqual([{ source_id: 'goal:first' }]);
 });
 
-for (const busyOnce of [false, true]) test(`accepted stable dispatch retries only its exact source; busy=${busyOnce}`, async () => {
+for (const busyOnce of [false, true]) test(`accepted stable dispatch never replays an uncertain submission; busy=${busyOnce}`, async () => {
   const f = fixture(undefined, () => true), chatJid = 'web:stable-dispatch';
   const service = new QueuedFollowupLifecycleService(), messageId = 'goal-continuation:operation-1';
   f.db.transaction(() => service.enqueueAcceptedFollowupOnce(messageId, chatJid, 'Continue Goal', '2026-10-19T00:00:00.000Z',
@@ -147,8 +147,8 @@ for (const busyOnce of [false, true]) test(`accepted stable dispatch retries onl
       },
       async wait() {}, async settle() { return {}; },
     } as any });
-  expect(await dispatch(chatJid, messageId, rowId)!()).toBe('settled');
-  expect(submissions).toBe(busyOnce ? 2 : 1);
+  expect(await dispatch(chatJid, messageId, rowId)!()).toBe(busyOnce ? 'pending' : 'settled');
+  expect(submissions).toBe(1);
   expect(f.db.query('SELECT operation_id FROM service_effect_s01_operations').all()).toHaveLength(1);
   expect(dispatch(chatJid, 'goal-continuation:foreign', rowId)).toBeUndefined();
   f.db.query('UPDATE service_effect_s01_sources SET payload_ref=? WHERE chat_jid=? AND source_id=?').run('queued-source:foreign', chatJid, messageId);
@@ -655,7 +655,7 @@ test("manual queue input is adopted by the durable queued source hook", async ()
   expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
 });
 
-for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and recovery marker without legacy`, async () => {
+for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and accepted-source authority without legacy`, async () => {
   const f = fixture();
   let legacy = 0;
   (f.channel.agentPool as any).runAgent = () => { legacy++; throw Error("legacy forbidden"); };
@@ -673,7 +673,7 @@ for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${
   await Bun.sleep(10);
   expect(released).toBe(false);
   expect(legacy).toBe(0);
-  expect(f.db.query("SELECT count(*) AS n FROM chat_cursors WHERE inflight_message_id IS NOT NULL").get()).toEqual({ n: 0 });
+  expect((f.db.query("PRAGMA main.table_info(chat_cursors)").all() as {name:string}[]).map(row=>row.name)).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
   expect(f.db.query("SELECT cursor_ts FROM chat_cursors WHERE cursor_ts<>''").get()).toBeNull();
   const before = f.db.query("SELECT * FROM chat_cursors").get();
   shutdown.abort(); await original;
@@ -741,7 +741,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     if (!accepted) { accepted = work; throw Error("lost wait acknowledgement"); }
   } } : adapter;
   f.channel.dispatchAcceptedInput = createDurableQueueDispatch({ ...lifecycle, work: f.work, adapter: selectedAdapter, branchId: "main", assertCurrentWriter: assert,
-    ...(steering ? { runningCorrelation: (id: number) => ({ sessionId: 'queue-test', lane: 'main', harnessOperationId: String(id), state: 'running' as const, watchGeneration: 1 }) } : {}) });
+    ...(steering ? { runningCorrelation: (id: number) => ({ sessionId: 'queue-test', harnessOperationId: String(id) }) } : {}) });
   let legacyCalls = 0;
   (f.channel.agentPool as any).runAgent = () => { legacyCalls++; throw Error("legacy forbidden"); };
   const resumeQueued = f.channel.resumeChat.bind(f.channel);
@@ -809,7 +809,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
         } },
         onPendingIntent(input) { pendingIntent = input; recoveryDispatch.onPendingIntent(input); },
         chatJid: 'web:default', branchId: 'main', assertCurrentWriter: assert,
-        runningBinding: { sessionId: 'queue-test', lane: 'main', watchGeneration: 1 },
+        runningBinding: { sessionId: 'queue-test' },
         readQueued: id => getDeferredQueuedFollowups('web:default').find(item => item.rowId === id),
         validatePayload: ({ item }) => {
           const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutable } = item;
@@ -1191,7 +1191,7 @@ test.skipIf(!hasEngine)('reordered native queue executes second accepted source 
     await queueService.admitQueuedFollowupItem(['web:default',0,'second accepted'],()=>{},signal,f.acceptQueued);
     f.expectSources(2);
     const before=f.db.query('SELECT source_id,source_seq,payload_ref,source_hash FROM service_effect_s01_sources ORDER BY source_seq').all();
-    expect(queueService.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
+    expect(await queueService.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
     const selected=queueService.peekQueuedFollowupItem('web:default')!;
     expect(selected.queuedContent).toBe('second accepted');
     let index=0;

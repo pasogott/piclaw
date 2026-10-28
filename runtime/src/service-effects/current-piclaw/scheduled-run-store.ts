@@ -1,4 +1,6 @@
+import { admitSqliteWrite, isSqliteContention as isBusy } from '../../db/sqlite-async-admission.js';
 import type Database from "bun:sqlite";
+import type { ScheduledRunRetentionOwner, ScheduledRetentionPlan, ScheduledRetentionCursor } from "./scheduled-run-retention.js";
 import { writeScheduledTaskHead } from "../../db/scheduled-task-head.js";
 import { projectScheduledTask } from "../../db/scheduled-task-definitions.js";
 import { assertProcessAdmission } from "../../runtime/process-admission.js";
@@ -81,7 +83,7 @@ export interface ScheduledRunAdapterRuntime {
   recordTrace(input: NormalisedTraceInput): void;
 }
 
-export type ScheduledRunStoreConstructionResult = ResultValue<ScheduledRunStore & InterruptedScheduledRunReconciler, ScheduledRunStoreError>;
+export type ScheduledRunStoreConstructionResult = ResultValue<ScheduledRunStore & InterruptedScheduledRunReconciler & ScheduledRunRetentionOwner, ScheduledRunStoreError>;
 
 type RunRow = {
   run_id: string; task_id: string; task_revision: number; scheduled_for: string; state: ScheduledRunRecord["state"];
@@ -98,6 +100,10 @@ class AbortMutation extends Error {
   constructor(readonly error: ScheduledRunStoreError) { super(error._tag); }
 }
 class CorruptState extends Error {}
+function retentionFields(value:unknown,required:readonly string[],optional:readonly string[]=[]):boolean {
+  if(!value||typeof value!=="object"||Array.isArray(value))return false;
+  const keys=Reflect.ownKeys(value);return required.every(key=>Object.hasOwn(value,key))&&keys.every(key=>typeof key==="string"&&[...required,...optional].includes(key)&&"value" in Object.getOwnPropertyDescriptor(value,key)!);
+}
 
 function errorOf(
   tag: ScheduledRunStoreErrorTag,
@@ -129,10 +135,6 @@ function parseDecision(row: DecisionRow): unknown {
   try { return JSON.parse(row.result_json); } catch { throw new CorruptState(); }
 }
 
-function isBusy(error: unknown): boolean {
-  return error instanceof Error && /busy|locked/i.test(error.message);
-}
-
 export function createCurrentPiclawScheduledRunStore(
   database: Database,
   runtime: ScheduledRunAdapterRuntime,
@@ -145,7 +147,7 @@ export function createCurrentPiclawScheduledRunStore(
   }
 }
 
-class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
+class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunRetentionOwner {
   readonly outbox: ServiceOutboxEnqueueInserter;
   private serial: Promise<void> = Promise.resolve();
 
@@ -241,6 +243,72 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     return this.mutate("cleanupTerminal", effectId, null, null, () => this.cleanup(request));
   }
 
+  async planRetention(input:{settledBefore:string;limit:number;after?:ScheduledRetentionCursor|null}):Promise<ResultValue<ScheduledRetentionPlan,ScheduledRunStoreError>> {
+    if(!retentionFields(input,["settledBefore","limit"],["after"]))return Result.err(errorOf("invalid_request"));
+    const request=normaliseCleanup({settledBefore:input.settledBefore,limit:input.limit}),rawAfter=input.after??null;
+    if(!request||rawAfter&&(!retentionFields(rawAfter,["settledAt","runId"])||!canonicalInstant(rawAfter.settledAt)||!validScheduledRunId(rawAfter.runId)||rawAfter.settledAt>=request.settledBefore))return Result.err(errorOf("invalid_request"));
+    const after=rawAfter?Object.freeze({...rawAfter}):null;
+    try{return Result.ok(this.database.transaction(()=>{
+      this.assertRetentionSchema();
+      const page=this.database.query(`SELECT * FROM main.${RUNS} WHERE state IN ('completed','abandoned') AND settled_at<?
+        AND (? IS NULL OR settled_at>? OR (settled_at=? AND run_id>?)) ORDER BY settled_at,run_id LIMIT ?`)
+        .all(request.settledBefore,after?.settledAt??null,after?.settledAt??"",after?.settledAt??"",after?.runId??"",request.limit+1) as RunRow[];
+      const inspected=page.slice(0,request.limit),rows:ScheduledRetentionPlan["rows"][number][]=[];
+      for(const row of inspected)if(this.retentionEligible(row)){
+        const record=this.readRecord(row.run_id);if(!record)throw new CorruptState();
+        rows.push(Object.freeze({runId:row.run_id,settledAt:row.settled_at!,sha256:canonicalRequestHash(record),serializedBytes:Buffer.byteLength(JSON.stringify(record))}));
+      }
+      const last=inspected.at(-1),through=last?Object.freeze({settledAt:last.settled_at!,runId:last.run_id}):after;
+      return Object.freeze({version:1 as const,owner:"scheduled-run-history" as const,settledBefore:request.settledBefore,after,through,
+        examined:inspected.length,rows:Object.freeze(rows),nextCursor:page.length>request.limit?through:null});
+    })());}catch(error){return Result.err(errorOf(error instanceof CorruptState?"corrupt_state":"storage_unavailable"));}
+  }
+
+  async applyRetention(input:ScheduledRetentionPlan):Promise<ResultValue<CleanupScheduledRunsResult,ScheduledRunStoreError>> {
+    let plan:ScheduledRetentionPlan;try{plan=structuredClone(input);}catch{return Result.err(errorOf("invalid_request"));}
+    const cursor=(value:ScheduledRetentionCursor|null)=>value===null||retentionFields(value,["settledAt","runId"])&&!!canonicalInstant(value.settledAt)&&validScheduledRunId(value.runId)&&value.settledAt<plan.settledBefore;
+    const compare=(a:ScheduledRetentionCursor,b:ScheduledRetentionCursor)=>a.settledAt<b.settledAt?-1:a.settledAt>b.settledAt?1:a.runId<b.runId?-1:a.runId>b.runId?1:0;
+    if(!retentionFields(plan,["version","owner","settledBefore","after","through","examined","rows","nextCursor"])||plan.version!==1||plan.owner!=="scheduled-run-history"||!canonicalInstant(plan.settledBefore)||!Number.isSafeInteger(plan.examined)||plan.examined<0||plan.examined>100||
+      !Array.isArray(plan.rows)||plan.rows.length>plan.examined||!cursor(plan.after)||!cursor(plan.through)||!cursor(plan.nextCursor)||
+      (plan.examined===0?(plan.after===null?plan.through!==null:!plan.through||compare(plan.through,plan.after)!==0):!plan.through||plan.after!==null&&compare(plan.through,plan.after)<=0)||
+      plan.nextCursor!==null&&(!plan.through||compare(plan.nextCursor,plan.through)!==0))return Result.err(errorOf("invalid_request"));
+    let previous=plan.after;
+    for(const row of plan.rows){if(!retentionFields(row,["runId","settledAt","sha256","serializedBytes"]))return Result.err(errorOf("invalid_request"));const position={settledAt:row.settledAt,runId:row.runId};
+      if(!cursor(position)||typeof row.sha256!=="string"||row.sha256.length!==64||!validHash(row.sha256)||!Number.isSafeInteger(row.serializedBytes)||row.serializedBytes<1||previous&&compare(position,previous)<=0||!plan.through||compare(position,plan.through)>0)return Result.err(errorOf("invalid_request"));previous=position;}
+    if(plan.rows.length===0)return Result.ok(Object.freeze({removed:0,runIds:Object.freeze([])})); // No effect and no receipt growth for held/empty pages.
+    const requestHash=canonicalRequestHash(plan),key=`retention-v1:${requestHash}`;
+    this.trace("cleanupTerminal",key,null,null,"call",null);
+    return this.mutate("cleanupTerminal",key,null,null,()=>this.database.transaction(()=>{
+      assertProcessAdmission();this.assertRetentionSchema();
+      const replay=this.replay(key,requestHash,"cleanupTerminal",null);
+      if(replay!==undefined){const result=decodeCleanupResult(replay);if(!result)throw new CorruptState();return Result.ok(result);}
+      const selected:RunRow[]=[];
+      for(const expected of plan.rows){const row=this.readRunRow(expected.runId),record=row&&this.readRecord(expected.runId);
+        if(!row||!record||row.settled_at!==expected.settledAt||canonicalRequestHash(record)!==expected.sha256||Buffer.byteLength(JSON.stringify(record))!==expected.serializedBytes||!this.retentionEligible(row))throw new AbortMutation(errorOf("invalid_transition"));
+        selected.push(row);}
+      for(const row of selected)this.retireRun(row);
+      const result=Object.freeze({removed:selected.length,runIds:Object.freeze(selected.map(row=>row.run_id))});
+      this.writeDecision(key,"cleanupTerminal",requestHash,null,result,plan.settledBefore);
+      const saved=this.replay(key,requestHash,"cleanupTerminal",null);if(saved===undefined||canonicalRequestHash(saved)!==canonicalRequestHash(result))throw new CorruptState();
+      return Result.ok(result);
+    }).immediate());
+  }
+
+  private assertRetentionSchema(){
+    if(this.database.query(`SELECT 1 FROM sqlite_temp_schema WHERE name LIKE 'service_effect_s07_%' OR name IN ('task_run_logs','budget_work','budget_request_reservations','service_effect_s05_outbox')`).get())throw new CorruptState();
+  }
+  private retentionEligible(row:RunRow):boolean {
+    if(!['completed','abandoned'].includes(row.state)||row.operation_id!==null||row.result_ref!==null)return false; // Retain native accepted sources and opaque external result dependencies.
+    if(this.readSnapshot(row.task_id,row.task_revision).executionRepeatability!=="repeatable")return false;
+    if(this.database.query(`SELECT 1 FROM main.${TASKS} WHERE task_id=? AND current_revision=? AND status='paused' AND next_run_at=?`).get(row.task_id,row.task_revision,row.scheduled_for))return false;
+    if(hasScheduledHistoryProjection(this.database)&&this.database.query("SELECT 1 FROM main.task_run_logs WHERE occurrence_id=? OR (task_id=? AND ?='task_run_log:'||id)").get(row.run_id,row.task_id,row.result_ref))return false;
+    if(this.database.query(`SELECT 1 FROM main.${LINKS} l JOIN main.service_effect_s05_outbox o ON o.outbox_id=l.outbox_id WHERE l.run_id=? AND
+      (o.state IN ('pending','started','unknown') OR o.certainty='unknown' OR o.retry_at IS NOT NULL)`).get(row.run_id))return false;
+    const budget=this.database.query("SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='budget_request_reservations'").get();
+    if(budget&&this.database.query("SELECT 1 FROM main.budget_work w JOIN main.budget_request_reservations r ON r.work_id=w.id WHERE w.scheduled_task_id=? AND r.state IN ('reserved','dispatched','unresolved')").get(row.task_id))return false;
+    return true;
+  }
+
   private async mutate<T>(
     method: MutationMethod,
     effectId: string,
@@ -255,7 +323,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     await previous;
     try {
       if (this.runtime.hitFault("before_effect", method)) return this.failed(method, effectId, operationId, version, errorOf("storage_unavailable"), sourceSeq);
-      const result = action();
+      const result = await admitSqliteWrite(this.database, action);
       if (!result.ok) return this.failed(method, effectId, operationId, version, result.error, sourceSeq);
       if (this.runtime.hitFault("effect_then_lost_acknowledgement", method)) {
         return this.failed(method, effectId, operationId, version, errorOf("storage_unavailable", "unknown", true), sourceSeq);
@@ -500,7 +568,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       WHERE o.operation_id=? AND o.chat_jid=? AND o.primary_source_seq=? AND s.source_id=? AND s.kind='scheduled_agent'
       AND o.phase='terminal' AND o.terminal_disposition='failed' AND o.terminal_error_code='scheduled_run_interrupted'
       AND s.state='disposed' AND s.disposition_reason='scheduled_run_interrupted'
-      AND o.harness_session_id IS NULL AND o.harness_lane IS NULL AND o.harness_operation_id IS NULL AND o.harness_state IS NULL AND o.harness_watch_generation IS NULL
+      AND o.harness_session_id IS NULL AND o.harness_operation_id IS NULL
       AND o.cancellation_source_seq IS NULL AND o.terminal_message_row_id IS NULL
       AND (c.active_operation_id IS NULL OR c.active_operation_id<>o.operation_id)
       AND (SELECT COUNT(*) FROM service_effect_s01_operation_sources os WHERE os.operation_id=o.operation_id)=1`).get(run.operation_id,snapshot.chatJid,run.accepted_source_seq,run.run_id) as {version:number;terminal_committed_at:string}|null;
@@ -567,12 +635,17 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `cleanupTerminal:${request.settledBefore}:${request.limit}`;
     const requestHash = canonicalRequestHash(request);
     return this.database.transaction(() => {
+      assertProcessAdmission();this.assertRetentionSchema();
       const replay = this.replay(key, requestHash, "cleanupTerminal", null);
       if (replay !== undefined) {
         const result = decodeCleanupResult(replay);
         if (!result) throw new CorruptState();
         return Result.ok(result);
       }
+      // Exact existing decisions still replay above. Fresh native retention must
+      // use the explicit dry-run plan; this older selection API has no approval
+      // snapshot or advancing restart cursor and cannot bypass that owner.
+      if(this.database.query("SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='piclaw_durable_bindings_v1'").get())throw new AbortMutation(errorOf("invalid_transition"));
       // Retain canonical rebuild/replay authority while an explicitly linked
       // host payload survives, or the current paused head still references its
       // successor decision. Legacy unlinked rows are never guessed into it.
@@ -580,33 +653,43 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         ? `AND NOT EXISTS (SELECT 1 FROM main.task_run_logs h WHERE h.occurrence_id=r.run_id OR (h.task_id=r.task_id AND r.result_ref='task_run_log:' || h.id))` : "";
       const rows = this.database.query(
         `SELECT r.* FROM ${RUNS} r WHERE r.state IN ('completed','abandoned') AND r.settled_at<? ${protectedHistory}
+          AND NOT EXISTS (SELECT 1 FROM main.${LINKS} l JOIN main.service_effect_s05_outbox o ON o.outbox_id=l.outbox_id
+            WHERE l.run_id=r.run_id AND (o.state IN ('pending','started','unknown') OR o.certainty='unknown' OR o.retry_at IS NOT NULL))
           AND NOT EXISTS (SELECT 1 FROM ${TASKS} t WHERE t.task_id=r.task_id AND t.current_revision=r.task_revision
             AND t.status='paused' AND t.next_run_at=r.scheduled_for)
           ORDER BY r.settled_at,r.run_id LIMIT ?`,
       ).all(request.settledBefore, request.limit) as RunRow[];
       const runIds: string[] = [];
       for (const row of rows) {
-        const next = this.database.query(`SELECT decision_hash FROM ${NEXT} WHERE run_id=?`).get(row.run_id) as { decision_hash: string } | undefined;
-        if (!next) throw new CorruptState();
-        this.database.query(
-          `INSERT INTO ${TOMBSTONES}(run_id,task_id,task_revision,scheduled_for,state,attempt,status,next_run_at,head_disposition,settled_at,decision_method,decision_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-        ).run(row.run_id, row.task_id, row.task_revision, row.scheduled_for, row.state, row.attempt, row.result_status, row.next_run_at, row.head_disposition, row.settled_at, row.state === "completed" ? "complete" : "abandon", next.decision_hash);
-        this.statement("tombstone_insert");
-        this.database.query(`DELETE FROM ${DECISIONS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${LINKS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${BINDINGS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${LOGS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${ABANDONMENTS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${NEXT} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${RENEWALS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${LEASES} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
-        this.database.query(`DELETE FROM ${RUNS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+        this.retireRun(row);
         runIds.push(row.run_id);
       }
       const result = Object.freeze({ removed: runIds.length, runIds: Object.freeze(runIds) });
       this.writeDecision(key, "cleanupTerminal", requestHash, null, result, request.settledBefore);
       return Result.ok(result);
     }).immediate();
+  }
+
+  private retireRun(row:RunRow):void {
+    const next = this.database.query(`SELECT decision_hash FROM ${NEXT} WHERE run_id=?`).get(row.run_id) as { decision_hash: string } | undefined;
+    if (!next) throw new CorruptState();
+    this.database.query(
+      `INSERT INTO ${TOMBSTONES}(run_id,task_id,task_revision,scheduled_for,state,attempt,status,next_run_at,head_disposition,settled_at,decision_method,decision_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(row.run_id, row.task_id, row.task_revision, row.scheduled_for, row.state, row.attempt, row.result_status, row.next_run_at, row.head_disposition, row.settled_at, row.state === "completed" ? "complete" : "abandon", next.decision_hash);
+    this.statement("tombstone_insert");
+    if(!this.readTombstone(row.run_id))throw new CorruptState();
+    this.database.query(`DELETE FROM ${DECISIONS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${LINKS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${BINDINGS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${LOGS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${ABANDONMENTS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${NEXT} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${RENEWALS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${LEASES} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+    this.database.query(`DELETE FROM ${RUNS} WHERE run_id=?`).run(row.run_id);
+    const removed=this.database.query("SELECT changes() AS n").get() as {n:number};
+    if(removed.n!==1)throw new CorruptState();
+    this.statement("retention_delete");
   }
 
   private requireFencedRun(

@@ -82,7 +82,7 @@ describe("web agent status helpers", () => {
     });
   });
 
-  test("handleAgentStatusRequest triggers stale inflight recovery when no active status exists", async () => {
+  test("handleAgentStatusRequest stays read-only when no active status exists", async () => {
     const req = new Request("https://example.com/agent/status?chat_jid=web:ux");
     const calls: Array<{ chatJid: string; hasActiveStatus?: boolean }> = [];
     const res = handleAgentStatusRequest(req, createContext({
@@ -94,7 +94,7 @@ describe("web agent status helpers", () => {
     }));
 
     expect(res.status).toBe(200);
-    expect(calls).toEqual([{ chatJid: "web:ux", hasActiveStatus: false }]);
+    expect(calls).toEqual([]);
     expect(await res.json()).toEqual({
       status: "idle",
       state: "idle",

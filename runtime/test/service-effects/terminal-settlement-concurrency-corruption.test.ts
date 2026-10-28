@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,7 +89,9 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
       owner.seedOperation(terminalOperation());
       contender.database.exec("PRAGMA busy_timeout=0");
       owner.database.exec("BEGIN IMMEDIATE");
-      const blocked = await contender.store.commitTerminal(terminalRequest());
+      const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(5001);
+      let blocked: Awaited<ReturnType<typeof contender.store.commitTerminal>>;
+      try { blocked = await contender.store.commitTerminal(terminalRequest()); } finally { clock.mockRestore(); }
       expect(blocked.ok).toBeFalse();
       if (!blocked.ok) {
         expect(blocked.error._tag).toBe("storage_unavailable");
@@ -132,9 +134,8 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
           .prepare(
             `INSERT INTO service_effect_s01_operations(
                operation_id,chat_jid,version,phase,primary_source_seq,
-               harness_session_id,harness_lane,harness_operation_id,harness_state,
-               harness_watch_generation
-             ) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+               harness_session_id,harness_operation_id
+             ) VALUES (?,?,?,?,?,?,?)`,
           )
           .run(
             "operation-2",
@@ -143,10 +144,7 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
             "settling",
             2,
             TERMINAL_HARNESS.sessionId,
-            TERMINAL_HARNESS.lane,
             TERMINAL_HARNESS.harnessOperationId,
-            TERMINAL_HARNESS.state,
-            TERMINAL_HARNESS.watchGeneration,
           );
         subject.database
           .prepare(

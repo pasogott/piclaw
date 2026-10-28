@@ -449,7 +449,6 @@ export function createWebChannelConstructorFactory(
     interactionBroadcaster,
     sendMessage: (chatJid, text, sendOptions) => runtimeFollowupFacade.sendMessage(chatJid, text, sendOptions),
     broadcastEvent: (eventType, data) => channel.broadcastEvent(eventType, data),
-    skipFailedOnModelSwitch: (chatJid) => runtimeState.skipFailedOnModelSwitch(chatJid),
     forwardAgentMessage: async (req, pathname, chatJid, agentId) => {
       return await handleAgentMessageRequest(
         channel as unknown as WebChannelLike,

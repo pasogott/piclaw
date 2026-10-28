@@ -2,7 +2,7 @@
  * agent-pool/service-factory.ts – Constructor wiring for AgentPool helper services.
  */
 
-import type { ExtensionFactory, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, ExtensionFactory, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { getAttachmentRegistry } from "./attachments.js";
 import { getSshConfig } from "../db.js";
@@ -10,15 +10,15 @@ import { readAccessConfig } from '../core/config-access.js';
 import { createChatSshCoreExtension, resolveSshCoreConfigFromChatConfig } from "../extensions/ssh-core.js";
 import { AgentBranchManager } from "./branch-manager.js";
 import { AgentRuntimeFacade } from "./runtime-facade.js";
-import { AgentSessionBinder } from "./session-binder.js";
-import { AgentSessionManager, type PoolEntry } from "./session-manager.js";
-import { AgentToolFactory } from "./tool-factory.js";
-import { AgentTurnCoordinator } from "./turn-coordinator.js";
-import { installSessionUsageRecorder } from "./usage.js";
+import type { AgentSessionBinder } from "./session-binder.js";
+import type { AgentSessionManager, PoolEntry } from "./session-manager.js";
+import type { AgentToolFactory, AgentBashOperations } from "./tool-factory.js";
 import type { AgentPoolOptions } from "./contracts.js";
-import type { AgentBashOperations } from "./tool-factory.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
 import { McpCodemodeController } from "./mcp-codemode-runtime.js";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 /** Shared logger callbacks used across extracted AgentPool services. */
 export interface AgentPoolLogHooks {
@@ -29,6 +29,7 @@ export interface AgentPoolLogHooks {
 
 /** Inputs required to assemble the extracted AgentPool helper services. */
 export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
+  legacyCapture?:true;
   pool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
   authStorage: PiclawCredentialStore;
@@ -42,16 +43,25 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   createSession?: AgentPoolOptions["createSession"];
 }
 
+type SessionBinderService = Pick<AgentSessionBinder, "setBinder" | "bindSession">;
+type ToolFactoryService = Pick<AgentToolFactory, "createDefaultTools" | "createCustomToolOverrides">;
+type SessionManagerService = Pick<AgentSessionManager,
+  "assertLegacyCaptureIdle" | "blockMcpAdmissions" | "fenceMcpAndSnapshot" | "resumeMcpAdmissions" | "quarantineMcpRuntime"
+  | "acquireEvictionProtection" | "getOrCreate" | "refreshRuntime" | "prewarm" | "cancelPrewarm" | "hasPendingSessionWork"
+  | "recreate" | "hasProtectedRun" | "hasActiveMemoryReclamationWork" | "getInstrumentationSnapshot" | "evictIdle" | "shutdown">;
+type BranchManagerService = Pick<AgentBranchManager,
+  "ensureBranchRegistration" | "renameChatBranch" | "pruneChatBranch" | "mergeChatBranchIntoParent" | "renameChatJid"
+  | "restoreChatBranch" | "permanentPurgeChatBranch" | "createForkedChatBranch" | "createRootChatSession"
+  | "listActiveChats" | "listKnownChats" | "findActiveChatByAgentName" | "findChatByAgentName" | "getAgentHandleForChat">;
+
 /** Concrete helper instances composed into AgentPool. */
 export interface AgentPoolServices {
   mcpSettings: McpCodemodeController;
   attachments: ReturnType<typeof getAttachmentRegistry>;
-  sessionBinder: AgentSessionBinder;
-  toolFactory: AgentToolFactory;
-  turnCoordinator: AgentTurnCoordinator;
-  sessionManager: AgentSessionManager;
+  sessionBinder?: SessionBinderService;
+  sessionManager?: SessionManagerService;
   runtimeFacade: AgentRuntimeFacade;
-  branchManager: AgentBranchManager;
+  branchManager: BranchManagerService;
 }
 
 async function resolveSessionExtensionFactories(chatJid: string): Promise<ExtensionFactory[]> {
@@ -76,88 +86,81 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
+  if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
+    throw new Error("Durable service factory lookup must be callable");
+  }
+  if (options.legacyCapture !== undefined && options.legacyCapture !== true) throw Error("Invalid legacy capture selection");
+  if (options.legacyCapture && options.getDurableSession !== undefined) throw Error("Native host cannot select legacy capture composition");
+  if (!options.legacyCapture && options.getDurableSession === undefined) throw Error("Native host requires a durable session lookup; legacy capture must be explicit");
   const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
-  const sessionBinder = new AgentSessionBinder({
+
+  const durable = getDurableSession !== undefined;
+
+  const sessionBinder: SessionBinderService | undefined = durable ? undefined : new (require("./session-binder.js") as { AgentSessionBinder: new (...args: any[]) => SessionBinderService }).AgentSessionBinder({
     pool: options.pool,
-    onError: options.onError,
-  });
-  const toolFactory = new AgentToolFactory({
-    workspaceDir: options.workspaceDir,
-    bashOperations: options.bashOperations,
-  });
-  const turnCoordinator = new AgentTurnCoordinator({
-    takeAttachments: (chatJid) => attachments.take(chatJid),
-    touchSession: (chatJid) => {
-      const entry = options.pool.get(chatJid);
-      if (entry) entry.lastUsed = Date.now();
-    },
-    onInfo: options.onInfo,
-    onWarn: options.onWarn,
     onError: options.onError,
   });
 
-  let sessionManager: AgentSessionManager;
-  let branchManager: AgentBranchManager;
+  const toolFactory: ToolFactoryService | undefined = durable ? undefined : new (require("./tool-factory.js") as { AgentToolFactory: new (...args: any[]) => ToolFactoryService }).AgentToolFactory({
+    workspaceDir: options.workspaceDir,
+    bashOperations: options.bashOperations,
+  });
+
+  let sessionManager: SessionManagerService | undefined;
+  let branchManager: BranchManagerService;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
     getDurableSession,
-    acquireCommandProtection: chatJid => sessionManager.acquireEvictionProtection(chatJid),
-    getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
+    ...(durable ? {} : { acquireCommandProtection: (chatJid:string) => sessionManager!.acquireEvictionProtection(chatJid) }),
     modelRegistry: options.modelRegistry,
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     authPath: options.authStorage.authPath,
-    clearAttachments: (chatJid) => attachments.clear(chatJid),
-    refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
     listKnownChats: () => branchManager.listKnownChats(),
     onWarn: options.onWarn,
     onError: options.onError,
   });
-  branchManager = new AgentBranchManager({
-    pool: options.pool,
-    activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
-    getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
-    refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
-    isActive: (chatJid) => runtimeFacade.isActive(chatJid),
-    scheduleSessionWarmup: (chatJid) => sessionManager.prewarm(chatJid),
-    cancelSessionWarmup: (chatJid) => sessionManager.cancelPrewarm(chatJid),
-    hasPendingSessionWork: (chatJid) => sessionManager.hasPendingSessionWork(chatJid),
-    onWarn: options.onWarn,
-  });
-  sessionManager = new AgentSessionManager({
+
+  sessionManager = durable ? undefined : new (require("./session-manager.js") as { AgentSessionManager: new (...args: any[]) => SessionManagerService }).AgentSessionManager({
     getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
-    // Compatibility construction is absent from the selected durable backend.
-    ...(getDurableSession === undefined ? {
     createSession: options.createSession,
-    createDefaultTools: () => toolFactory.createDefaultTools(),
-    createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
-    getSessionExtensionFactories: (chatJid) => resolveSessionExtensionFactories(chatJid),
-    bindSession: async (runtime, chatJid) => {
-      installSessionUsageRecorder(runtime.session, chatJid, options.onWarn);
-      await sessionBinder.bindSession(runtime, chatJid);
+    createDefaultTools: () => toolFactory!.createDefaultTools(),
+    createCustomToolOverrides: (chatJid: string) => toolFactory!.createCustomToolOverrides(chatJid),
+    getSessionExtensionFactories: (chatJid: string) => resolveSessionExtensionFactories(chatJid),
+    bindSession: async (runtime: AgentSessionRuntime, chatJid: string) => {
+      (require("./usage.js") as { installSessionUsageRecorder: (session: unknown, chatJid: string, onWarn?: AgentPoolLogHooks["onWarn"]) => void })
+        .installSessionUsageRecorder(runtime.session, chatJid, options.onWarn);
+      await sessionBinder!.bindSession(runtime, chatJid);
     },
-    ensureBranchRegistration: (chatJid, session) => {
+    ensureBranchRegistration: (chatJid: string, session?: AgentSession | null) => {
       branchManager.ensureBranchRegistration(chatJid, session);
     },
-    } : {}),
     onInfo: options.onInfo,
     onWarn: options.onWarn,
     onError: options.onError,
   });
 
+  branchManager = new AgentBranchManager({
+    pool: options.pool,
+    activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
+    ...(durable ? {} : { getOrCreateRuntime: (chatJid:string) => sessionManager!.getOrCreate(chatJid) }),
+    isActive: (chatJid) => runtimeFacade.isActive(chatJid),
+    ...(durable ? {} : { scheduleSessionWarmup: (chatJid:string) => sessionManager!.prewarm(chatJid),
+      cancelSessionWarmup: (chatJid:string) => sessionManager!.cancelPrewarm(chatJid),
+      hasPendingSessionWork: (chatJid:string) => sessionManager!.hasPendingSessionWork(chatJid) }),
+    onWarn: options.onWarn,
+  });
+
   return {
     mcpSettings: new McpCodemodeController(sessionManager),
     attachments,
-    sessionBinder,
-    toolFactory,
-    turnCoordinator,
-    sessionManager,
+    ...(durable ? {} : {sessionBinder,sessionManager}),
     runtimeFacade,
     branchManager,
   };

@@ -7,7 +7,7 @@ import { createModels, createProvider, Type, type AssistantMessage, type Message
 import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
-import { materializePlanContext, hostPlanContextKind, materializeGoalContext, hostGoalContextKind, type GoalContextIdentity } from "../../runtime/durable-engine/src/host-plan-context.js";
+import { materializePlanContext, hostPlanContextKind, materializeGoalContext, hostGoalContextKind, withGoalSystemInstructions, type GoalContextIdentity } from "../../runtime/durable-engine/src/host-plan-context.js";
 import { projectPublicHistory } from "../../runtime/durable-engine/src/session-tree.js";
 import { context, barrier } from "./src/fixture.js";
 import { awaitWithContext } from "../../runtime/durable-engine/qualification/context.ts";
@@ -30,7 +30,7 @@ const answer = (plan?: string, index = 0): AssistantMessage => ({ role: "assista
   stopReason: plan === undefined ? "stop" : "toolUse", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
     totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 
-async function fixture(variant: {goal?:boolean; mixed?:boolean; identity?:()=>GoalContextIdentity} = {}) {
+async function fixture(variant: {goal?:boolean; mixed?:boolean; identity?:()=>GoalContextIdentity; keepRecentTokens?:number} = {}) {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "plan-context-"));
   const requests: Message[][] = [], failures: unknown[] = [];
   const state = { plan: "- [ ] ORIGINAL", allowed: true, prepared: false, maintenance: false,
@@ -49,10 +49,14 @@ async function fixture(variant: {goal?:boolean; mixed?:boolean; identity?:()=>Go
         if (variant.mixed) {
           const goal = await materializeGoalContext(state.wrap(current), api.taskId, "web:plan", request.messages,
             [{type:"text",text:"Immutable Goal objective"}], identity, assertCurrent, ctx);
-          return materializePlanContext(state.wrap(current), api.taskId, "web:plan", goal, content(state.plan), assertCurrent, ctx);
+          return materializePlanContext(state.wrap(current), api.taskId, "web:plan", identity.systemPrompt
+            ? [...withGoalSystemInstructions(goal, identity.systemPrompt, "web:plan", api.taskId)] : goal, content(state.plan), assertCurrent, ctx);
         }
-        return variant.goal ? materializeGoalContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), identity, assertCurrent, ctx)
-          : materializePlanContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), assertCurrent, ctx);
+        if (variant.goal) {
+          const goal = await materializeGoalContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), identity, assertCurrent, ctx);
+          return identity.systemPrompt ? withGoalSystemInstructions(goal, identity.systemPrompt, "web:plan", api.taskId) : goal;
+        }
+        return materializePlanContext(state.wrap(current), api.taskId, "web:plan", request.messages, content(state.plan), assertCurrent, ctx);
       });
       await state.afterPersist?.(ctx);
       state.prepared = true;
@@ -77,7 +81,7 @@ async function fixture(variant: {goal?:boolean; mixed?:boolean; identity?:()=>Go
   };
   models.setProvider(createProvider({ id: model.provider, models: [model], api: { stream, streamSimple: stream },
     auth: { apiKey: { name: "Synthetic only", resolve: async () => ({ auth: {}, source: "fixture" }) } } }));
-  const options = { models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } };
+  const options = { models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: variant.keepRecentTokens ?? 1 } } };
   const open = async () => {
     database = new BunSqliteDatabase(join(dir, "history.sqlite"));
     return Harness.open(await SqliteStorage.open(database), options, context);
@@ -374,60 +378,114 @@ for(const malformed of [["active"],["budget_limited"],{},0,null]) test(`Goal sta
   finally {await f.close();}
 });
 
-test("Goal system re-entry requires exact current-task snapshot authority and an unchanged prefix", async () => {
-  const { canonicalHostPromptRequest } = await import("../../runtime/durable-engine/src/host-plan-context.ts");
-  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
-  const model = [user("Hidden continuation")];
-  const proof = { id: 7, kind: "host.goal-context", data: { owner: "host:goal-prompt", chatJid: "web:goal", taskId: 12,
-    goalId: "g", generation: 2, status: "active", systemPrompt: "Trusted Goal rules" }, model };
-  const view: any = { messages: [user("Accepted input"), ...model], entries: [proof], contributions: [model] };
-  const overlay = { role: "system", content: "Trusted Goal rules", timestamp: 0 };
-  const canonical = (request: any, v: any = view) => canonicalHostPromptRequest(request, v, "web:goal", 12, "Plan");
-  expect(canonical([...view.messages, overlay])).toEqual(view.messages);
-  expect(canonical(view.messages)).toEqual(view.messages);
-  expect(() => canonical([...view.messages, overlay, overlay])).toThrow("Unknown Plan request cutoff");
-  for (const changed of [{ ...overlay, content: "Forged rules" }, { ...overlay, timestamp: 1 }, { ...overlay, role: "user" }])
-    expect(() => canonical([...view.messages, changed])).toThrow("Unknown Plan request cutoff");
-  for (const changed of [{ taskId: 13 }, { chatJid: "web:other" }, { owner: "foreign" }, { systemPrompt: "Other rules" }]) {
-    const foreign = { ...view, entries: [{ ...proof, data: { ...proof.data, ...changed } }] };
-    expect(() => canonical([...view.messages, overlay], foreign)).toThrow();
-  }
-  expect(() => canonical([...view.messages, overlay], { ...view, contributions: [[user("Edited")]] })).toThrow("Edited Goal system authority");
-  expect(() => canonical([user("Edited accepted input"), ...model, overlay])).toThrow("Unknown Plan request cutoff");
-  const realSystem = { ...view, messages: [overlay, ...view.messages] };
-  expect(canonical([...realSystem.messages, overlay], realSystem)).toEqual(realSystem.messages);
+// The request-local rules footer is intentionally not durable history.
+const composedPrefix = (a: readonly Message[], b: readonly Message[]) => prefix(
+  a.filter(m => m.role !== "system" || m.content !== "Trusted Goal rules"),
+  b.filter(m => m.role !== "system" || m.content !== "Trusted Goal rules"));
+const canonicalGoalIdentity = () => ({ goalId: "canonical-goal", generation: 1,
+  status: "active" as const, systemPrompt: "Trusted Goal rules", inputKey: "fixed-input" });
+const authorityRecords = (entries: readonly any[]) => entries.filter(entry => entry.kind === "host.goal-system-authority");
+
+test("canonical Goal rules survive Plan preparation, later generations and reopen without authority records", async () => {
+  const f = await fixture({ mixed: true, identity: canonicalGoalIdentity });
+  try {
+    for (let i = 0; i < 3; i++) await f.run(`history ${i}`);
+    const entries = await f.entries();
+    expect(authorityRecords(entries)).toEqual([]);
+    const goal = entries.filter(entry => entry.kind === hostGoalContextKind);
+    expect(goal).toHaveLength(1);
+    expect(goal[0]!.model?.map(message => message.role)).toEqual(["user"]);
+    for (const request of f.requests) {
+      expect(request.filter(message => message.role === "system" && message.content === "Trusted Goal rules")).toHaveLength(1);
+      expect(JSON.stringify(request)).toContain("Immutable Goal objective");
+      expect(JSON.stringify(request)).toContain(f.state.plan);
+    }
+    composedPrefix(f.requests[0]!, f.requests[1]!); composedPrefix(f.requests[1]!, f.requests[2]!);
+    expect(JSON.stringify(projectPublicHistory(entries, null))).not.toContain("Trusted Goal rules");
+    await f.reopen(); await f.run("after reopen");
+    expect((await f.entries()).filter(entry => entry.kind === hostGoalContextKind)).toHaveLength(1);
+    expect(authorityRecords(await f.entries())).toEqual([]);
+    composedPrefix(f.requests[2]!, f.requests[3]!);
+  } finally { await f.close(); }
 });
 
-test("a new Goal generation needs its own empty authority anchored to the unchanged frozen contribution", async () => {
-  const { canonicalHostPromptRequest, hostGoalSystemAuthorityKind } = await import("../../runtime/durable-engine/src/host-plan-context.ts");
-  const user = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }], timestamp: 0 });
-  const model = [user("Frozen continuation")];
-  const identity = { owner: "host:goal-prompt", chatJid: "web:goal", goalId: "g", generation: 2,
-    status: "active", systemPrompt: "Trusted Goal rules", inputKey: '["operation",[1]]' };
-  const anchor = { id: 7, kind: "host.goal-context", data: { ...identity, taskId: 12 }, model };
-  const authority = { id: 8, kind: hostGoalSystemAuthorityKind, data: { ...identity, taskId: 13, goalContextEntryId: 7 }, model: [] };
-  const messages = [user("Accepted input"), ...model], overlay = { role: "system" as const, content: identity.systemPrompt, timestamp: 0 };
-  const view: any = { messages, entries: [anchor, authority], contributions: [model, []] };
-  const canonical = (v: any = view, request: any = [...messages, overlay]) => canonicalHostPromptRequest(request, v, "web:goal", 13, "Plan");
-  expect(canonical()).toEqual(messages);
-  expect(projectPublicHistory([anchor, authority] as any, null)).toEqual([]);
-  expect(() => projectPublicHistory([{ ...authority, model }] as any, null)).toThrow("Invalid Goal system authority");
-  expect(() => projectPublicHistory([{ ...authority, data: { ...authority.data, owner: "foreign" } }] as any, null)).toThrow("Invalid Goal system authority");
-  expect(() => canonical({ ...view, entries: [anchor], contributions: [model] })).toThrow("Unknown Plan request cutoff");
-  expect(() => canonical(view, [...messages, overlay, overlay])).toThrow("Unknown Plan request cutoff");
-  // Raw entry chronology proves the anchor even when compaction changes view ordering.
-  expect(canonical({ ...view, entries: [authority, anchor], contributions: [[], model] })).toEqual(messages);
-  for (const change of [{ taskId: 14 }, { chatJid: "web:foreign" }, { owner: "foreign" }, { goalId: "other" },
-    { generation: 3 }, { status: "budget_limited" }, { systemPrompt: "Edited rules" }, { inputKey: '["other",[1]]' },
-    { goalContextEntryId: 99 }, { goalContextEntryId: 8 }]) {
-    const forged = { ...authority, data: { ...authority.data, ...change } };
-    expect(() => canonical({ ...view, entries: [anchor, forged] })).toThrow();
+test("canonical Goal rules rematerialize after actual SDK compaction without an authority lookup", async () => {
+  const f = await fixture({ goal: true, keepRecentTokens: 128, identity: canonicalGoalIdentity });
+  try {
+    for (let i = 0; i < 4; i++) await f.run(`history ${i}` + (i === 1 ? " old history".repeat(1000) : ""));
+    const original = (await f.entries()).find(entry => entry.kind === hostGoalContextKind)!;
+    f.state.maintenance = true;
+    const task = await f.conversation.compact(undefined, context);
+    const result = await f.harness.waitForTask(task, context);
+    expect(result.state.outcome.status).toBe("completed");
+    if (result.state.outcome.status === "completed") {
+      const placed = (await f.harness.submission(result.state.outcome.result.submissionId!, context))!;
+      expect((await placed.wait(context)).status).toBe("done");
+    }
+    f.state.maintenance = false;
+    expect((await f.conversation.context(context)).entries.some(entry => entry.id === original.id)).toBe(false);
+    await f.run("after compaction");
+    expect(f.requests.at(-1)!.filter(message => message.role === "system" && message.content === "Trusted Goal rules")).toHaveLength(1);
+    expect(authorityRecords(await f.entries())).toEqual([]);
+    expect((await f.entries()).find(entry => entry.id === original.id)).toEqual(original);
+    await f.run("same again"); composedPrefix(f.requests.at(-2)!, f.requests.at(-1)!);
+  } finally { await f.close(); }
+});
+
+test("retained orphaned legacy authority records are inert and do not block input preparation", async () => {
+  const f = await fixture({ mixed: true, identity: canonicalGoalIdentity });
+  try {
+    await f.conversation.commit(tx => tx.appendEntry(f.conversation.id, {
+      kind: "host.goal-system-authority", data: { goalContextEntryId: 999999 }, model: [],
+    }), context);
+    const legacy = (await f.entries()).find(entry => entry.kind === "host.goal-system-authority")!;
+    await f.run("ordinary input"); await f.run("another input");
+    expect(authorityRecords(await f.entries())).toEqual([legacy]);
+    expect(JSON.stringify(projectPublicHistory(await f.entries(), null))).not.toContain("goalContextEntryId");
+    expect(f.requests).toHaveLength(2); composedPrefix(f.requests[0]!, f.requests[1]!);
+  } finally { await f.close(); }
+});
+
+test("legacy Goal snapshots are reused unchanged without rewriting history or creating authority records", async () => {
+  const f = await fixture({ goal: true, identity: canonicalGoalIdentity });
+  try {
+    await f.conversation.commit(tx => tx.appendEntry(f.conversation.id, {
+      kind: hostGoalContextKind, data: { owner: "host:goal-prompt", chatJid: "web:plan", taskId: 12, ...canonicalGoalIdentity() },
+      model: [{ role: "user", content: [{ type: "text", text: "Frozen legacy continuation" }], timestamp: 0 }],
+    }), context);
+    const legacy = (await f.entries()).find(entry => entry.kind === hostGoalContextKind)!;
+    await f.run("upgrade"); await f.run("reuse");
+    const entries = await f.entries();
+    expect(entries.find(entry => entry.id === legacy.id)).toEqual(legacy);
+    expect(entries.filter(entry => entry.kind === hostGoalContextKind)).toHaveLength(1);
+    expect(authorityRecords(entries)).toEqual([]);
+    for (const request of f.requests) expect(request.filter(message => message.role === "system" && message.content === "Trusted Goal rules")).toHaveLength(1);
+    composedPrefix(f.requests[0]!, f.requests[1]!);
+  } finally { await f.close(); }
+});
+
+test("request-local Goal instructions survive shallow copies but reject forged, duplicate and foreign messages", async () => {
+  const model: Message[] = [{ role: "user", content: [{ type: "text", text: "Current Plan" }], timestamp: 0 }];
+  const plan: any = { id: 10, kind: hostPlanContextKind, model,
+    data: { owner: "host:plan-prompt", chatJid: "web:plan", taskId: 13 } };
+  const view: any = { messages: model, entries: [plan], contributions: [model] };
+  const conversation: any = { id: 1, context: async () => view,
+    entries: async () => { throw Error("No historical lookup is permitted"); },
+    commit: async (change: any) => change({
+      task: async () => ({ kind: "pi.generation", conversationId: 1, state: { status: "running" } }),
+      doc: async () => ({ run: { taskId: 13 } }), scanEntries: async () => ({ items: [plan] }),
+      appendEntry: async () => { throw Error("No duplicate snapshot is permitted"); },
+    }),
+  };
+  const owned = withGoalSystemInstructions(model, "Trusted Goal rules", "web:plan", 13);
+  expect(Object.isFrozen(owned.at(-1))).toBe(true);
+  const result = await materializePlanContext(conversation, 13 as TaskId, "web:plan", [...owned],
+    [{ type: "text", text: "Current Plan" }], () => {}, context);
+  expect(result).toEqual(owned); expect(result.at(-1)).toBe(owned.at(-1));
+  for (const request of [JSON.parse(JSON.stringify(owned)), [...owned, owned.at(-1)!],
+    withGoalSystemInstructions(model, "Trusted Goal rules", "web:other", 13),
+    withGoalSystemInstructions(model, "Trusted Goal rules", "web:plan", 14)]) {
+    await expect(materializePlanContext(conversation, 13 as TaskId, "web:plan", request,
+      [{ type: "text", text: "Current Plan" }], () => {}, context)).rejects.toThrow("Unknown Plan request cutoff");
   }
-  expect(() => canonical({ ...view, entries: [{ ...anchor, id: 9 }, { ...authority, data: { ...authority.data, goalContextEntryId: 9 } }] })).toThrow("Missing earlier Goal context authority");
-  expect(() => canonical({ ...view, contributions: [[user("Edited frozen contribution")], []] })).toThrow("Edited Goal context authority");
-  expect(() => canonical({ ...view, entries: [anchor, { ...authority, model }] })).toThrow("Invalid Goal system authority");
-  expect(() => canonical({ ...view, contributions: [model, model] })).toThrow("Edited Goal system authority");
-  expect(() => canonical(view, [user("Edited accepted input"), ...model, overlay])).toThrow("Unknown Plan request cutoff");
-  const realSystem = { ...view, messages: [overlay, ...messages] };
-  expect(canonical(realSystem, [...realSystem.messages, overlay])).toEqual(realSystem.messages);
 });

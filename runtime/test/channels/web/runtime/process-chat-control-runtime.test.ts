@@ -43,9 +43,6 @@ describe("process chat control runtime", () => {
   test("selectProcessChatMessage returns no_messages when the persisted frontier is empty", () => {
     const store: ProcessChatMessageSelectionStore = {
       getMessagesSince: () => [],
-      getFailedRun: () => undefined,
-      clearFailedRun: () => {},
-      setChatCursor: () => {},
     };
 
     expect(selectProcessChatMessage({
@@ -56,53 +53,9 @@ describe("process chat control runtime", () => {
     })).toEqual({ kind: "no_messages", pendingMessages: [] });
   });
 
-  test("selectProcessChatMessage clears a stale failed-run marker and signals whether replay should continue", () => {
-    const messages = [
-      makeMessage("m1", "2024-01-01T00:00:01.000Z"),
-      makeMessage("m2", "2024-01-01T00:00:02.000Z"),
-    ];
-    const cleared: string[] = [];
-    const cursorWrites: Array<{ chatJid: string; ts: string }> = [];
-
-    const store: ProcessChatMessageSelectionStore = {
-      getMessagesSince: () => messages,
-      getFailedRun: () => ({
-        prevTs: "2024-01-01T00:00:00.000Z",
-        failedTs: "2024-01-01T00:00:01.000Z",
-        messageId: "m1",
-        threadRootId: 41,
-        createdAt: "2024-01-01T00:00:03.000Z",
-      }),
-      clearFailedRun: (chatJid) => {
-        cleared.push(chatJid);
-      },
-      setChatCursor: (chatJid, ts) => {
-        cursorWrites.push({ chatJid, ts });
-      },
-    };
-
-    const selection = selectProcessChatMessage({
-      chatJid: "web:test",
-      prevCursor: "2024-01-01T00:00:00.000Z",
-      assistantName: "Pi",
-      store,
-    });
-
-    expect(selection).toMatchObject({
-      kind: "stale_failed_run_cleared",
-      currentMessage: expect.objectContaining({ id: "m1" }),
-      shouldResume: true,
-    });
-    expect(cleared).toEqual(["web:test"]);
-    expect(cursorWrites).toEqual([{ chatJid: "web:test", ts: "2024-01-01T00:00:01.000Z" }]);
-  });
-
   test("selectProcessChatMessage prefers the persisted message thread root over the queued frontier", () => {
     const store: ProcessChatMessageSelectionStore = {
       getMessagesSince: () => [makeMessage("m1", "2024-01-01T00:00:01.000Z", 42)],
-      getFailedRun: () => undefined,
-      clearFailedRun: () => {},
-      setChatCursor: () => {},
     };
 
     const selection = selectProcessChatMessage({
@@ -140,7 +93,7 @@ describe("process chat control runtime", () => {
       },
       getMessagesSince: () => {
         remainingReads += 1;
-        return [];
+        return [makeMessage("m2", "2024-01-01T00:00:02.000Z")];
       },
     };
 
@@ -181,7 +134,6 @@ describe("process chat control runtime", () => {
       saveState: () => {
         saveCalls += 1;
       },
-      retryFailedOnModelSwitch: () => true,
       resumeChat: (chatJid, threadRootId) => {
         resumeCalls.push({ chatJid, threadRootId });
       },
@@ -207,7 +159,7 @@ describe("process chat control runtime", () => {
     expect(action).toBe("resumed");
     expect(cursorHistory).toEqual(["2024-01-01T00:00:01.000Z"]);
     expect(saveCalls).toBe(1);
-    expect(remainingReads).toBe(0);
+    expect(remainingReads).toBe(1);
     expect(sends).toEqual([
       {
         chatJid: "web:test",
@@ -262,7 +214,6 @@ describe("process chat control runtime", () => {
       updateAgentStatus: (_chatJid, status) => { statusUpdates.push(status); },
       broadcastEvent: (event, payload) => { broadcasts.push({ event, payload }); },
       saveState: () => {},
-      retryFailedOnModelSwitch: () => false,
       resumeChat: () => {},
     };
 
@@ -369,7 +320,6 @@ describe("process chat control runtime", () => {
         broadcasts.push({ event, payload });
       },
       saveState: () => {},
-      retryFailedOnModelSwitch: () => false,
       resumeChat: (chatJid, threadRootId) => {
         resumeCalls.push({ chatJid, threadRootId });
       },

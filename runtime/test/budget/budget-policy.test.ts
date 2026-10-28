@@ -43,6 +43,16 @@ function storeKnownUsage(workId: string, chatJid: string, eventId: string, at: s
   });
 }
 
+test('budget effect check: read-only calendar evaluation preserves the database and the normal decision',()=>{
+  initDatabase();const db=getDb(),first=new Date('2026-09-08T12:00:00Z'),next=new Date('2026-09-09T12:00:00Z');
+  ensureBudgetWork({id:'policy:readonly',chatJid:'web:readonly',executionKind:'background'});
+  saveBudgetCap({scope:'instance_daily',metric:'api_usd_micros',amount:1000,timezone:'UTC'},db,first);
+  const before=db.serialize(),advisory=evaluateBudget({workId:'policy:readonly',now:next,readOnly:true},db);
+  expect(advisory.action).toBe('allow');expect(Buffer.from(db.serialize()).equals(Buffer.from(before))).toBe(true);
+  expect(evaluateBudget({workId:'policy:readonly',now:next},db)).toEqual(advisory);
+  expect(db.query('SELECT count(*) AS n FROM budget_cap_windows').get()).toEqual({n:2});
+});
+
 describe("budget policy", () => {
   test("leaves uncapped work allowed even when pricing is unavailable", () => {
     initDatabase();

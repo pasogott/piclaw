@@ -65,7 +65,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
     const policy = await openFixture({ acquired: true }); await policy.close();
     const model = { id: "synthetic", name: "Synthetic", provider: "qualification", api: "openai-completions" as const, baseUrl: "https://invalid.invalid", reasoning: false, input: ["text" as const], contextWindow: 100000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     const modelOptions = createAgentPoolModelOptions([model]);
-    const queue = new AgentQueue(), pool = new AgentPool({ ...modelOptions, createSession: async (chat, sessionDir) => {
+    const queue = new AgentQueue(), pool = new AgentPool({ ...modelOptions, getDurableSession:undefined,legacyCapture:true, createSession: async (chat, sessionDir) => {
       const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
         appendSystemPromptOverride: () => [], agentsFilesOverride: () => ({ agentsFiles: [] }),
         disabledBuiltinExtensions: ["codemode", "tool-search", "mcp"], systemPromptOverride: () => scenario === "happy-different-current" ? "Captured current continuation policy" : "original baseline" });
@@ -184,7 +184,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
           const bytes = new TextEncoder().encode(answers.get(ref)!);
           return { ref, bytes, byteLength: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
         } } },
-        runtime: { incarnation: identity.incarnation, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions: { models: policy.models, registry: policy.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } } },
+        runtime: { incarnation: identity.incarnation, now: () => new Date().toISOString(), harnessOptions: { models: policy.models, registry: policy.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } } },
         async openImporter() {
           opens++; const database = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
           importer = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(database));

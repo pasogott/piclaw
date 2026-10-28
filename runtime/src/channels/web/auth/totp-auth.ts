@@ -1,3 +1,5 @@
+import { getDb } from "../../../db/connection.js";
+import { admitSqliteWrite } from "../../../db/sqlite-async-admission.js";
 /**
  * channels/web/totp-auth.ts – TOTP verification endpoint orchestration.
  */
@@ -59,7 +61,8 @@ export async function handleAuthVerifyRequest(req: Request, ctx: TotpAuthContext
     return ctx.json({ error: "Too many failed attempts. Try again later." }, 429);
   }
 
-  const userId = verifyTotp(getWebRuntimeConfig().totpSecret, code, getTotpWindowSteps()) ? DEFAULT_WEB_USER_ID : null;
+  const secret = getWebRuntimeConfig().totpSecret;
+  const userId = verifyTotp(secret, code, getTotpWindowSteps()) ? DEFAULT_WEB_USER_ID : null;
   if (!userId) {
     const failure = ctx.failureTracker.recordFailure(clientKey, now);
     if (failure.locked) {
@@ -71,7 +74,11 @@ export async function handleAuthVerifyRequest(req: Request, ctx: TotpAuthContext
   }
 
   const token = randomSessionToken();
-  createWebSession(token, userId, getSessionTtlSeconds(), "totp");
+  const issued = await admitSqliteWrite(getDb(), () => {
+    if (!ctx.isAuthEnabled() || !ctx.isTotpEnabled() || getWebRuntimeConfig().totpSecret !== secret) return false;
+    createWebSession(token, userId, getSessionTtlSeconds(), "totp"); return true;
+  }, undefined, req.signal);
+  if (!issued) return ctx.json({ error: "Authentication changed; retry sign-in." }, 401);
   ctx.failureTracker.clear(clientKey);
 
   return okJson({ ok: true }, 200, {

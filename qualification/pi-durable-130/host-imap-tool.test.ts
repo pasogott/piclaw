@@ -30,14 +30,12 @@ async function fixture() {
     operationId: claimed.operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,
     payloadRef: source.payloadRef, requestId: "authority:request", requestHash: "a".repeat(64), submissionId: 42 as never }];
   const before = { operation: claimed.operation, inputs };
-  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq),
-    expectedVersion: claimed.operation.version, sessionId: "authority:session", lane: "main",
-    harnessOperationId: "42", state: "running" as const, watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "authority:session", harnessOperationId: "42" })));
   root.exec("CREATE TABLE authority_probe (value TEXT)");
   return { root, before, captured: { operation, inputs } };
 }
 
-for (const mode of ["valid", "foreign", "owner", "version", "source", "watch", "capture-await"] as const) {
+for (const mode of ["valid", "foreign", "owner", "version", "source", "binding", "capture-await"] as const) {
   test(`Imap actual captured operation authority: ${mode}`, async () => {
     const { root, captured } = await fixture();
     let effects = 0, captures = 0, owned = true;
@@ -48,12 +46,12 @@ for (const mode of ["valid", "foreign", "owner", "version", "source", "watch", "
           if (mode === "owner") owned = false;
           if (mode === "version") root.exec("UPDATE service_effect_s01_operations SET version=version+1");
           if (mode === "source") root.exec("UPDATE service_effect_s01_sources SET payload_ref='other'");
-          if (mode === "watch") root.exec("UPDATE service_effect_s01_operations SET harness_watch_generation=2");
+          if (mode === "binding") root.exec("UPDATE service_effect_s01_operations SET harness_operation_id='revoked'");
           const kv = getExtensionKvStore();
           kv.get("imap", "settings", "global");
           expect(() => kv.get("foreign", "settings", "global")).toThrow();
           expect(() => kv.get("imap", "profile", "chat", "web:foreign")).toThrow();
-          kv.set("imap", "authority-probe", true, "global");
+          await kv.write!("imap", () => kv.set("imap", "authority-probe", true, "global"));
           options.assertCurrent(); effects++;
           expect(options.chatJid).toBe(captured.operation.chatJid);
           return { content: [{ type: "text" as const, text: "synthetic" }], details: {} };

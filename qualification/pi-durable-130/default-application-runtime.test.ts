@@ -1,7 +1,8 @@
+import { admitSqliteWrite } from "../../runtime/src/db/sqlite-async-admission.js";
 import { resolveRequestPrincipal } from "../../runtime/src/channels/web/auth/principal.js";
 import "./src/test-guard.js";
 import { hydrateMcpKeychainCredentials } from "../../runtime/src/secure/mcp-keychain.js";
-import { getConfigPath } from "../../runtime/src/core/config-context.js";
+import { getConfigPath, getDataDir } from "../../runtime/src/core/config-context.js";
 import { delegateImages } from "./delegate-image-fixtures.ts";
 import { installGoalFixture } from "./goal-fixture.ts";
 import { expect, test, spyOn } from "bun:test";
@@ -19,7 +20,7 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync, renameSync, rmSync,linkSync,chmodSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
@@ -34,7 +35,7 @@ import { Harness, AgentDoc, InboxDoc, configure, createRegistry, defineTask, def
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { awaitWithContext, withAbortSignal, BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
 import { reserveHostRequest } from "../../runtime/durable-engine/src/host-request-accounting.ts";
-import { withTaskModelRequestScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
+import { withTaskModelRequestScope,taskModelRequestScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.js";
 import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.js";
 import { HostConversationRuntime } from "../../runtime/durable-engine/src/host-runtime.js";
@@ -44,10 +45,11 @@ import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-
 import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
+import { qualifyNativeRecoveryUnitFixture } from "./native-recovery-unit-fixture.ts";
 import { installOfficeViewerFixture } from "./office-viewer-fixture.ts";
 import { installEditableTableFixture } from "./editable-table-fixture.ts";
 import { installDrawioFixture } from "./drawio-fixture.ts";
-import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
+import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, bindAddonLocalMessage, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
 import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
@@ -73,6 +75,44 @@ function factoryTest(scenario: string, name: string, body: () => Promise<void>) 
     } finally { isolation.cleanup(); }
   }, 30_000);
 }
+
+for(const mode of ['completed','provider','provider-hold','unsafe-tool'] as const)factoryTest('native-background-process-'+mode,'native background accepted identity survives OS process restart: '+mode,async()=>{
+  const scenario=mode==='completed'?'native-dream-runner':mode==='provider'?'native-dream-runner-held-provider':mode==='provider-hold'?'native-dream-runner-held-provider-accounted':'native-dream-runner-unsafe-result';
+  const results:{phase:string;pid:number;sourceId:string;submissionId:number;providerCalls:number;unresolvedHolds:number}[]=[];
+  for(const phase of ['write','read']){
+    const child=Bun.spawn([process.execPath,resolve(import.meta.dir,'../../runtime/scripts/local-test-priority.ts'),'--cwd',import.meta.dir,'--',process.execPath,'test',import.meta.path,'-t','^default factory prepares and reopens'],{
+      cwd:import.meta.dir,env:{...process.env,PICLAW_DEFAULT_FACTORY_CASE:scenario,PICLAW_NATIVE_RESTART_PHASE:phase},stdout:'pipe',stderr:'pipe'});
+    const[exit,out,err]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+    if(exit!==0)throw Error('Native process restart '+mode+'/'+phase+':\n'+out+'\n'+err);
+    const line=out.split('\n').find(line=>line.startsWith('NATIVE_RESTART '));expect(line).toBeDefined();results.push(JSON.parse(line!.slice('NATIVE_RESTART '.length)));
+  }
+  expect(results[0]!.pid).not.toBe(results[1]!.pid);expect(results[1]!.sourceId).toBe(results[0]!.sourceId);expect(results[1]!.submissionId).toBe(results[0]!.submissionId);expect(results[1]!.providerCalls).toBe(0);expect(results[1]!.unresolvedHolds).toBe(mode==='provider-hold'?1:0);
+  expect(()=>process.kill(results[0]!.pid,0)).toThrow();console.log('NATIVE_PROCESS_RESTART '+JSON.stringify({mode,results}));
+});
+
+const reviewLifecyclePhases = ["fresh", "present", "disabled", "reinstalled", "uninstalled"] as const;
+const reviewLifecycleCase = reviewLifecyclePhases.map(phase => `native-code-review-lifecycle-${phase}`)
+  .find(phase => phase === process.env.PICLAW_DEFAULT_FACTORY_CASE);
+factoryTest("native-code-review-lifecycle", "default factory Code Review persistence survives real process boundaries", async () => {
+  const workspace = process.env.PICLAW_WORKSPACE!;
+  const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review");
+  const parked = join(workspace, "disabled-code-review-fixture");
+  for (const phase of reviewLifecyclePhases) {
+    if (phase === "present") installCodeReviewFixture(workspace);
+    if (phase === "disabled") renameSync(pkg, parked);
+    if (phase === "reinstalled") renameSync(parked, pkg);
+    if (phase === "uninstalled") rmSync(pkg, { recursive: true });
+    // Share this parent's disposable filesystem, never loader/module caches.
+    // The native source gate requires a real process boundary for source removal.
+    const child = Bun.spawn([process.execPath, resolve(import.meta.dir, "../../runtime/scripts/local-test-priority.ts"), "--cwd", import.meta.dir, "--", process.execPath,
+      "test", import.meta.path, "-t", "^default factory prepares and reopens"], {
+      cwd: import.meta.dir, env: { ...process.env, PICLAW_DEFAULT_FACTORY_CASE: `native-code-review-lifecycle-${phase}` }, stdout: "pipe", stderr: "pipe",
+    });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (code !== 0) throw Error(`Code Review lifecycle ${phase}:\n${out}\n${err}`);
+    expect(code).toBe(0);
+  }
+});
 
 for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actual preparation → bootstrap → main retains owner only for uncertain close=${uncertain}`, async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
@@ -131,7 +171,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-runner-denial", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-retention-unit", "native-runner-denial", "native-scheduled-lease-free", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-addon-execution", "native-addon-execution-accounting", "native-addon-execution-accounting-unknown", "native-addon-execution-accounting-capped", "native-addon-execution-accounting-capped-daily", "native-addon-execution-accounting-capped-exact", "native-addon-execution-accounting-capped-denied", "native-addon-execution-accounting-capped-initial-denied", "native-addon-execution-accounting-capped-auth-denied", "native-addon-execution-accounting-capped-unknown", "native-addon-execution-accounting-capped-missing-account", "native-addon-execution-accounting-capped-account-changed", "native-addon-execution-accounting-capped-tool-race", "native-addon-execution-accounting-capped-pricing-changed", "native-addon-execution-accounting-capped-small-output", "native-addon-execution-accounting-capped-cleanup-failed", "native-addon-execution-no-account-auth-cap", "native-addon-execution-revoked", "native-addon-execution-auth-revoked", "native-addon-execution-cancelled", "native-addon-execution-deadline", "native-addon-execution-quota", "native-addon-execution-ceiling", "native-addon-execution-large-result", "native-addon-execution-live-input", "native-addon-execution-recovery-terminal", "native-addon-execution-recovery-cancel-requested", "native-addon-execution-recovery-unknown", "native-addon-execution-recovery-cancelled", "native-addon-execution-recovery-unsafe", "native-addon-execution-recovery-input-ack", "native-addon-execution-recovery-budget-blocked", "native-addon-execution-recovery-owned", "native-addon-execution-recovery-no-source", "native-addon-service-execution", "native-addon-service-budget-resume", "native-addon-service-continuation", "native-addon-service-continuation-budget-gap", "native-addon-service-continuation-interrupted", "native-addon-service-continuation-staged", "native-addon-service-continuation-compaction", "native-addon-service-continuation-compaction-background", "native-addon-service-continuation-compaction-auth-revoked", "native-addon-service-continuation-compaction-auth-budget", "native-addon-service-continuation-compaction-unknown", "native-addon-service-continuation-compaction-background-held", "native-dream-runner", "native-dream-runner-model", "native-dream-runner-tools", "native-dream-runner-held-provider", "native-dream-runner-held-tool", "native-dream-runner-lock-revoked", "native-dream-runner-accounted", "native-dream-runner-budget-denied", "native-dream-runner-deadline", "native-dream-runner-original-time", "native-dream-runner-accounted-unknown", "native-dream-runner-unsafe-result", "native-dream-runner-held-provider-accounted", "native-dream-runner-recovery-unit", "native-dream-runner-scheduled-model", "native-dream-runner-scheduled-budget", "native-dream-runner-scheduled-lease-revoked", "native-dream-runner-scheduled-token-revoked", "native-dream-runner-scheduled-tool-revoked", "native-dream-runner-scheduled-reclaim", "native-dream-runner-scheduled-budget-denied", "native-dream-runner-scheduled-unknown", "native-dream-runner-scheduled-final-revoked", "native-dream-runner-scheduled-index-revoked", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-web-cursor-ack", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-binding-revoked", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-binding-revoked", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -181,18 +221,27 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   const compactionAccountingUnknown = scenario === "native-compaction-accounting-unknown";
   const compactionCloseFailure = scenario === "native-compaction-accounting-close-fail";
   let inManualSummary = false;
+  let privateCompactionSignal:AbortSignal|undefined,privateCompactionAuthChanged=false;
+  const heldPrivateSummary=scenario==='native-addon-service-continuation-compaction-background-held';
+  const privateSummaryEntered=Promise.withResolvers<void>(),privateSummaryReleased=Promise.withResolvers<void>(),privateMainSettled=Promise.withResolvers<void>();
+  let heldSummarySignal:AbortSignal|undefined;
+  const dreamWorkEntered=Promise.withResolvers<void>(),dreamWorkReleased=Promise.withResolvers<void>();
+  let dreamWorkSignal:AbortSignal|undefined;
   let checkpointHold: { entered(): void; signal?: AbortSignal } | undefined;
   const processAccounting = scenario.startsWith("native-process-exit-accounting");
   const processAccountingCloseFailure = scenario === "native-process-exit-accounting-close-fail";
   const usageProjection = scenario === "native-usage-projection";
-  const parentAccounting = usageProjection || processAccounting || scenario.startsWith("native-parent-accounting") || delegateAccounting || scheduledAccounting || compactionAccounting;
+  const serviceBudgetResume=scenario==='native-addon-service-budget-resume',serviceContinuation=scenario.startsWith('native-addon-service-continuation'),serviceBudgetGap=scenario==='native-addon-service-continuation-budget-gap';
+  const addonServiceCase=scenario.startsWith('native-addon-service-'),addonRecovery=scenario.startsWith('native-addon-execution-recovery-'),addonCompaction=scenario.startsWith('native-addon-service-continuation-compaction');
+  const parentAccounting = usageProjection || processAccounting || scenario.startsWith("native-parent-accounting") || delegateAccounting || scheduledAccounting || compactionAccounting || scenario.startsWith('native-addon-execution-accounting') || serviceBudgetResume || serviceBudgetGap || addonRecovery || addonCompaction || scenario.startsWith('native-dream-runner-accounted') || scenario==='native-dream-runner-budget-denied' || scenario==='native-dream-runner-held-provider-accounted' || scenario.startsWith('native-dream-runner-scheduled-budget') || scenario==='native-dream-runner-scheduled-unknown';
   const accountingTwoTurns = scenario === "native-parent-accounting-two-turns";
   const accountingAuthDenied = scenario === "native-parent-accounting-auth-deny";
   const accountingRotate = scenario === "native-parent-accounting-rotate";
   const accountingCloseFailure = processAccountingCloseFailure || scenario === "native-parent-accounting-close-work-fail";
   const accountingStorageFailure = scenario === "native-parent-accounting-storage-fail";
-  const accountingUnknown = scenario === "native-parent-accounting-unknown";
+  const accountingUnknown = scenario==='native-dream-runner-scheduled-unknown' || scenario==='native-dream-runner-held-provider-accounted' || scenario==='native-dream-runner-accounted-unknown' || scenario === "native-parent-accounting-unknown" || scenario.startsWith('native-addon-execution-accounting')&&scenario.endsWith('-unknown');
   const model = { provider: parentAccounting ? "openai-codex" : "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: reasoningThinking, contextWindow: 10000, maxTokens: 1000, cost: { input: parentAccounting ? 1 : 0, output: parentAccounting ? 1 : 0, cacheRead: 0, cacheWrite: 0 } };
+  if(scenario==='native-addon-execution-accounting-capped-small-output')model.cost.output=10000;
   if (parentAccounting) {
     mkdirSync(getPiclawAgentDir(), { recursive: true });
     writeFileSync(join(getPiclawAgentDir(), "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: "synthetic-access", refresh: "synthetic-refresh", accountId: "synthetic-account", expires: Date.now() + 60000 } }), { mode: 0o600 });
@@ -208,6 +257,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   }
   const requested: string[] = [];
   const planRequests: string[] = [];
+  const requestToolNames:string[][]=[];
   let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
   const nativeInfrastructure = scenario === "native-infrastructure";
   if (nativeInfrastructure) {
@@ -226,6 +276,12 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   }
   if (accountingTwoTurns) toolSequence = [{ name: "read", arguments: { path: "accounting-two-turns.txt" } }];
   if (accountingTwoTurns) writeFileSync(join(workspace, "accounting-two-turns.txt"), "accounted tool turn");
+  if(scenario.startsWith('native-addon-execution')||addonServiceCase)toolSequence=[
+    {name:'write',arguments:{path:join(workspace,'native-addon-result.txt'),content:'ADMITTED_NATIVE_ADDON'}},
+    scenario==='native-addon-execution-quota'?{name:'write',arguments:{path:join(workspace,'native-addon-result.txt'),content:'FORBIDDEN_AFTER_QUOTA'}}:{name:'read',arguments:{path:join(workspace,'native-addon-result.txt')}},
+  ];
+  if(serviceContinuation)toolSequence=toolSequence!.slice(0,1);
+  if(scenario.startsWith('native-dream-runner'))toolSequence=[...(scenario==='native-dream-runner-tools'?[{name:'messages',arguments:{action:'search',query:'bounded-native-dream',chat_jid:'*',limit:1}},{name:'search_workspace',arguments:{query:'bounded-native-dream',scope:'notes',limit:1}}]:[]),{name:'write',arguments:{path:join(workspace,'notes/memory/native-dream-marker.md'),content:'ADMITTED_NATIVE_DREAM'}},{name:'read',arguments:{path:join(workspace,'notes/memory/native-dream-marker.md')}}];
   const nativeMcp = scenario.startsWith("native-mcp-");
   const mcpDisconnected = scenario === "native-mcp-disconnect";
   const mcpCatalogChanged = scenario === "native-mcp-catalog-change";
@@ -255,7 +311,8 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   const codemodeReviewCancelled = scenario === "native-codemode-code-review-cancel";
   const nativeReview = scenario === "native-code-review" || codemodeReview;
   const reviewPackage = nativeReview ? installCodeReviewFixture(workspace) : undefined;
-  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
+  const recoveryPackage = scenario === "native-recovery-unit" || scenario === "native-retention-unit" ? installCodeReviewFixture(workspace) : undefined;
+  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-binding-revoked")) toolSequence = [{ name: "codemode", arguments: {
     code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
   } }];
   const codemodeReadPath = join(workspace, "codemode-reopen-read.txt");
@@ -325,16 +382,16 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-plan-sidebar");
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const [file, hash] of Object.entries({
-      "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+      "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
       "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-      "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+      "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c",
     })) {
       const path = join(source, "addons/plan-sidebar", file);
       expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
       copyFileSync(path, join(pkg, file));
     }
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: planInitiallyEmpty ? "" : "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
     toolSequence = planClear ? [{ name: "plan", arguments: { action: "write", markdown: "" } }] : codemodePlan ? [{ name: "codemode", arguments: { code: codemodePlanCancelled
       ? 'try { await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");'
@@ -374,8 +431,8 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const [file, hash] of Object.entries({
       "index.ts": "73563d26795cbab5cd92e8d5f8dabe3d7477fa11dff35e0ed8b21d9ec3f5ab51",
-      "delegate.ts": "5466936c43f79c4159d75179c9f6a3f1d8d3439000e388902b321d8e7de9c923",
-      "compat/extension-kv.ts": "20408155132b8b86975100f0df7fe03a57ad74d2e4bb8d30f13e2a893441d651",
+      "delegate.ts": "b0e3fd1d2edcd95cecedff84ac3204fba8bfdadaa70854e6009713e44ba8a402",
+      "compat/extension-kv.ts": "3e86c21a9bf94d43151311fe29a3de1778d7a0a2ae32b81bb634e9fd1b2de4ab",
     })) {
       const path = join(source, "addons/delegate", file);
       expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
@@ -383,7 +440,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     }
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
     const manifest = JSON.parse(readFileSync(join(source, "addons/delegate/package.json"), "utf8"));
-    expect(manifest.name).toBe("@rcarmo/piclaw-addon-delegate"); expect(manifest.version).toBe("0.2.20");
+    expect(manifest.name).toBe("@rcarmo/piclaw-addon-delegate"); expect(manifest.version).toBe("0.2.21");
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     model.id = "gpt-6.1-sol";
     extensionKvSet("delegate", "config", { searchable_providers: scenario !== "native-delegate-denied" ? [model.provider] : [],
@@ -398,7 +455,8 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   const modelB = { ...model, input: delegateImagesCase ? ["text", "image"] : model.input, id: delegateImagesCase ? "gpt-5-mini" : explicitDelegate?.id ?? (revokeDelegate ? "gpt-5-mini" : nativeScheduler ? "approved/b" : "approved-b"), contextWindow: 200000 };
   const childModels: string[] = [];
   const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
-  const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }, options?: { signal?: AbortSignal }) => {
+  const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown;toolsAdded?:{name:string}[] }[] }, options?: { signal?: AbortSignal }) => {
+    requestToolNames.push(input.messages.flatMap(message=>message.role==='system'?message.toolsAdded?.map(tool=>tool.name)??[]:[]));
     for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
       observedResults.set(result.toolCallId, { toolName: result.toolName, isError: result.isError, content: result.content });
     if (definitionScheduler) {
@@ -418,7 +476,10 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
       });
       return stream;
     }
-    if (parentAccounting && !delegateAccounting && !scheduledAccounting && !compactionAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
+    if (parentAccounting && !delegateAccounting && !scheduledAccounting && !compactionAccounting && !addonCompaction) {
+      const settled=scenario.startsWith('native-addon-execution-accounting')||serviceBudgetResume||serviceBudgetGap||addonRecovery||scenario==='native-dream-runner-accounted'||scenario==='native-dream-runner-scheduled-budget'?calls-1:accountingTwoTurns&&calls>1?1:0;
+      expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...Array.from({length:settled},()=>({state:'settled'})), { state: "dispatched" }]);
+    }
     const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
     if (delegateImagesCase && !child) expect(JSON.stringify(input)).not.toContain('"type":"image"');
     const firstDelegate = nativeDelegate && !child && !input.messages.some(message => message.role === "toolResult");
@@ -445,15 +506,19 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     }
     const childId = JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("CHILD_B") ? "B" : "A";
     const childWrite = child && writeDelegate && !input.messages.some(message => message.role === "toolResult");
-    const step = childWrite ? { name: "write", arguments: { path: childWritePath(childId), content: `WRITTEN_${childId}` } } : toolSequence?.shift();
+    const privateSummary=addonCompaction&&JSON.stringify(input).includes('You are a context summarization assistant.');
+    const repeatedInitial=serviceBudgetResume&&calls===2&&JSON.stringify(input.messages.findLast(message=>message.role==='user')?.content).includes('Admit a private operation without legacy context');
+    const step = privateSummary?undefined:repeatedInitial?{name:'write',arguments:{path:join(workspace,'native-addon-result.txt'),content:'UNSAFE_ORIGINAL_REPLAY'}}:childWrite ? { name: "write", arguments: { path: childWritePath(childId), content: `WRITTEN_${childId}` } } : toolSequence?.shift();
     const scheduledRequest = JSON.stringify(input.messages).includes("scheduled real consumer");
-    const pricedResponse = parentAccounting && !accountingUnknown && !(delegateAccountingUnknown && child) && !(scheduledAccountingUnknown && scheduledRequest) && !(compactionAccountingUnknown && inManualSummary);
+    const pricedResponse = parentAccounting && !accountingUnknown && !(delegateAccountingUnknown && child) && !(scheduledAccountingUnknown && scheduledRequest) && !(compactionAccountingUnknown && inManualSummary) && !(privateSummary&&scenario.endsWith('-unknown'));
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
       content: nativeInfrastructure && step ? [step, ...toolSequence!.splice(0)].map((item, index) => ({ type: "toolCall" as const, id: `infrastructure-${index}`, name: item.name, arguments: typeof item.arguments === "function" ? item.arguments() : item.arguments })) : firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(delegateImagesCase && id === "B" ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
-        : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
-      usage: { ...(usageProjection ? { providerCost: 0, reasoningTokens: 2, cacheReadReported: true } : {}), input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: pricedResponse ? 0.000005 : 0, output: pricedResponse ? 0.000005 : 0, cacheRead: 0, cacheWrite: 0, total: pricedResponse ? 0.00001 : 0 } } };
+        : [{ type: "text" as const, text: privateSummary?'PRIVATE_NATIVE_COMPACTION_SUMMARY':scenario==='native-addon-execution-large-result'?'é'.repeat(70_000):"factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
+      usage: scenario==='native-addon-execution-accounting-capped-small-output'?{input:5000,output:1000,cacheRead:0,cacheWrite:0,totalTokens:6000,cost:{input:0.005,output:10,cacheRead:0,cacheWrite:0,total:10.005}}:{ ...(usageProjection ? { providerCost: 0, reasoningTokens: 2, cacheReadReported: true } : {}), input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: pricedResponse ? 0.000005 : 0, output: pricedResponse ? 0.000005 : 0, cacheRead: 0, cacheWrite: 0, total: pricedResponse ? 0.00001 : 0 } } };
     onProviderResponse?.();
     void (async () => {
+      if(scenario.startsWith('native-dream-runner-held-provider')&&process.env.PICLAW_NATIVE_RESTART_PHASE!=='read'&&calls===1){dreamWorkSignal=options?.signal;dreamWorkEntered.resolve();await dreamWorkReleased.promise;}
+      if(privateSummary&&heldPrivateSummary){heldSummarySignal=options?.signal;privateSummaryEntered.resolve();await privateSummaryReleased.promise;}
       if (child) await bothChildren;
       if (child && timeoutDelegate && JSON.stringify(input.messages.findLast(m => m.role === "user")?.content).includes("CHILD_A")) {
         try {
@@ -510,10 +575,45 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     // The assertion closure is restored with the other capture spies below.
     automaticCaptureSpy = spy;
   }
-  let realRunCaptures = 0, realToolCaptures = 0;
+  let realRunCaptures = 0, realToolCaptures = 0, pendingAdmissionCaptures = 0;
+  const pendingAdmissionCalls:string[]=[];
   let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
+  if(scenario==='native-dream-runner-held-tool'){
+    const capture=HostConversationRuntime.prototype.captureToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype,'captureToolSource').mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof capture>){
+      const source=await capture.apply(this,args);dreamWorkEntered.resolve();await dreamWorkReleased.promise;return source;
+    }));
+  }
+  if(addonCompaction){
+    if(heldPrivateSummary){
+      const wait=HostConversationRuntime.prototype.wait;
+      captureSpies.push(spyOn(HostConversationRuntime.prototype,'wait').mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof wait>){await wait.apply(this,args);if(heldSummarySignal)privateMainSettled.resolve();}));
+    }
+    const capture=HostConversationRuntime.prototype.captureAutomaticCompaction;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype,'captureAutomaticCompaction').mockImplementation(async function(this:HostConversationRuntime,scope,binding){
+      const captured=await capture.call(this,scope,binding);privateCompactionSignal=scope.signal;return captured;
+    }));
+  }
+  if(scenario==='native-addon-execution-accounting-capped-small-output'){
+    const open=Harness.open;captureSpies.push(spyOn(Harness,'open').mockImplementation((storage,options,ctx)=>{
+      assert(options.models);const models=typeof options.models==='function'?options.models():options.models;
+      return open.call(Harness,storage,{...options,models:new Proxy(models,{get(target,key){
+        if(key==='streamSimple')return(...args:Parameters<typeof models.streamSimple>)=>models.streamSimple(args[0],args[1],{...args[2],maxTokens:1});
+        return Reflect.get(target,key);
+      }})},ctx);
+    }));
+  }
   if (nativePlan) {
+    const capturePending = HostConversationRuntime.prototype.capturePendingToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "capturePendingToolSource").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof capturePending>){
+      const captured=await capturePending.apply(this,args);
+      pendingAdmissionCaptures++;pendingAdmissionCalls.push(args[2]);
+      expect(captured.inputs[0]?.sourceId).toBe(expectedToolSource);
+      expect(captured.operation.chatJid).toBe("web:default");
+      expect(captured.runTaskId).toBeDefined();
+      return captured;
+    }));
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureRun.apply(this, args);
@@ -566,14 +666,14 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     expect(codemodeReads).toBe(1); codemodeReads = 0;
   }
   let codemodeNestedCaptures = 0;
-  if ((mcpCancelled || mcpConfigChanged || scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
+  if ((mcpCancelled || mcpConfigChanged || scenario === "native-codemode-cancel" || scenario === "native-codemode-binding-revoked")) {
     const captureTool = HostConversationRuntime.prototype.captureToolSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureTool.apply(this, args);
       if (args[2].includes("/")) {
         codemodeNestedCaptures++;
         if (mcpConfigChanged) writeFileSync(join(workspace, ".pi/mcp.json"), JSON.stringify({ mcpServers: {} }));
-        else if (scenario === "native-codemode-harness") root.query("UPDATE service_effect_s01_operations SET harness_watch_generation=harness_watch_generation+1 WHERE operation_id=?").run(captured.operation.operationId);
+        else if (scenario === "native-codemode-binding-revoked") root.query("UPDATE service_effect_s01_operations SET harness_session_id=harness_session_id||'-revoked' WHERE operation_id=?").run(captured.operation.operationId);
         else root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       }
       return captured;
@@ -633,13 +733,23 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
       if ((officeCancelled && (!codemodeOffice || args[2].includes("/"))) || (drawioCancelled && (!codemodeDrawio || args[2].includes("/")))) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       if (scenario === "native-editable-table-closed-publisher") backend.stop();
       if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
-      // Host-owned SQL changes the actual authority after capture, not a fake
-      // source object or tool result. Neither stale generation may publish.
+      // Host-owned SQL changes actual binding/route authority after capture.
+      // Neither stale captured capability may publish.
       if (scenario === "native-editable-table-archived") root.query("UPDATE chat_branches SET archived_at=? WHERE chat_jid=? AND branch_id=?").run(new Date().toISOString(), captured.inputs[0]!.chatJid, captured.inputs[0]!.branchId);
-      if (scenario === "native-editable-table-harness-generation") root.query("UPDATE service_effect_s01_operations SET harness_watch_generation=harness_watch_generation+1 WHERE operation_id=?").run(captured.operation.operationId);
+      if (scenario === "native-editable-table-binding-revoked") root.query("UPDATE service_effect_s01_operations SET harness_operation_id=harness_operation_id||'-revoked' WHERE operation_id=?").run(captured.operation.operationId);
       return captured;
     }));
   }
+  const recoveryBarrier=recoveryPackage ? (()=>{
+    let enter!:()=>void, release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}), held=new Promise<void>(resolve=>{release=resolve;});
+    const original=HostConversationRuntime.prototype.wait;let firstWait=true;
+    const hook=spyOn(HostConversationRuntime.prototype,"wait").mockImplementation(async function(this:HostConversationRuntime,...args:Parameters<typeof original>){
+      await original.apply(this,args);
+      if(firstWait){firstWait=false;enter();await held;}
+    });
+    captureSpies.push(hook);return {entered,release,hook};
+  })():undefined;
   if (scenario === "native-mcp-http-deny") {
     await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject before models"); })).rejects.toThrow();
     expect(existsSync(mcpPid)).toBe(false);
@@ -722,21 +832,777 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if(recoveryPackage) backend.attachChannel!({broadcastEvent(){}});
+  if(scenario==='native-scheduled-lease-free'){
+    const {runScheduledTask,getSchedulerMetrics}=await import('../../runtime/src/task-scheduler.js');let reads=0;
+    const denied=new Proxy({},{get(){reads++;throw Error('Unsupported task/options inspected');}}),snapshot=()=>['scheduled_tasks','task_run_logs','service_effect_s07_occurrences','service_effect_s01_sources','budget_work','entries','documents'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),before=snapshot(),metrics=getSchedulerMetrics();
+    try{expect(await runScheduledTask(denied as never,{agentPool:pool,queue:base.queue,sendMessage:async()=>{}},denied)).toEqual({status:'skipped',result:null,error:'Native scheduled execution requires an admitted occurrence',durationMs:0,taskRunLogId:null});expect(reads).toBe(0);expect(calls).toBe(0);expect(snapshot()).toEqual(before);expect(getSchedulerMetrics()).toEqual(metrics);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);}
+    finally{for(const spy of sdkSpies)spy.mockRestore();backend.stop();await backend.close();await base.queue.shutdown();await pool.shutdown();closeDatabase();owner.release();}return;
+  }
+  if(scenario.startsWith('native-dream-runner')){
+    const {runDreamAgentTurn}=await import('../../runtime/src/dream.js'),index=await import('../../runtime/src/workspace-index-process.js');
+    const configured=existsSync(getConfigPath())?JSON.parse(readFileSync(getConfigPath(),'utf8')):{};configured.domains??={};configured.domains.dream={...configured.domains.dream,model:''};writeFileSync(getConfigPath(),JSON.stringify(configured),{mode:0o600});
+    const originalDreamDispatch=pool.dispatchDreamOperation.bind(pool),dreamDispatch=spyOn(pool,'dispatchDreamOperation');
+    if(scenario==='native-dream-runner-original-time')dreamDispatch.mockImplementation(async request=>{await Bun.sleep(25);return originalDreamDispatch(request);});
+    const modelControl=spyOn(pool,'applyControlCommand'),launch=spyOn(index,'launchWorkspaceIndexProcess').mockReturnValue(false),wait=spyOn(index,'waitForWorkspaceIndexProcess').mockResolvedValue(undefined);
+    const publicRows=()=>['chats','chat_branches','messages','chat_cursors'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),before=publicRows();
+    let reopenedDream:Awaited<ReturnType<typeof createDefaultApplicationRuntime>>|undefined;
+    let dreamClock:{mockRestore():void}|undefined,dreamAuths=0;
+    const lockFile=join(workspace,'notes/memory/.dream.lock'),movedLock=lockFile+'.prior-fixture';
+    if(scenario==='native-dream-runner-lock-revoked')onCredentialResolve=async()=>{renameSync(lockFile,movedLock);writeFileSync(lockFile,'REPLACEMENT_DREAM_LOCK',{mode:0o600});};
+    const {withBudgetWorkContext}=await import('../../runtime/src/budget/context.js');
+    const {ensureBudgetWork}=await import('../../runtime/src/db/budget-limits.js');
+    if(scenario.startsWith('native-dream-runner-accounted')||scenario==='native-dream-runner-budget-denied'){
+      ensureBudgetWork({id:'native-dream-parent',chatJid:'web:default',executionKind:'interactive'},root);saveBudgetCap({scope:'task',workId:'native-dream-parent',metric:'api_usd_micros',amount:scenario.endsWith('-budget-denied')?0:1000000},root);
+      onCredentialResolve=async()=>{dreamAuths++;expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});};
+    }
+    if(scenario==='native-dream-runner-deadline')onCredentialResolve=async()=>{
+      dreamAuths++;const source=root.query("SELECT source_id FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").get() as {source_id:string};
+      const payload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(source.source_id).digest('hex')),'utf8'));
+      dreamClock=spyOn(Date,'now').mockReturnValue(Date.parse(payload.policy.expiresAt)+1);
+    };
+    const restartPhase=process.env.PICLAW_NATIVE_RESTART_PHASE,artifactPath=join(workspace,'native-process-restart.json');
+    const captureRestart=()=>{
+      const bindings=root.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all() as {conversation_id:number;source_id:string;submission_id:number}[];expect(bindings).toHaveLength(1);
+      const binding=bindings[0]!,request=dreamDispatch.mock.calls[0]![0],{assertCurrent:_guard,...data}=request;
+      const artifact={pid:process.pid,request:data,bindings,sources:root.query("SELECT source_id,source_seq,payload_ref,provenance_ref,state FROM service_effect_s01_sources WHERE chat_jid LIKE 'dream:%'").all(),entries:root.query('SELECT * FROM entries WHERE conversation_id=? ORDER BY id').all(binding.conversation_id),tasks:root.query('SELECT id,kind FROM tasks WHERE conversation_id=? ORDER BY id').all(binding.conversation_id),publicRows:publicRows(),reservations:root.query('SELECT * FROM budget_request_reservations ORDER BY rowid').all(),budgetWork:root.query('SELECT * FROM budget_work ORDER BY rowid').all(),marker:existsSync(join(workspace,'notes/memory/native-dream-marker.md'))?readFileSync(join(workspace,'notes/memory/native-dream-marker.md'),'utf8'):null};
+      writeFileSync(artifactPath,JSON.stringify(artifact),{mode:0o600});console.log('NATIVE_RESTART '+JSON.stringify({phase:'write',pid:process.pid,sourceId:binding.source_id,submissionId:binding.submission_id,providerCalls:calls,unresolvedHolds:(root.query("SELECT count(*) AS n FROM budget_request_reservations WHERE state='unresolved'").get() as {n:number}).n}));
+    };
+    if(scenario.startsWith('native-dream-runner-scheduled-budget')||scenario==='native-dream-runner-scheduled-unknown')onCredentialResolve=async()=>{dreamAuths++;expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});};
+    const revokeScheduled=()=>root.query("UPDATE service_effect_s07_tasks SET status='paused' WHERE task_id='builtin-dream-midnight'").run();
+    if(scenario==='native-dream-runner-scheduled-lease-revoked')onCredentialResolve=async()=>{revokeScheduled();};
+    if(scenario==='native-dream-runner-scheduled-token-revoked')onCredentialResolve=async()=>{root.query("UPDATE service_effect_s07_occurrences SET lease_token_hash=? WHERE task_id='builtin-dream-midnight'").run('f'.repeat(64));};
+    if(scenario==='native-dream-runner-scheduled-tool-revoked')onProviderResponse=()=>{revokeScheduled();};
+    if(scenario==='native-dream-runner-scheduled-final-revoked')onProviderResponse=()=>{if(calls===3)revokeScheduled();};
+    if(scenario==='native-dream-runner-scheduled-index-revoked'){
+      const fs=(await import('node:fs/promises')).default,read=fs.readdir;
+      captureSpies.push(spyOn(fs,'readdir').mockImplementation((async(...args:Parameters<typeof read>)=>{const result=await read(...args);if(calls===3&&String(args[0])===join(workspace,'notes'))revokeScheduled();return result;}) as typeof read));
+    }
+    try{
+      if(restartPhase==='read'){
+        const artifact=JSON.parse(readFileSync(artifactPath,'utf8')),binding=artifact.bindings[0];expect(artifact.pid).not.toBe(process.pid);
+        expect(root.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all()).toEqual(artifact.bindings);
+        expect(root.query("SELECT source_id,source_seq,payload_ref,provenance_ref,state FROM service_effect_s01_sources WHERE chat_jid LIKE 'dream:%'").all()).toEqual(artifact.sources);
+        expect(root.query('SELECT * FROM entries WHERE conversation_id=? ORDER BY id').all(binding.conversation_id)).toEqual(artifact.entries);
+        expect(root.query('SELECT id,kind FROM tasks WHERE conversation_id=? ORDER BY id').all(binding.conversation_id)).toEqual(artifact.tasks);
+        expect(root.query('SELECT * FROM budget_request_reservations ORDER BY rowid').all()).toEqual(artifact.reservations);expect(root.query('SELECT * FROM budget_work ORDER BY rowid').all()).toEqual(artifact.budgetWork);
+        if(scenario==='native-dream-runner-unsafe-result'){
+          const task=JSON.parse((root.query(`SELECT record FROM tasks WHERE conversation_id=? AND kind='"pi.tool"'`).get(binding.conversation_id) as {record:string}).record);
+          expect(task.state).toMatchObject({status:'pending',checkpoint:{phase:'execute',replay:'unsafe'}});expect(task.restarts).toBe(1);
+        }
+        const replay=pool.dispatchDreamOperation({...artifact.request,assertCurrent(){}}).then(result=>{console.log('NATIVE_REPLAY_ACCEPTED '+JSON.stringify({sourceId:binding.source_id,providerCalls:calls,marker:existsSync(join(workspace,'notes/memory/native-dream-marker.md'))}));return result;});
+        await expect(replay).rejects.toThrow('Dream invocation already accepted');expect(calls).toBe(0);
+        expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))?readFileSync(join(workspace,'notes/memory/native-dream-marker.md'),'utf8'):null).toBe(artifact.marker);expect(publicRows()).toEqual(artifact.publicRows);
+        expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);console.log('NATIVE_RESTART '+JSON.stringify({phase:'read',pid:process.pid,sourceId:binding.source_id,submissionId:binding.submission_id,providerCalls:calls,unresolvedHolds:(root.query("SELECT count(*) AS n FROM budget_request_reservations WHERE state='unresolved'").get() as {n:number}).n}));return;
+      }
+      if(scenario==='native-dream-runner-unsafe-result')root.exec(`CREATE TRIGGER native_dream_result_fault BEFORE INSERT ON entries WHEN json_extract(NEW.record,'$.kind')='pi.tool-result' BEGIN SELECT RAISE(ABORT,'synthetic Dream result commit failure'); END`);
+      const invoke=async()=>{
+        if(scenario.startsWith('native-dream-runner-scheduled')){
+          const {DREAM_TASK_ID}=await import('../../runtime/src/dream.js'),due=new Date(Date.now()-1000).toISOString();
+          createTask({id:DREAM_TASK_ID,chat_jid:'web:default',task_kind:'internal',model:modelB.provider+'/'+modelB.id,prompt:'dream',schedule_type:'once',schedule_value:due,next_run:due,status:'active',notify_on_complete:false,created_at:due});
+          const store=createCurrentPiclawScheduledRunStore(root,{hitFault:()=>false,recordTrace(){}});assert(store.ok);
+          if(scenario.startsWith('native-dream-runner-scheduled-budget')||scenario==='native-dream-runner-scheduled-unknown')saveBudgetCap({scope:'scheduled_run',scheduledTaskId:DREAM_TASK_ID,metric:'api_usd_micros',amount:scenario.endsWith('-denied')?0:1000000},root);
+          if(scenario==='native-dream-runner-scheduled-reclaim')root.exec("CREATE TRIGGER scheduled_dream_completion_fault BEFORE UPDATE ON service_effect_s07_occurrences WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'synthetic lost scheduled Dream completion'); END");
+          const idle=Promise.withResolvers<void>(),off=base.queue.onLaneIdle(lane=>{if(lane==='chat:web:default')idle.resolve();});
+          const timer=setTimeout(()=>idle.reject(Error('Scheduled Dream did not join its queue lane')),5000);
+          try{await pollScheduledRunsOnce({queue:base.queue,agentPool:pool,sendMessage:async()=>{}},store.value);await idle.promise;}finally{clearTimeout(timer);off();}
+          if(scenario.endsWith('-revoked'))return{mode:'auto' as const,skipped:false,result:'scheduled authority revoked'};
+          if(scenario==='native-dream-runner-scheduled-reclaim'){
+            root.exec('DROP TRIGGER scheduled_dream_completion_fault');const beforeReplay=['service_effect_s07_occurrences','piclaw_durable_bindings_v1','service_effect_s01_sources','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),beforeCalls=calls;
+            const RealDate=Date,FutureDate=new Proxy(RealDate,{construct(target,args,newTarget){return Reflect.construct(target,args.length?args:[RealDate.now()+120000],newTarget);},get(target,key,receiver){return key==='now'?()=>RealDate.now()+120000:Reflect.get(target,key,receiver);}});globalThis.Date=FutureDate;
+            try{await pollScheduledRunsOnce({queue:base.queue,agentPool:pool,sendMessage:async()=>{}},store.value);await Bun.sleep(25);}finally{globalThis.Date=RealDate;}
+            expect(calls).toBe(beforeCalls);expect(['service_effect_s07_occurrences','piclaw_durable_bindings_v1','service_effect_s01_sources','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(beforeReplay);
+            expect(root.query('SELECT count(*) AS n FROM task_run_logs WHERE task_id=?').get(DREAM_TASK_ID)).toEqual({n:0});return{mode:'auto' as const,skipped:false,result:'factory synthetic reply'};
+          }
+          const run=root.query('SELECT status,result FROM task_run_logs WHERE task_id=?').get(DREAM_TASK_ID) as {status:string;result:string};expect(run?.status).toBe('success');return{mode:'auto' as const,skipped:false,result:run.result};
+        }
+        return runDreamAgentTurn({chatJid:'web:default',days:2,mode:'manual',model:scenario.endsWith('-model')?modelB.provider+'/'+modelB.id:null,agentPool:pool});
+      };
+      const pending=(scenario.startsWith('native-dream-runner-accounted')||scenario==='native-dream-runner-budget-denied')?withBudgetWorkContext({workId:'native-dream-parent',chatJid:'web:default',kind:'interactive'},invoke):invoke();
+      if(scenario==='native-dream-runner-unsafe-result'){
+        expect(await pending.then(()=>null,error=>error)).toBeInstanceOf(Error);root.exec('DROP TRIGGER native_dream_result_fault');
+        expect(calls).toBe(1);expect(readFileSync(join(workspace,'notes/memory/native-dream-marker.md'),'utf8')).toBe('ADMITTED_NATIVE_DREAM');expect(existsSync(lockFile)).toBe(false);
+        backend.stop();await backend.close();if(restartPhase==='write'){captureRestart();return;}
+        reopenedDream=await createDefaultApplicationRuntime(owner,async()=>services);await expect(reopenedDream.sessionOptions.dispatchDreamOperation!({...dreamDispatch.mock.calls[0]![0],assertCurrent(){}})).rejects.toThrow('Dream invocation already accepted');expect(calls).toBe(1);return;
+      }
+      if(scenario==='native-dream-runner-lock-revoked'){
+        expect(await pending.then(()=>null,error=>error)).toBeInstanceOf(Error);expect(calls).toBe(0);expect(readFileSync(lockFile,'utf8')).toBe('REPLACEMENT_DREAM_LOCK');
+        expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(false);expect(publicRows()).toEqual(before);expect('runAgent' in pool).toBe(false);return;
+      }
+      if(scenario.includes('-held-')){
+        let ended=false;const observed=pending.then(()=>{ended=true;return null;},error=>{ended=true;return error;});
+        await dreamWorkEntered.promise;expect(existsSync(join(workspace,'notes/memory/.dream.lock'))).toBe(true);
+        const closing=backend.close();await Bun.sleep(50);
+        expect(ended).toBe(false);expect(existsSync(join(workspace,'notes/memory/.dream.lock'))).toBe(true);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(false);
+        if(dreamWorkSignal)expect(dreamWorkSignal.aborted).toBe(true);
+        dreamWorkReleased.resolve();await closing;expect(await observed).toBeInstanceOf(Error);
+        expect(existsSync(join(workspace,'notes/memory/.dream.lock'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(publicRows()).toEqual(before);
+        expect('runAgent' in pool).toBe(false);expect(modelControl.mock.calls).toHaveLength(0);
+        if(restartPhase==='write'){captureRestart();return;}
+        const sourceRows=root.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all(),callsBefore=calls;
+        reopenedDream=await createDefaultApplicationRuntime(owner,async()=>services);
+        await expect(reopenedDream.sessionOptions.dispatchDreamOperation!({...dreamDispatch.mock.calls[0]![0],assertCurrent(){}})).rejects.toThrow('Dream invocation already accepted');
+        expect(calls).toBe(callsBefore);expect(root.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all()).toEqual(sourceRows);return;
+      }
+      const result=await pending;
+      if(scenario==='native-dream-runner-scheduled-budget-denied'||scenario==='native-dream-runner-scheduled-unknown'){
+        const unknown=scenario.endsWith('-unknown');expect(result.result).toContain('model pass failed; deterministic refresh completed');expect(calls).toBe(unknown?1:0);expect(dreamAuths).toBe(unknown?1:0);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(true);
+        expect(root.query('SELECT state,amount_microusd FROM budget_request_reservations').all()).toEqual(unknown?[{state:'unresolved',amount_microusd:201000}]:[]);expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});
+        const occurrence=root.query("SELECT run_id,state FROM service_effect_s07_occurrences WHERE task_id='builtin-dream-midnight'").get() as {run_id:string;state:string};expect(occurrence.state).toBe('completed');expect(root.query('SELECT status FROM budget_work WHERE id=?').get('scheduled:'+occurrence.run_id)).toEqual({status:unknown?'active':'completed'});expect(modelControl.mock.calls).toHaveLength(0);return;
+      }
+      if(scenario.startsWith('native-dream-runner-scheduled')&&scenario.endsWith('-revoked')){
+        const committedBeforeRevocation=scenario.includes('-final-')||scenario.includes('-index-');
+        expect(calls).toBe(committedBeforeRevocation?3:scenario.includes('-tool-')?1:0);expect(modelControl.mock.calls).toHaveLength(0);expect('runAgent' in pool).toBe(false);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(committedBeforeRevocation);expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(scenario.includes('-index-'));expect(publicRows()).toEqual(before);
+        if(scenario.includes('-index-'))expect(root.query("SELECT path FROM workspace_files WHERE path='notes/memory/native-dream-marker.md'").all()).toEqual([]);
+        expect(root.query("SELECT state FROM service_effect_s07_occurrences WHERE task_id='builtin-dream-midnight'").get()).toEqual({state:'claimed'});return;
+      }
+      if(scenario==='native-dream-runner-accounted-unknown'){
+        expect(result.result).toContain('model pass failed; deterministic refresh completed');expect(calls).toBe(1);expect(dreamAuths).toBe(1);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);
+        expect(root.query('SELECT state,amount_microusd FROM budget_request_reservations').all()).toEqual([{state:'unresolved',amount_microusd:101000}]);expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});
+        expect(root.query("SELECT status FROM budget_work WHERE execution_kind='background' AND parent_work_id='native-dream-parent'").all()).toEqual([{status:'active'}]);expect(publicRows()).toEqual(before);return;
+      }
+      if(scenario==='native-dream-runner-budget-denied'||scenario==='native-dream-runner-deadline'){
+        expect(result.result).toContain('model pass failed; deterministic refresh completed');expect(calls).toBe(0);expect(dreamAuths).toBe(scenario.endsWith('-deadline')?1:0);
+        expect(existsSync(join(workspace,'notes/memory/current-state.md'))).toBe(true);expect(existsSync(lockFile)).toBe(false);expect(existsSync(join(workspace,'notes/memory/native-dream-marker.md'))).toBe(false);
+        expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:0});expect(publicRows()).toEqual(before);expect('runAgent' in pool).toBe(false);return;
+      }
+      expect('runAgent' in pool).toBe(false);expect(modelControl.mock.calls).toHaveLength(0);expect(result.skipped).toBe(false);expect(result.result).toContain('factory synthetic reply');
+      expect(calls).toBe(scenario==='native-dream-runner-tools'?5:3);expect(requested).toEqual(Array(calls).fill(scenario.endsWith('-model')||scenario.startsWith('native-dream-runner-scheduled')?modelB.id:model.id));
+      expect(requestToolNames[0]!.slice().sort()).toEqual(['read','edit','write','grep','find','ls','messages','search_workspace'].sort());
+      expect(readFileSync(join(workspace,'notes/memory/native-dream-marker.md'),'utf8')).toBe('ADMITTED_NATIVE_DREAM');
+      expect(publicRows()).toEqual(before);expect(existsSync(join(workspace,'notes/memory/.dream.lock'))).toBe(false);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+      if(scenario==='native-dream-runner-tools'){expect([...observedResults.values()].map(result=>result.toolName)).toContain('messages');expect([...observedResults.values()].map(result=>result.toolName)).toContain('search_workspace');expect([...observedResults.values()].every(result=>!result.isError)).toBe(true);}
+      if(scenario==='native-dream-runner-accounted'){
+        expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual([{state:'settled'},{state:'settled'},{state:'settled'}]);
+        expect(root.query("SELECT SUM(api_equivalent_cost_microusd) AS cost FROM token_usage").get()).toEqual({cost:30});
+        expect(root.query("SELECT status FROM budget_work WHERE execution_kind='background' AND parent_work_id='native-dream-parent'").all()).toEqual([{status:'completed'}]);
+        expect(root.query("SELECT DISTINCT w.execution_kind FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id").all()).toEqual([{execution_kind:'background'}]);
+      }
+      const privateRows=root.query("SELECT conversation_id,source_id FROM piclaw_durable_bindings_v1 WHERE chat_jid LIKE 'dream:%'").all() as {conversation_id:number;source_id:string}[];expect(privateRows).toHaveLength(1);
+      const privateHistory=root.query('SELECT * FROM entries WHERE conversation_id=? ORDER BY id').all(privateRows[0]!.conversation_id),callsBefore=calls;
+      const payload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(privateRows[0]!.source_id).digest('hex')),'utf8')),request=dreamDispatch.mock.calls[0]![0];
+      if(scenario.startsWith('native-dream-runner-scheduled')){
+        const occurrence=root.query("SELECT run_id FROM service_effect_s07_occurrences WHERE task_id='builtin-dream-midnight'").get() as {run_id:string};expect(payload.policy.parentWorkId).toBe('scheduled:'+occurrence.run_id);
+        const hex=createHash('sha256').update('scheduled-dream:'+occurrence.run_id).digest('hex').slice(0,32);expect(request.invocationId).toBe([hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-'));
+        expect(root.query('SELECT status FROM budget_work WHERE id=?').get('scheduled:'+occurrence.run_id)).toEqual({status:scenario.endsWith('-reclaim')?'active':'completed'});
+        if(scenario.endsWith('-budget')){expect(dreamAuths).toBe(3);expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual([{state:'settled'},{state:'settled'},{state:'settled'}]);expect(root.query('SELECT SUM(api_equivalent_cost_microusd) AS cost FROM token_usage').get()).toEqual({cost:30});}
+      }
+      expect(payload.policy.acceptedAt).toBe(request.acceptedAt);expect(payload.policy.origin.invocationId).toBe(request.invocationId);expect(Date.parse(payload.policy.expiresAt)-Date.parse(payload.policy.acceptedAt)).toBe(request.timeoutMs);
+      const {storedBackgroundDocument}=await import('../../runtime/durable-engine/src/host-background-context.js');
+      const publicDoc=root.query(`SELECT id FROM documents WHERE owner_id=1 AND kind='"pi.agent"' AND retired_at IS NULL`).get() as {id:number},publicAgent=storedBackgroundDocument(root,publicDoc.id);
+      expect(publicAgent.tools).toContain('read');expect(publicAgent.tools).not.toContain('messages');expect(publicAgent.tools).not.toContain('search_workspace');
+      backend.stop();await backend.close();if(restartPhase==='write'){captureRestart();return;}reopenedDream=await createDefaultApplicationRuntime(owner,async()=>services);
+      expect(calls).toBe(callsBefore);expect(root.query('SELECT * FROM entries WHERE conversation_id=? ORDER BY id').all(privateRows[0]!.conversation_id)).toEqual(privateHistory);expect(publicRows()).toEqual(before);
+      await expect(reopenedDream.sessionOptions.dispatchDreamOperation!({...request,assertCurrent(){}})).rejects.toThrow('Dream invocation already accepted');expect(calls).toBe(callsBefore);
+      if(scenario==='native-dream-runner-recovery-unit'){
+        reopenedDream.stop();await reopenedDream.close();
+        await(await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),getConfigPath(),true,1,1,'084d229bc038a2bdd01301f9f87135911685f88a');
+      }
+    }finally{if(scenario==='native-dream-runner-scheduled-reclaim')root.exec('DROP TRIGGER IF EXISTS scheduled_dream_completion_fault');if(scenario==='native-dream-runner-unsafe-result')root.exec('DROP TRIGGER IF EXISTS native_dream_result_fault');dreamClock?.mockRestore();dreamWorkReleased.resolve();if(scenario==='native-dream-runner-lock-revoked'){rmSync(lockFile,{force:true});rmSync(movedLock,{force:true});}for(const spy of[modelControl,dreamDispatch,launch,wait,...captureSpies,...sdkSpies])spy.mockRestore();reopenedDream?.stop();await reopenedDream?.close();backend.stop();await backend.close();await base.queue.shutdown();await pool.shutdown();closeDatabase();owner.release();}return;
+  }
+  if (scenario.startsWith("native-code-review-lifecycle-")) {
+    const phase = scenario.slice("native-code-review-lifecycle-".length);
+    const objects = () => root.query("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name GLOB 'addon_code_review_*' ORDER BY name").all();
+    const rows = () => (root.query("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'addon_code_review_*' ORDER BY name").all() as { name: string }[])
+      .map(({ name }) => ({ name, rows: root.query(`SELECT * FROM ${name} ORDER BY rowid`).all() }));
+    const snapshot = () => ({ objects: objects(), rows: rows(), hostVersion: root.query("PRAGMA user_version").get() });
+    const savedPath = join(workspace, "review-lifecycle-snapshot.json");
+    const close = async () => { backend.stop(); await backend.close(); };
+    try {
+      if (phase === "fresh") {
+        expect(rows()).toEqual([]);
+        await close();
+        const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+        const models = createHostModels(runtime, [model, modelB].map(({ provider, id }) => ({ provider, id })), {
+          signal: new AbortController().signal, async authorize() { owner.assertCurrentOwner(); }, assertCurrent() { owner.assertCurrentOwner(); },
+        });
+        const h = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true })),
+          { models, registry: createRegistry() }, context);
+        try {
+          await h.commit(async tx => {
+            for (const { id } of root.query("SELECT id FROM conversations").all() as { id: number }[])
+              await configure(tx, id as ConversationId, { tools: createHostBuiltinTools({ cwd: workspace, names: ["read"], authority: { assertAllowed() { owner.assertCurrentOwner(); } } }) });
+          }, context);
+        } finally { await h.close(context); }
+      } else if (phase === "present" || phase === "reinstalled") {
+        expect(rows()).toHaveLength(16);
+        expect(objects().filter((row: any) => row.type === "index")).toHaveLength(6);
+        const api = await import(join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review/runtime.ts"));
+        const service = api.reviewService();
+        expect(service.database.db).toBe(root);
+        const who = { ownerId: "default", actorId: "default", kind: "operator", workspaceId: "lifecycle" };
+        const target = { chatId: "web:default", incarnation: "lifecycle", label: "Default" };
+        const input = { title: "Retained review", focusPath: "gone.ts", target };
+        const source = { workspaceId: "lifecycle", worktreeId: "tree", mode: "source", base: null, head: null, capturedAt: "2026-01-01T00:00:00Z",
+          files: [{ oldPath: null, newPath: "gone.ts", oldText: null, newText: "saved without a working file\n", change: "source" }] };
+        const request = { requestId: "lifecycle-create" };
+        const review = service.createFromCapture(who, input, source, request);
+        if (phase === "present") {
+          service.createThread(who, review.reviewId, { fileId: review.files[0], side: "source", body: "retained discussion" }, { requestId: "lifecycle-thread" });
+          writeFileSync(savedPath, JSON.stringify(snapshot()));
+        } else expect(service.readFile(who, review.reviewId, review.files[0]).newText).toBe("saved without a working file\n");
+        const saved = JSON.parse(readFileSync(savedPath, "utf8"));
+        await close();
+        expect(() => service.listReviews(who)).toThrow("closed");
+        expect(snapshot()).toEqual(saved);
+      } else expect(snapshot()).toEqual(JSON.parse(readFileSync(savedPath, "utf8")));
+      expect(root.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(calls).toBe(0);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    } finally {
+      await close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      owner.release(); closeDatabase();
+    }
+    return;
+  }
+  if(scenario==='native-addon-admission'||scenario==='native-addon-admission-rollback'||scenario==='native-addon-admission-overlap'||scenario==='native-addon-admission-rejected'||scenario==='native-addon-admission-alias'||scenario==='native-addon-admission-model-revoked'||scenario==='native-addon-admission-public-model-revoked'||scenario.startsWith('native-addon-execution')||addonServiceCase){
+    const operations=await import('../../runtime/src/db/addon-operations.js');
+    const configuration=getConfigPath(),saved=existsSync(configuration)?readFileSync(configuration,'utf8'):undefined;
+    const configured=saved?JSON.parse(saved):{};configured.domains??={};
+    const grant={revision:'native-r1',target:'fixture',allowedTools:scenario==='native-addon-execution-ceiling'?['read']:['read','write'],timeoutMs:scenario==='native-addon-execution-deadline'?200:60_000,maxToolCalls:scenario==='native-addon-execution-quota'?1:2,parentWorkId:'native-addon-parent'};
+    configured.domains.operations={enabled:true,grants:[{addonId:'native-fixture',principalId:'operator',...grant,enabled:true,approvalRequired:false}]};
+    mkdirSync(join(workspace,'.piclaw'),{recursive:true});writeFileSync(configuration,JSON.stringify(configured),{mode:0o600});
+    const {ensureBudgetWork}=await import('../../runtime/src/db/budget-limits.js');ensureBudgetWork({id:grant.parentWorkId,chatJid:'web:default',executionKind:'interactive'});
+    const text='Admit a private operation without legacy context',id='native-addon-fixture',at=new Date().toISOString();
+    if(!addonServiceCase)operations.admitAddonOperation({id,addonId:'native-fixture',principalId:'operator',idempotencyKey:'native-admission',inputHash:createHash('sha256').update(JSON.stringify([grant.target,text])).digest('hex'),text,target:grant.target,grant,
+      chatJid:'operation:'+id,workId:'operation:'+id,status:'queued',sequence:1,createdAt:at,updatedAt:at,output:null,reason:null});
+    if(!addonServiceCase)operations.transitionAddonOperation(id,['queued'],'working');
+    let fixedClock=scenario==='native-addon-execution-deadline'?Date.parse(operations.readAddonOperation(id)!.updatedAt):undefined;
+    const deadlineClock=fixedClock===undefined?undefined:spyOn(Date,'now').mockImplementation(()=>fixedClock!);
+    let expireBackgroundDeadline:(()=>void)|undefined;
+    const backgroundDeadlineTimer=fixedClock===undefined?undefined:spyOn(globalThis,'setTimeout').mockImplementation(((callback:()=>void,ms?:number,...args:unknown[])=>{
+      if(callback.name==='expireNativeBackgroundDeadline'){expect(ms).toBe(grant.timeoutMs);expireBackgroundDeadline=callback;return realTimer(()=>{},60_000);}
+      return realTimer(callback,ms,...args);
+    }) as typeof setTimeout);
+    let reopened:Awaited<ReturnType<typeof createDefaultApplicationRuntime>>|undefined,reopenedBase:ReturnType<typeof createRuntimeBaseServices>|undefined,reopenedPool:AgentPool|undefined;
+    try{
+      const publicRows=()=>['chats','chat_branches','messages','chat_cursors'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      const before=publicRows(),ordinary=(await pool.getDurableSessionMetadata('web:default'));
+      if(serviceBudgetResume||serviceContinuation){
+        const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js'),{createOperationHost}=await import('../../runtime/src/addons/operation-host.js');
+        const contextModule=await import('../../runtime/durable-engine/src/host-background-context.js');
+        const principal={addonId:'native-fixture',principalId:'operator'};
+        let cap=serviceBudgetResume?saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:101000},root):undefined;
+        let writes=0;const actualWrite=hostFs.writeFileSync;
+        captureSpies.push(spyOn(hostFs,'writeFileSync').mockImplementation(((path:unknown,...args:unknown[])=>{if(String(path)===join(workspace,'native-addon-result.txt'))writes++;return(actualWrite as Function)(path,...args);}) as typeof hostFs.writeFileSync));
+        if(serviceBudgetResume||serviceBudgetGap||addonCompaction)onCredentialResolve=async()=>{
+          if(addonCompaction){
+            expect((root.query("SELECT count(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as {n:number}).n).toBeGreaterThan(0);
+            if(privateCompactionSignal&&taskModelRequestScope(privateCompactionSignal)?.taskKind==='pi.compaction'){
+              if(scenario.endsWith('-auth-revoked')){configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));privateCompactionAuthChanged=true;}
+              if(scenario.endsWith('-auth-budget')){assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);privateCompactionAuthChanged=true;}
+            }
+          }else expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});
+        };
+        const nativeHost=createOperationHost(pool);
+        const firstHost=serviceContinuation?{...nativeHost,async execute(input:Parameters<typeof nativeHost.execute>[0]){const result=await nativeHost.execute(input);expect(result.status).toBe('completed');return{status:'input_required' as const,output:result.output,reason:'continuation_required'};}}:nativeHost;
+        const firstService=new AddonOperationService(firstHost),firstClient=firstService.bind(principal);
+        let nextService:InstanceType<typeof AddonOperationService>|undefined,damagedEntry:{id:number;record:string}|undefined;
+        let stagedFailure:unknown,publicationFailed!:()=>void,continueAfterReopen!:()=>void;
+        const publicationReady=new Promise<void>(resolve=>{publicationFailed=resolve;}),reopenReady=new Promise<void>(resolve=>{continueAfterReopen=resolve;});
+        try{
+          const receipt=await firstClient.admit({target:'fixture',idempotencyKey:'native-lifecycle',text});await firstService.waitForIdle();
+          expect(receipt.created).toBe(true);const operationId=receipt.operation!.id;
+          expect((await firstClient.get(operationId)).status).toBe(serviceBudgetResume?'budget_blocked':'input_required');expect(writes).toBe(1);
+          expect(calls).toBe(serviceBudgetResume?1:2);
+          const oldBindings=root.query('SELECT source_id,conversation_id,source_seq,operation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid=?').all('operation:'+operationId) as {source_id:string;conversation_id:number;source_seq:number;operation_id:string}[];
+          expect(oldBindings).toHaveLength(1);const original=oldBindings[0]!;
+          const originalDocId=(root.query('SELECT id FROM documents WHERE kind=\'"app.background-policy"\' AND owner_id=? AND key_value=?').get(original.conversation_id,JSON.stringify(original.source_id)) as {id:number}).id;
+          const oldPolicy=contextModule.storedBackgroundDocument(root,originalDocId),oldPayloadPath=join(getDataDir(),'durable-answers',createHash('sha256').update(original.source_id).digest('hex')),oldPayload=readFileSync(oldPayloadPath);
+          const conversations=root.query('SELECT id FROM conversations ORDER BY id').all(),oldEntries=root.query('SELECT * FROM entries ORDER BY id').all() as {id:number}[];
+          firstService.shutdown();await firstService.waitForIdle();backend.stop();await backend.close();
+          if(scenario==='native-addon-service-continuation-interrupted'){
+            damagedEntry=root.query('SELECT id,record FROM entries WHERE conversation_id=? AND json_extract(record,\'$.kind\')=\'pi.tool-result\' ORDER BY id LIMIT 1').get(original.conversation_id) as {id:number;record:string};
+            const changed=JSON.parse(damagedEntry.record);changed.data.diagnostics=[{severity:'error',code:'interrupted',message:'Synthetic unknown prior write outcome'}];changed.model[0].isError=true;
+            root.query('UPDATE entries SET record=? WHERE id=?').run(JSON.stringify(changed),damagedEntry.id);
+          }
+          settings.setDefaultModelAndProvider(modelB.provider,modelB.id);await settings.flush();
+          if(cap)cap=saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:1000000},root);
+          if(addonCompaction){
+            cap=saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:1000000},root);
+            const open=Harness.open,background=scenario.includes('-compaction-background');captureSpies.push(spyOn(Harness,'open').mockImplementation((storage,options,ctx)=>open.call(Harness,storage,{...options,settings:{...options.settings,compaction:{enabled:true,keepRecentTokens:1,reserveTokens:background?1000:99999,backgroundTokens:background?99000:0}}},ctx)));
+          }
+          reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          if(serviceBudgetGap)cap=saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:1000000},root);
+          const nextHost=createOperationHost(reopenedPool);let blockNext=serviceBudgetGap;
+          const stagedHost={...nextHost,async execute(input:Parameters<typeof nextHost.execute>[0]){
+            try{await reopenedPool!.prepareAddonOperation(input.operationId,input.signal);throw Error('Expected staged publication fault');}
+            catch(error){stagedFailure=error;publicationFailed();expect(String(error)).toContain('synthetic next-input binding fault');}
+            await awaitWithContext(reopenReady,withAbortSignal(input.signal,context));return createOperationHost(reopenedPool!).execute(input);
+          }};
+          nextService=new AddonOperationService(scenario==='native-addon-service-continuation-staged'?stagedHost:serviceBudgetGap?{...nextHost,async execute(input){if(blockNext){blockNext=false;assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);}return nextHost.execute(input);}}:nextHost);
+          if(scenario==='native-addon-service-continuation-staged')root.exec("CREATE TEMP TRIGGER fail_next_background_binding BEFORE INSERT ON piclaw_durable_bindings_v1 WHEN NEW.source_id LIKE 'background:%' AND NEW.source_seq>1 BEGIN SELECT RAISE(ABORT,'synthetic next-input binding fault'); END");
+          const client=nextService.bind(principal),newText='Continue with only this newly accepted input';
+          if(serviceContinuation)toolSequence=[{name:'write',arguments:{path:join(workspace,'native-addon-continuation.txt'),content:'NEW_INPUT_ONLY'}}];
+          const attempts=await Promise.all(serviceBudgetResume?[client.resume(operationId),client.resume(operationId)]:serviceBudgetGap?[client.continue(operationId,newText)]:[client.continue(operationId,newText),client.continue(operationId,newText)]);
+          expect(attempts.filter(result=>result.resumed)).toHaveLength(1);
+          if(scenario==='native-addon-service-continuation-staged'){
+            await publicationReady;const stagedSnapshot=()=>['service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work','documents','document_revisions'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+            const staged=stagedSnapshot();expect(calls).toBe(2);expect(root.query('SELECT count(*) AS n FROM piclaw_durable_bindings_v1 WHERE chat_jid=?').get('operation:'+operationId)).toEqual({n:1});
+            expect(root.query('SELECT count(*) AS n FROM documents WHERE owner_id=? AND kind=\'"app.background-policy"\'').get(original.conversation_id)).toEqual({n:2});
+            await expect(reopenedPool.prepareAddonOperation(operationId)).rejects.toBe(stagedFailure);expect(stagedSnapshot()).toEqual(staged);
+            root.exec('DROP TRIGGER fail_next_background_binding');reopened.stop();await reopened.close();await reopenedBase.queue.shutdown();await reopenedPool.shutdown();
+            reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+            continueAfterReopen();
+          }
+          if(heldPrivateSummary){
+            await privateSummaryEntered.promise;await privateMainSettled.promise;
+            let idle=false;const joining=nextService.waitForIdle().then(()=>{idle=true;});
+            expect(operations.readAddonOperation(operationId)!.status).toBe('working');expect(idle).toBe(false);
+            expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid=? ORDER BY rowid DESC LIMIT 1").get('operation:'+operationId)).toEqual({phase:'executing'});
+            expect((await client.cancel(operationId)).outcome).toBe('requested');
+            const abortDeadline=Date.now()+1000;while(!heldSummarySignal?.aborted&&Date.now()<abortDeadline)await Bun.sleep(5);
+            expect(heldSummarySignal?.aborted).toBe(true);expect(idle).toBe(false);
+            expect(operations.readAddonOperation(operationId)!.status).toBe('cancel_requested');
+            privateSummaryReleased.resolve();await joining;
+          }else await nextService.waitForIdle();
+          if(serviceBudgetGap){
+            expect((await client.get(operationId)).status).toBe('budget_blocked');expect(operations.readAddonOperation(operationId)!.text).toBe(newText);expect(calls).toBe(2);
+            expect(root.query('SELECT count(*) AS n FROM piclaw_durable_bindings_v1 WHERE chat_jid=?').get('operation:'+operationId)).toEqual({n:1});
+            assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:1000000},root);
+            expect((await client.resume(operationId)).resumed).toBe(true);await nextService.waitForIdle();
+          }
+          if(addonCompaction&&scenario.includes('-auth-')){
+            expect(privateCompactionAuthChanged).toBe(true);expect(operations.readAddonOperation(operationId)!.status).toBe(scenario.endsWith('-auth-budget')?'budget_blocked':'failed');
+            expect(calls).toBe(2);expect(writes).toBe(1);expect(existsSync(join(workspace,'native-addon-continuation.txt'))).toBe(false);expect(publicRows()).toEqual(before);
+            expect(root.query("SELECT count(*) AS n FROM token_usage WHERE usage_source='compaction'").get()).toEqual({n:0});
+            expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([{state:'settled'},{state:'settled'},{state:'released'}]);
+            expect(root.query('SELECT id FROM conversations ORDER BY id').all()).toEqual(conversations);expect(contextModule.storedBackgroundDocument(root,originalDocId)).toEqual(oldPolicy);return;
+          }
+          const final=await client.get(operationId);
+          if(addonCompaction&&scenario.endsWith('-unknown')){
+            expect(final.status).toBe('failed');expect(calls).toBe(3);expect(writes).toBe(1);expect(existsSync(join(workspace,'native-addon-continuation.txt'))).toBe(false);expect(publicRows()).toEqual(before);
+            expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([{state:'settled'},{state:'settled'},{state:'unresolved'}]);
+            const current=root.query('SELECT operation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid=? ORDER BY source_seq DESC LIMIT 1').get('operation:'+operationId) as {operation_id:string};
+            expect(root.query("SELECT status FROM budget_work WHERE id=?").get('durable-operation:'+current.operation_id)).toEqual({status:'active'});
+            expect(root.query("SELECT w.execution_kind,w.parent_work_id FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE r.state='unresolved'").all()).toEqual([{execution_kind:'background',parent_work_id:'durable-operation:'+current.operation_id}]);
+            expect(root.query("SELECT t.usage_source FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.parent_work_id=?").all('durable-operation:'+current.operation_id)).toEqual([]);
+            expect(root.query("SELECT amount_microusd FROM budget_request_reservations WHERE state='unresolved'").get()).toEqual({amount_microusd:101000});
+            expect(root.query("SELECT count(*) AS n FROM entries WHERE conversation_id=? AND json_extract(record,'$.kind')='pi.compaction'").get(original.conversation_id)).toEqual({n:0});
+            expect(root.query('SELECT id FROM conversations ORDER BY id').all()).toEqual(conversations);expect(contextModule.storedBackgroundDocument(root,originalDocId)).toEqual(oldPolicy);return;
+          }
+          if(scenario==='native-addon-service-continuation-interrupted'){
+            expect(final.status).toBe('failed');expect(calls).toBe(2);expect(writes).toBe(1);
+            expect(root.query('SELECT count(*) AS n FROM piclaw_durable_bindings_v1 WHERE chat_jid=?').get('operation:'+operationId)).toEqual({n:1});
+            expect(root.query('SELECT id FROM conversations ORDER BY id').all()).toEqual(conversations);expect(contextModule.storedBackgroundDocument(root,originalDocId)).toEqual(oldPolicy);return;
+          }
+          expect(final.status).toBe('completed');expect(final.output).toBe('factory synthetic reply');expect(writes).toBe(1);
+          const bindings=root.query('SELECT source_id,conversation_id,source_seq,operation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid=? ORDER BY source_seq').all('operation:'+operationId) as typeof oldBindings;
+          expect(bindings).toHaveLength(2);expect(bindings[0]).toEqual(original);expect(bindings[1]!.conversation_id).toBe(original.conversation_id);expect(bindings[1]!.source_id).not.toBe(original.source_id);
+          expect(root.query('SELECT id FROM conversations ORDER BY id').all()).toEqual(conversations);expect(contextModule.storedBackgroundDocument(root,originalDocId)).toEqual(oldPolicy);expect(readFileSync(oldPayloadPath)).toEqual(oldPayload);
+          expect(root.query('SELECT * FROM entries WHERE id<=? ORDER BY id').all(oldEntries.at(-1)!.id)).toEqual(oldEntries);
+          const sources=root.query('SELECT state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq').all('operation:'+operationId);expect(sources).toEqual([{state:'consumed'},{state:'consumed'}]);
+          const newPayload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(bindings[1]!.source_id).digest('hex')),'utf8'));
+          expect(newPayload.prompt).toBe(serviceBudgetResume?'Continue the current operation from the input already in this session. Do not repeat completed actions.':newText);
+          expect(newPayload.policy.model.modelId).toBe(model.id);expect(requested.every(id=>id===model.id)).toBe(true);expect(writes).toBe(1);
+          if(addonCompaction){
+            const summaries=(root.query("SELECT count(*) AS n FROM entries WHERE conversation_id=? AND json_extract(record,'$.kind')='pi.compaction'").get(original.conversation_id) as {n:number}).n;
+            if(heldPrivateSummary){expect(summaries).toBe(0);expect(heldSummarySignal?.aborted).toBe(true);}
+            else{expect(summaries).toBeGreaterThan(0);expect(planRequests.at(-1)).toContain('PRIVATE_NATIVE_COMPACTION_SUMMARY');}
+            expect((root.query("SELECT count(*) AS n FROM token_usage WHERE usage_source='compaction'").get() as {n:number}).n).toBeGreaterThan(0);
+            expect(root.query("SELECT DISTINCT w.execution_kind,w.parent_work_id FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE r.state<>'settled'").all()).toEqual([]);
+            expect(root.query("SELECT DISTINCT w.execution_kind,w.parent_work_id FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE t.usage_source='compaction'").all()).toEqual([{execution_kind:'background',parent_work_id:'durable-operation:'+bindings[1]!.operation_id}]);
+            expect(root.query("SELECT count(*) AS n FROM tasks WHERE conversation_id=? AND kind='\"pi.compaction\"' AND status<>'terminal'").get(original.conversation_id)).toEqual({n:0});
+            expect(root.query("SELECT count(*) AS n FROM budget_work WHERE execution_kind='side_prompt'").get()).toEqual({n:0});
+            expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:calls});
+          }else{expect(planRequests.at(-1)!.split(text)).toHaveLength(2);expect(planRequests.at(-1)!.split(newPayload.prompt)).toHaveLength(2);}
+          if(!addonCompaction)expect(calls).toBe(serviceBudgetResume?3:4);expect(publicRows()).toEqual(before);expect(root.query("SELECT count(*) AS n FROM submissions WHERE conversation_id=? AND json_extract(record,'$.type')='input'").get(original.conversation_id)).toEqual({n:2});
+          expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+          nextService.shutdown();await nextService.waitForIdle();reopened.stop();await reopened.close();
+          await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration,true,2,serviceBudgetResume?1:2);
+        }finally{
+          privateSummaryReleased.resolve();
+          firstService.shutdown();await firstService.waitForIdle();nextService?.shutdown();await nextService?.waitForIdle();
+          if(scenario==='native-addon-service-continuation-staged')root.exec('DROP TRIGGER IF EXISTS fail_next_background_binding');
+          if(damagedEntry){reopened?.stop();await reopened?.close();root.query('UPDATE entries SET record=? WHERE id=?').run(damagedEntry.record,damagedEntry.id);}
+        }return;
+      }
+      if(scenario==='native-addon-service-execution'){
+        const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js'),{createOperationHost}=await import('../../runtime/src/addons/operation-host.js');
+        const service=new AddonOperationService(createOperationHost(pool)),client=service.bind({addonId:'native-fixture',principalId:'operator'});
+        try{
+          const request={target:'fixture',idempotencyKey:'actual-native-service',text};
+          const receipt=await client.admit(request);expect(receipt.created).toBe(true);await service.waitForIdle();
+          const snapshot=await client.get(receipt.operation!.id);expect(snapshot.status).toBe('completed');expect(snapshot.output).toBe('factory synthetic reply');
+          expect(calls).toBe(3);expect(readFileSync(join(workspace,'native-addon-result.txt'),'utf8')).toBe('ADMITTED_NATIVE_ADDON');expect(publicRows()).toEqual(before);
+          const bindings=root.query('SELECT operation_id,conversation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid=?').all('operation:'+snapshot.id) as {operation_id:string;conversation_id:number}[];
+          expect(bindings).toHaveLength(1);expect(root.query('SELECT phase,terminal_disposition FROM service_effect_s01_operations WHERE operation_id=?').get(bindings[0]!.operation_id)).toEqual({phase:'terminal',terminal_disposition:'completed'});
+          const again=await client.admit(request);expect(again.created).toBe(false);expect(again.operation).toEqual(snapshot);await service.waitForIdle();expect(calls).toBe(3);
+          expect(root.query('SELECT count(*) AS n FROM submissions WHERE conversation_id=?').get(bindings[0]!.conversation_id)).toEqual({n:1});
+          expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+        }finally{service.shutdown();await service.waitForIdle();}return;
+      }
+      if(scenario==='native-addon-admission-rejected'){
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));const owned=snapshot();
+        await expect(pool.prepareAddonOperation(id)).rejects.toThrow('grant changed');expect(snapshot()).toEqual(owned);expect(publicRows()).toEqual(before);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      if(scenario==='native-addon-admission-overlap'){
+        const chat='operation:'+id;storeChatMetadata(chat,at);await bound.prepareInputSourceAdmission!(chat);
+        const snapshot=()=>['chats','chat_branches','conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot();await expect(pool.prepareAddonOperation(id)).rejects.toThrow('already bound to a public/imported context');
+        expect(snapshot()).toEqual(owned);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      if(scenario==='native-addon-admission-rollback'){
+        const ownedRows=()=>['service_effect_s01_chats','service_effect_s01_sources','service_effect_s01_operations','service_effect_s01_operation_sources','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const untouched=ownedRows();root.exec("CREATE TEMP TRIGGER fail_background_binding BEFORE INSERT ON piclaw_durable_bindings_v1 WHEN NEW.source_id LIKE 'background:%' BEGIN SELECT RAISE(ABORT,'background binding fault'); END");
+        try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('background binding fault');}
+        finally{root.exec('DROP TRIGGER fail_background_binding');}
+        expect(ownedRows()).toEqual(untouched);expect(publicRows()).toEqual(before);expect(calls).toBe(0);
+        const contexts=root.query('SELECT id FROM conversations').all();
+        backend.stop();await backend.close();
+        await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration);
+        reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+        reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+        const recovered=await reopenedPool.prepareAddonOperation(id);expect(recovered.sourceSeq).toBe(1);expect(root.query('SELECT id FROM conversations').all()).toEqual(contexts);
+        expect(await reopenedPool.prepareAddonOperation(id)).toEqual(recovered);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+        return;
+      }
+      const cap=scenario.startsWith('native-addon-execution-accounting-capped')?saveBudgetCap(scenario.endsWith('-daily')?{scope:'instance_daily',timezone:'UTC',metric:'api_usd_micros',amount:1000000}:{scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:scenario.endsWith('-initial-denied')?0:scenario.endsWith('-cleanup-failed')?1:scenario.endsWith('-small-output')?110000:scenario.endsWith('-denied')&&!scenario.endsWith('-auth-denied')?1:scenario.endsWith('-exact')?101000:1000000},root):undefined;
+      if(scenario==='native-addon-execution-accounting-capped-initial-denied'){
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work','budget_request_reservations'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot(),host=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(pool);
+        expect(await host.execute({operationId:id,chatJid:'operation:'+id,workId:'operation:'+id,text,principal:{addonId:'native-fixture',principalId:'operator'},grant,signal:new AbortController().signal})).toEqual({status:'budget_blocked',reason:'budget_boundary'});
+        expect(snapshot()).toEqual(owned);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      if(addonRecovery)onCredentialResolve=async()=>{expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});};
+      if(scenario==='native-addon-execution-recovery-no-source'){
+        const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js'),{createOperationHost}=await import('../../runtime/src/addons/operation-host.js');
+        const snapshot=()=>['conversations','documents','document_revisions','entries','tasks','submissions','piclaw_durable_bindings_v1','service_effect_s01_sources','service_effect_s01_operations'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),before=snapshot();
+        const service=new AddonOperationService(createOperationHost(pool));try{
+          expect(service.recover()).toBe(1);await service.waitForIdle();expect(operations.readAddonOperation(id)).toMatchObject({status:'failed',reason:'interrupted_execution_unknown'});expect(snapshot()).toEqual(before);expect(calls).toBe(0);
+        }finally{service.shutdown();await service.waitForIdle();}return;
+      }
+      const admitted=await pool.prepareAddonOperation(id);
+      if(addonRecovery){
+        const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js'),{createOperationHost}=await import('../../runtime/src/addons/operation-host.js');
+        const controller=new AbortController();let service:InstanceType<typeof AddonOperationService>|undefined,clock:ReturnType<typeof spyOn>|undefined;
+        try{
+          if(scenario.endsWith('-recovery-owned')){
+            let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});checkpointHold={entered};
+            const pending=pool.dispatchAddonOperation(id,controller.signal,1);await ready;
+            service=new AddonOperationService(createOperationHost(pool));expect(service.recover()).toBe(1);let joined=false;const idle=service.waitForIdle().then(()=>{joined=true;});
+            await Bun.sleep(0);expect(joined).toBe(false);expect(calls).toBe(1);
+            controller.abort();expect((await pending).failureCategory).toBe('aborted');await idle;
+            expect(operations.readAddonOperation(id)!.status).toBe('cancelled');expect(calls).toBe(1);expect(root.query('SELECT state FROM budget_request_reservations').all()).toEqual([{state:'unresolved'}]);checkpointHold=undefined;return;
+          }
+          const knownCancelled=scenario.endsWith('-recovery-cancelled'),budgetDenied=scenario.endsWith('-recovery-budget-blocked'),unsafe=scenario.endsWith('-recovery-unsafe'),uncertain=scenario.endsWith('-unknown')||unsafe;
+          if(budgetDenied){
+            saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:1},root);
+            expect((await pool.dispatchAddonOperation(id,controller.signal,1)).failureCategory).toBe('provider_budget');backend.stop();await backend.close();
+          }else if(unsafe){
+            root.exec("CREATE TRIGGER fail_recovered_tool_result BEFORE INSERT ON entries WHEN json_extract(NEW.record,'$.kind')='pi.tool-result' BEGIN SELECT RAISE(ABORT,'synthetic unsafe tool result lost acknowledgement'); END");
+            try{
+              const result=await pool.dispatchAddonOperation(id,controller.signal,1).then(value=>({value}),error=>({error}));
+              if('value' in result)expect(result.value.status).toBe('error');else expect(result.error).toBeInstanceOf(Error);
+            }finally{root.exec('DROP TRIGGER fail_recovered_tool_result');}
+            backend.stop();await backend.close();expect(readFileSync(join(workspace,'native-addon-result.txt'),'utf8')).toBe('ADMITTED_NATIVE_ADDON');
+          }else if(uncertain||knownCancelled){
+            let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});checkpointHold={entered};
+            const pending=pool.dispatchAddonOperation(id,controller.signal,1).then(value=>value,error=>error);await ready;
+            if(knownCancelled){operations.transitionAddonOperation(id,['working'],'cancel_requested');controller.abort();expect((await pending).failureCategory).toBe('aborted');}
+            backend.stop();await backend.close();await pending;checkpointHold=undefined;
+          }else{
+            root.exec("CREATE TEMP TRIGGER fail_recovered_terminal BEFORE INSERT ON service_effect_s02_commits WHEN NEW.chat_jid LIKE 'operation:%' BEGIN SELECT RAISE(ABORT,'synthetic lost terminal acknowledgement'); END");
+            try{await expect(pool.dispatchAddonOperation(id,controller.signal,1)).rejects.toThrow();}finally{root.exec('DROP TRIGGER fail_recovered_terminal');}
+            if(scenario.endsWith('-cancel-requested'))operations.transitionAddonOperation(id,['working'],'cancel_requested');
+            backend.stop();await backend.close();
+          }
+          const missingAck=scenario.endsWith('-recovery-input-ack');
+          const originalAck=(root.query('SELECT submission_id FROM piclaw_durable_bindings_v1 WHERE operation_id=?').get(admitted.operationId) as {submission_id:number}).submission_id;
+          if(missingAck){expect(originalAck).toBeGreaterThan(0);root.query('UPDATE piclaw_durable_bindings_v1 SET submission_id=NULL WHERE operation_id=?').run(admitted.operationId);}
+          const attempts=calls,sdk=()=>['entries','tasks','submissions','documents','document_revisions','piclaw_durable_bindings_v1'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all()),beforeSdk=sdk();
+          const holds=root.query('SELECT * FROM budget_request_reservations ORDER BY rowid').all();
+          if(!uncertain){
+            configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));
+            const payload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),'utf8'));
+            clock=spyOn(Date,'now').mockReturnValue(Date.parse(payload.policy.expiresAt)+1);
+          }
+          reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          const restoredSdk=sdk();
+          if(unsafe){
+            expect(restoredSdk.filter((_,index)=>index!==1)).toEqual(beforeSdk.filter((_,index)=>index!==1));
+            expect((restoredSdk[1] as {id:number}[]).map(task=>task.id)).toEqual((beforeSdk[1] as {id:number}[]).map(task=>task.id));
+            const task=JSON.parse((root.query('SELECT record FROM tasks WHERE conversation_id=? AND kind=\'"pi.tool"\'').get(admitted.conversationId) as {record:string}).record);
+            expect(task.state).toMatchObject({status:'pending',checkpoint:{phase:'execute',replay:'unsafe'}});expect(task.restarts).toBe(1);
+          }else expect(restoredSdk).toEqual(beforeSdk);
+          service=new AddonOperationService(createOperationHost(reopenedPool));expect(service.recover()).toBe(1);await service.waitForIdle();
+          const record=operations.readAddonOperation(id)!;
+          expect(record.status).toBe(uncertain?'failed':knownCancelled?'cancelled':budgetDenied?'budget_blocked':'completed');expect(record.reason).toBe(uncertain?'interrupted_execution_unknown':knownCancelled?'executor_cancelled':budgetDenied?'budget_boundary':null);
+          expect(record.output).toBe(uncertain||knownCancelled||budgetDenied?null:'factory synthetic reply');
+          expect(calls).toBe(attempts);expect(attempts).toBe(budgetDenied?0:uncertain||knownCancelled?1:3);const expectedSdk=restoredSdk.map((rows,index)=>index===5?rows.map(row=>(row as {operation_id:string}).operation_id===admitted.operationId?{...(row as Record<string,unknown>),submission_id:originalAck}:row):rows);
+          expect(sdk()).toEqual(missingAck?expectedSdk:restoredSdk);expect(root.query('SELECT * FROM budget_request_reservations ORDER BY rowid').all()).toEqual(holds);
+          if(uncertain||knownCancelled){
+            expect(root.query('SELECT state FROM budget_request_reservations').all()).toEqual([{state:unsafe?'settled':'unresolved'}]);expect(root.query('SELECT status FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({status:'active'});
+          }
+          if(unsafe)expect(readFileSync(join(workspace,'native-addon-result.txt'),'utf8')).toBe('ADMITTED_NATIVE_ADDON');
+          expect(service.recover()).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+        }finally{clock?.mockRestore();controller.abort();service?.shutdown();await service?.waitForIdle();}return;
+      }
+      if(scenario==='native-addon-execution-live-input'){
+        const controller=new AbortController();let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});checkpointHold={entered};
+        const running=pool.dispatchAddonOperation(id,controller.signal,1);
+        try{
+          await ready;operations.transitionAddonOperation(id,['working'],'input_required');operations.appendOperationInput(id,'A newer owner input');operations.transitionAddonOperation(id,['queued'],'working');
+          const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+          const held=snapshot();await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Previous background operation is still accepted');expect(snapshot()).toEqual(held);
+          await expect(pool.dispatchAddonOperation(id,new AbortController().signal,1)).rejects.toThrow('dispatch input epoch changed');expect(snapshot()).toEqual(held);expect(calls).toBe(1);
+        }finally{controller.abort();expect((await running).failureCategory).toBe('aborted');checkpointHold=undefined;}
+        expect(operations.readAddonOperation(id)!.text).toBe('A newer owner input');expect(operations.readAddonOperation(id)!.status).toBe('working');expect(calls).toBe(1);
+        expect(root.query('SELECT terminal_disposition FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({terminal_disposition:'cancelled'});return;
+      }
+      if(scenario.startsWith('native-addon-execution')){
+        const payload=JSON.parse(readFileSync(join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),'utf8'));
+        expect(payload.policy.acceptedAt).toBe(operations.readAddonOperation(id)!.updatedAt);
+        expect(Date.parse(payload.policy.expiresAt)-Date.parse(payload.policy.acceptedAt)).toBe(grant.timeoutMs);
+        const host=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(pool),controller=new AbortController();let authRequests=0;
+        const execution={operationId:id,chatJid:'operation:'+id,workId:'operation:'+id,text,principal:{addonId:'native-fixture',principalId:'operator'},grant,signal:controller.signal};
+        if(scenario==='native-addon-execution-accounting-capped-missing-account')writeFileSync(join(getPiclawAgentDir(),'auth.json'),'{}');
+        if(scenario==='native-addon-execution-accounting-capped-cleanup-failed')root.exec("CREATE TEMP TRIGGER fail_budget_rejection_cleanup BEFORE UPDATE ON budget_work WHEN NEW.last_boundary='request_budget_blocked' BEGIN SELECT RAISE(ABORT,'synthetic budget cleanup fault'); END");
+        let toolRace=false,pricingChanged=false;
+        if(scenario==='native-addon-execution-accounting-capped-pricing-changed'){
+          const physical=runtime.getPhysicalModel.bind(runtime);captureSpies.push(spyOn(runtime,'getPhysicalModel').mockImplementation(((provider:string,id:string)=>{
+            const model=physical(provider,id);return pricingChanged&&model?{...model,cost:{...model.cost,input:10,output:10}}:model;
+          }) as typeof runtime.getPhysicalModel));
+        }
+        if(scenario==='native-addon-execution-accounting-capped-tool-race'){
+          const mkdir=hostFs.mkdirSync;captureSpies.push(spyOn(hostFs,'mkdirSync').mockImplementation(((path:unknown,...args:unknown[])=>{
+            if(String(path)===workspace&&!toolRace){toolRace=true;assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);}
+            return (mkdir as Function)(path,...args);
+          }) as typeof hostFs.mkdirSync));
+        }
+        if(scenario==='native-addon-execution-no-account-auth-cap')onCredentialResolve=async()=>{authRequests++;saveBudgetCap({scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);};
+        if(scenario==='native-addon-execution-revoked')onProviderResponse=()=>{configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));};
+        if(scenario==='native-addon-execution-cancelled')onProviderResponse=()=>{operations.transitionAddonOperation(id,['working'],'cancel_requested');controller.abort();};
+        if(scenario==='native-addon-execution-deadline')onCredentialResolve=async()=>{
+          fixedClock=Date.parse(payload.policy.expiresAt)+1;expect(expireBackgroundDeadline).toBeDefined();expireBackgroundDeadline!();await Bun.sleep(0);
+        };
+        if(scenario==='native-addon-execution-auth-revoked')onCredentialResolve=async()=>{configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));};
+        if(scenario.startsWith('native-addon-execution-accounting'))onCredentialResolve=async()=>{
+          authRequests++;
+          expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1').get()).toEqual({state:'reserved'});
+          const row=root.query('SELECT w.execution_kind,w.parent_work_id FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id ORDER BY r.rowid DESC LIMIT 1').get();
+          expect(row).toEqual({execution_kind:'background',parent_work_id:'durable-operation:'+admitted.operationId});
+          if(scenario==='native-addon-execution-accounting-capped-auth-denied'){assert(cap);saveBudgetCap({id:cap.id,scope:'task',workId:grant.parentWorkId,metric:'api_usd_micros',amount:0},root);}
+          if(scenario==='native-addon-execution-accounting-capped-pricing-changed')pricingChanged=true;
+          if(scenario==='native-addon-execution-accounting-capped-account-changed')writeFileSync(join(getPiclawAgentDir(),'auth.json'),JSON.stringify({'openai-codex':{type:'oauth',access:'synthetic',refresh:'synthetic',accountId:'changed-account',expires:Date.now()+60000}}));
+        };
+        const finalText=scenario==='native-addon-execution-large-result'?'é'.repeat(70_000):'factory synthetic reply';
+        const budgetBlocked=['native-addon-execution-accounting-capped-denied','native-addon-execution-accounting-capped-exact','native-addon-execution-accounting-capped-auth-denied','native-addon-execution-accounting-capped-missing-account','native-addon-execution-accounting-capped-tool-race','native-addon-execution-accounting-capped-pricing-changed','native-addon-execution-accounting-capped-small-output','native-addon-execution-no-account-auth-cap'].includes(scenario);
+        const oneCappedRequest=scenario.endsWith('-capped-exact')||scenario.endsWith('-capped-tool-race');
+        const accountChanged=scenario==='native-addon-execution-accounting-capped-account-changed';
+        const cleanupFailed=scenario==='native-addon-execution-accounting-capped-cleanup-failed';
+        const unknown=scenario.startsWith('native-addon-execution-accounting')&&scenario.endsWith('-unknown');
+        const output=await host.execute(execution),failed=budgetBlocked||unknown||accountChanged||cleanupFailed||['native-addon-execution-revoked','native-addon-execution-auth-revoked','native-addon-execution-cancelled','native-addon-execution-deadline'].includes(scenario);
+        if(scenario==='native-addon-execution-accounting-capped-small-output')expect(root.query('SELECT COALESCE(SUM(api_equivalent_cost_microusd),0) AS amount FROM token_usage').get()).toEqual({amount:0});
+        expect(output).toEqual(budgetBlocked?{status:'budget_blocked',reason:'budget_boundary'}:failed?{status:scenario==='native-addon-execution-cancelled'?'cancelled':'failed',reason:scenario==='native-addon-execution-cancelled'?'executor_cancelled':scenario==='native-addon-execution-deadline'?'execution_timeout':'execution_failed'}:{status:'completed',output:finalText});
+        const noWrite=failed&&scenario!=='native-addon-execution-accounting-capped-exact'||scenario==='native-addon-execution-ceiling';
+        expect(existsSync(join(workspace,'native-addon-result.txt'))).toBe(!noWrite);
+        if(!noWrite)expect(readFileSync(join(workspace,'native-addon-result.txt'),'utf8')).toBe('ADMITTED_NATIVE_ADDON');
+        expect(calls).toBe(scenario==='native-addon-execution-deadline'||scenario==='native-addon-execution-auth-revoked'||accountChanged||cleanupFailed||budgetBlocked&&!oneCappedRequest?0:failed?1:3);expect(publicRows()).toEqual(before);
+        const disposition=scenario==='native-addon-execution-cancelled'||scenario==='native-addon-execution-deadline'?'cancelled':failed?'failed':'completed';
+        expect(root.query('SELECT phase,terminal_disposition FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'terminal',terminal_disposition:disposition});
+        expect(root.query('SELECT disposition,message_row_id,outbox_count,media_count FROM service_effect_s02_commits WHERE operation_id=?').get(admitted.operationId)).toEqual({disposition,message_row_id:null,outbox_count:0,media_count:0});
+        expect(root.query('SELECT count(*) AS n FROM submissions WHERE conversation_id=?').get(admitted.conversationId)).toEqual({n:1});
+        const policyDoc=(await import('../../runtime/durable-engine/src/host-background-context.js')).storedBackgroundDocument(root,
+          (root.query('SELECT id FROM documents WHERE kind=\'"app.background-policy"\' AND owner_id=?').get(admitted.conversationId) as {id:number}).id);
+        const quota=oneCappedRequest?1:failed?0:scenario==='native-addon-execution-ceiling'||scenario==='native-addon-execution-quota'?1:2;
+        expect(policyDoc.calls).toHaveLength(quota);expect(new Set(policyDoc.calls.map((call:{taskId:number})=>call.taskId)).size).toBe(quota);
+        if(cleanupFailed){
+          expect(root.query('SELECT count(*) AS n FROM budget_request_reservations').get()).toEqual({n:0});
+          expect(root.query("SELECT count(*) AS n FROM budget_work WHERE id LIKE 'durable-request:%' AND status='active'").get()).toEqual({n:1});
+          const dir=join(getDataDir(),'diagnostics/model-failures'),files=hostFs.readdirSync(dir);expect(files).toHaveLength(1);
+          const evidence=JSON.parse(readFileSync(join(dir,files[0]!), 'utf8'));
+          expect(evidence.errors.error.message).toBe('Background budget rejection cleanup is uncertain');expect(evidence.errors.error.cause.code).toBe('budget_denied');
+          expect(evidence.errors.error.errors[1].message).toContain('synthetic budget cleanup fault');expect(authRequests).toBe(0);
+        }
+        if(unknown){
+          expect(root.query('SELECT state FROM budget_request_reservations').all()).toEqual([{state:'unresolved'}]);
+          expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:0});
+          expect(root.query('SELECT status FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({status:'active'});
+          if(cap){
+            const {AddonOperationService}=await import('../../runtime/src/addons/operation-service.js');
+            const service=new AddonOperationService(host),client=service.bind(execution.principal);
+            const held=()=>['budget_work','service_effect_s01_sources','conversations'].map(table=>root.query(`SELECT count(*) AS n FROM ${table}`).get());
+            const before=held();try{
+              expect(await client.admit({target:'fixture',idempotencyKey:'must-not-evade-unknown',text:'A new operation cannot evade this parent hold'})).toEqual({created:false,admission:'budget_blocked',operation:null});
+              await service.waitForIdle();expect(held()).toEqual(before);expect(calls).toBe(1);
+            }finally{service.shutdown();await service.waitForIdle();}
+          }
+        }
+        if(cap&&budgetBlocked||accountChanged||scenario==='native-addon-execution-no-account-auth-cap'){
+          const states=oneCappedRequest?[{state:'settled'}]:scenario.endsWith('-auth-denied')||scenario.endsWith('-pricing-changed')||accountChanged?[{state:'released'}]:[];
+          expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual(states);
+          expect(authRequests).toBe(oneCappedRequest||scenario.endsWith('-auth-denied')||scenario.endsWith('-pricing-changed')||accountChanged||scenario==='native-addon-execution-no-account-auth-cap'?1:0);
+          if(scenario.endsWith('-tool-race'))expect(toolRace).toBe(true);
+          expect(root.query("SELECT count(*) AS n FROM budget_work WHERE id LIKE 'durable-request:%' AND status='active'").get()).toEqual({n:0});
+          expect(root.query('SELECT count(*) AS n FROM token_usage').get()).toEqual({n:oneCappedRequest?1:0});
+        }
+        if(scenario==='native-addon-execution-accounting'||scenario==='native-addon-execution-accounting-capped'||scenario==='native-addon-execution-accounting-capped-daily'){
+          expect(root.query('SELECT state FROM budget_request_reservations ORDER BY rowid').all()).toEqual([{state:'settled'},{state:'settled'},{state:'settled'}]);
+          expect(root.query('SELECT w.execution_kind,t.api_equivalent_cost_microusd FROM token_usage t JOIN budget_work w ON w.id=t.work_id ORDER BY t.id').all()).toEqual(Array.from({length:3},()=>({execution_kind:'background',api_equivalent_cost_microusd:10})));
+          expect(root.query('SELECT execution_kind,parent_work_id FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({execution_kind:'background',parent_work_id:'operation:'+id});
+        }
+        {
+          const snapshot=()=>['entries','tasks','submissions','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','service_effect_s02_commits','piclaw_durable_bindings_v1','budget_work','budget_request_reservations','token_usage'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+          const settled=snapshot(),attempts=calls;expect(await host.execute(execution)).toEqual(output);expect(calls).toBe(attempts);expect(snapshot()).toEqual(settled);
+          backend.stop();await backend.close();
+          if(scenario==='native-addon-execution')await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration,true);
+          reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const resumedBindings=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          const recoveredHost=(await import('../../runtime/src/addons/operation-host.js')).createOperationHost(reopenedPool);
+          expect(await recoveredHost.execute({...execution,signal:new AbortController().signal})).toEqual(output);expect(calls).toBe(attempts);expect(snapshot()).toEqual(settled);expect(publicRows()).toEqual(before);
+          if(scenario==='native-addon-execution-accounting-capped'){
+            let ordinaryCredentials=0;onCredentialResolve=async()=>{ordinaryCredentials++;};
+            const message={id:'ordinary-with-background-cap',chat_jid:'web:default',sender:'user',sender_name:'User',content:'Ordinary requests must not inherit the private budget admission',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+            const rowId=root.transaction(()=>{const rowId=storeMessage(message);resumedBindings.getInputSourceAdmission!('web:default')!({message,rowId,database:root});return rowId;}).immediate();
+            expect(await resumedBindings.dispatchAcceptedInput!('web:default',message.id,rowId)!()).toBe('settled');expect(calls).toBe(attempts);expect(ordinaryCredentials).toBe(0);
+            expect(root.query('SELECT o.terminal_disposition FROM service_effect_s01_operations o JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq WHERE s.source_id=?').get(message.id)).toEqual({terminal_disposition:'failed'});
+          }
+        }
+        expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);return;
+      }
+      if(scenario==='native-addon-admission-model-revoked'||scenario==='native-addon-admission-public-model-revoked'){
+        backend.stop();await backend.close();
+        const file=(root.query('PRAGMA database_list').all() as {name:string;file:string}[]).find(row=>row.name==='main')!.file;
+        const storage=new BunSqliteDatabase(file,{root,assertOwner:()=>owner.assertCurrentOwner(),fenceTransactions:true});
+        const maintenance=await Harness.open(await SqliteStorage.open(storage),{
+          models:createHostModels(runtime,[model,modelB].map(entry=>({provider:entry.provider,id:entry.id})),{
+            signal:new AbortController().signal,async authorize(){throw Error('Offline fixture cannot dispatch');},assertCurrent(){throw Error('Offline fixture cannot dispatch');},
+          }),registry:createRegistry(),
+        },context);
+        try{
+          const publicIds=(root.query('SELECT id FROM conversations WHERE id<>?').all(admitted.conversationId) as {id:number}[]).map(row=>row.id as ConversationId);
+          // Use public SDK configuration for the ordinary/root contexts only.
+          // Revocation must not rewrite or renew the private input's choice.
+          await maintenance.commit(async tx=>{for(const id of publicIds){
+            if(scenario==='native-addon-admission-public-model-revoked'&&id!==1)continue;
+            await configure(tx,id,{model:{provider:modelB.provider,modelId:modelB.id}});
+          }},context);
+        }finally{await maintenance.close(context);await storage.close();}
+        settings.setDefaultModelAndProvider(modelB.provider,modelB.id);await settings.flush();expect(settings.drainErrors()).toEqual([]);
+        const privateRows=()=>[
+          root.query('SELECT * FROM conversations WHERE id=?').all(admitted.conversationId),
+          root.query('SELECT * FROM documents WHERE owner_id=? AND scope_kind=\'conversation\' ORDER BY id').all(admitted.conversationId),
+          root.query('SELECT r.* FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.owner_id=? AND d.scope_kind=\'conversation\' ORDER BY r.document_id,r.seq').all(admitted.conversationId),
+          root.query('SELECT * FROM service_effect_s01_operations WHERE operation_id=?').all(admitted.operationId),
+          root.query('SELECT * FROM piclaw_durable_bindings_v1 WHERE operation_id=?').all(admitted.operationId),
+        ];
+        const privateBefore=privateRows(),catalog=spyOn(modelRegistry,'getAvailable').mockReturnValue([modelB] as any);
+        try{
+          if(scenario==='native-addon-admission-public-model-revoked'){
+            const before=root.serialize();
+            const startup=createDefaultApplicationRuntime(owner,async()=>services).then(candidate=>{reopened=candidate;return candidate;});
+            await expect(startup).rejects.toThrow('Persisted host model not approved');
+            expect(root.serialize()).toEqual(before);expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+            expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);owner.assertCurrentOwner();return;
+          }
+          reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+          reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const reopenedBound=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+          expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+          await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('Host model not approved');
+          expect(privateRows()).toEqual(privateBefore);expect(calls).toBe(0);
+          const message={id:'ordinary-after-private-model-revocation',chat_jid:'web:default',sender:'user',sender_name:'User',content:'Use the still-approved ordinary model',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+          const rowId=root.transaction(()=>{const rowId=storeMessage(message);reopenedBound.getInputSourceAdmission!('web:default')!({message,rowId,database:root});return rowId;}).immediate();
+          expect(await reopenedBound.dispatchAcceptedInput!('web:default',message.id,rowId)!()).toBe('settled');
+          expect(calls).toBe(1);expect(requested).toEqual([modelB.id]);expect(privateRows()).toEqual(privateBefore);
+          expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+        }finally{catalog.mockRestore();}
+        return;
+      }
+      if(scenario==='native-addon-admission-alias'){
+        const file=join(getDataDir(),'durable-answers',createHash('sha256').update(admitted.sourceId).digest('hex')),held=file+'.owned';
+        const snapshot=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+        const owned=snapshot();renameSync(file,held);symlinkSync(held,file);
+        try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{rmSync(file);}
+        linkSync(held,file);try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{rmSync(file);renameSync(held,file);}
+        chmodSync(file,0o644);try{await expect(pool.prepareAddonOperation(id)).rejects.toThrow('Invalid private background payload file');expect(snapshot()).toEqual(owned);}finally{chmodSync(file,0o600);}
+        expect(await pool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);return;
+      }
+      expect(admitted.chatJid).toBe('operation:'+id);expect(admitted.sourceId).toStartWith('background:');
+      expect(publicRows()).toEqual(before);expect(backend.sessionOptions.getDurableSession?.(admitted.chatJid)).toBeUndefined();expect(await pool.getDurableSessionMetadata(admitted.chatJid)).toBeNull();
+      expect(()=>bound.getInputSourceAdmission!(admitted.chatJid)).toThrow('Unbound application conversation');
+      expect(await pool.getDurableSessionMetadata('web:default')).toEqual(ordinary);
+      expect(root.query('SELECT submission_id FROM piclaw_durable_bindings_v1 WHERE operation_id=?').get(admitted.operationId)).toEqual({submission_id:null});
+      expect(root.query('SELECT phase FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'claimed'});
+      expect(root.query('SELECT execution_kind,parent_work_id FROM budget_work WHERE id=?').get('durable-operation:'+admitted.operationId)).toEqual({execution_kind:'background',parent_work_id:'operation:'+id});
+      operations.markAddonOperationInputCommitted(id); // Mutable compatibility marker is not native payload authority.
+      expect(await pool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(root.query('SELECT count(*) AS n FROM submissions').get()).toEqual({n:0});
+      backend.stop();await backend.close();
+      await (await import('./background-admission-recovery-fixture.ts')).backgroundAdmissionRecoveryFixture(root,workspace,getDataDir(),configuration);
+      configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));
+      reopened=await createDefaultApplicationRuntime(owner,async()=>services);reopenedBase=createRuntimeBaseServices({dataDir:workspace});
+      reopenedPool=new AgentPool({credentialStore,modelRuntime:runtime,modelRegistry,...reopened.sessionOptions});const reopenedBound=reopened.bind({queue:reopenedBase.queue,agentPool:reopenedPool});
+      await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('grant changed'); // Revocation did not prevent passive cold recovery.
+      configured.domains.operations.enabled=true;writeFileSync(configuration,JSON.stringify(configured));
+      expect(await reopenedPool.prepareAddonOperation(id)).toEqual(admitted);expect(calls).toBe(0);expect(publicRows()).toEqual(before);
+      const privateRows=()=>['conversations','documents','document_revisions','service_effect_s01_sources','service_effect_s01_operations','piclaw_durable_bindings_v1','budget_work'].map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      root.query('UPDATE budget_work SET parent_work_id=? WHERE id=?').run(grant.parentWorkId,'durable-operation:'+admitted.operationId);
+      const cutAncestry=privateRows();await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('budget ancestry unavailable');expect(privateRows()).toEqual(cutAncestry);
+      root.query('UPDATE budget_work SET parent_work_id=? WHERE id=?').run('operation:'+id,'durable-operation:'+admitted.operationId);
+      expect(await reopenedPool.prepareAddonOperation(id)).toEqual(admitted); // Read-only refusal did not create an uncertain write.
+      const accepted=privateRows();configured.domains.operations.enabled=false;writeFileSync(configuration,JSON.stringify(configured));
+      await expect(reopenedPool.prepareAddonOperation(id)).rejects.toThrow('grant changed');expect(privateRows()).toEqual(accepted);
+      const ordinaryMessage={id:'ordinary-after-background-revocation',chat_jid:'web:default',sender:'user',sender_name:'User',content:'An unrelated ordinary input must still run',timestamp:new Date().toISOString(),is_from_me:false,is_bot_message:false};
+      const ordinaryRow=root.transaction(()=>{const rowId=storeMessage(ordinaryMessage);reopenedBound.getInputSourceAdmission!('web:default')!({message:ordinaryMessage,rowId,database:root});return rowId;}).immediate();
+      expect(await reopenedBound.dispatchAcceptedInput!('web:default',ordinaryMessage.id,ordinaryRow)!()).toBe('settled');expect(calls).toBe(1);
+      expect(root.query('SELECT phase FROM service_effect_s01_operations WHERE operation_id=?').get(admitted.operationId)).toEqual({phase:'claimed'});
+      expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);expect(root.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    }finally{
+      if(scenario==='native-addon-execution-accounting-capped-cleanup-failed')root.exec('DROP TRIGGER IF EXISTS fail_budget_rejection_cleanup');
+      backgroundDeadlineTimer?.mockRestore();deadlineClock?.mockRestore();
+      if(saved===undefined)rmSync(configuration,{force:true});else writeFileSync(configuration,saved);
+      reopened?.stop();await reopened?.close();await reopenedBase?.queue.shutdown();await reopenedPool?.shutdown();
+      backend.stop();await backend.close();await channel.stop();await base.queue.shutdown();await pool.shutdown();
+      for(const spy of [...captureSpies,...sdkSpies])spy.mockRestore();owner.release();closeDatabase();
+    }
+    return;
+  }
+  if (scenario === "native-nonweb-admission") {
+    const messageLoop=await import('../../runtime/src/runtime/message-loop.js');
+    const {startRuntimeLoop}=await import('../../runtime/src/runtime/coordinator.js');
+    const {RuntimeState}=await import('../../runtime/src/runtime/state.js');
+    const state=new RuntimeState(workspace);
+    const control=spyOn(pool,'applyControlCommand'),slash=spyOn(pool,'applySlashCommand');
+    const saves=spyOn(state,'saveTimestamps'),marked=spyOn(state,'markCommandProcessed');
+    const tables=['budget_work','budget_request_reservations','service_effect_s01_chats','service_effect_s01_sources','service_effect_s01_operations','messages','chat_cursors',
+      'conversations','entries','tasks','submissions','documents','document_revisions','router_state'];
+    const snapshot=()=>tables.map(table=>root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    try {
+      for(const [index,text] of ['@Pi ordinary pending input','@Pi /model fixture/unavailable','@Pi /help'].entries()) {
+        const chat=`custom:native-unbound:${index}`;storeChatMetadata(chat,new Date().toISOString());state.chatJids.add(chat);
+        storeMessage({id:`unadmitted-nonweb-${index}`,chat_jid:chat,sender:'user',sender_name:'User',content:text,timestamp:`2026-01-01T00:00:0${index}.000Z`,is_from_me:false,is_bot_message:false});
+        const before=snapshot();
+        expect(messageLoop).not.toHaveProperty('processMessages');
+        const stopOne=new AbortController(),cancelOne=setTimeout(()=>stopOne.abort(),0);
+        try{await startRuntimeLoop({state,assistantName:'Pi',pollIntervalMs:60000,signal:stopOne.signal});}
+        finally{clearTimeout(cancelOne);stopOne.abort();}
+        expect(snapshot()).toEqual(before);
+      }
+      const beforePoll=snapshot(),stop=new AbortController();
+      const cancel=setTimeout(()=>stop.abort(),0);
+      try{await startRuntimeLoop({state,assistantName:'Pi',pollIntervalMs:60_000,signal:stop.signal});}
+      finally{clearTimeout(cancel);stop.abort();}
+      expect(state.lastTimestamp).toBe('');expect(base.queue.getMetrics().enqueued).toBe(0);expect(snapshot()).toEqual(beforePoll);
+      expect(state.lastAgentTimestamp).toEqual({});expect(pool).not.toHaveProperty('runAgent');expect(control).not.toHaveBeenCalled();expect(slash).not.toHaveBeenCalled();
+      expect(saves).not.toHaveBeenCalled();expect(marked).not.toHaveBeenCalled();expect(calls).toBe(0);expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+    } finally {
+      for(const spy of [control,slash,saves,marked])spy.mockRestore();
+      backend.stop();await backend.close();await channel.stop();await base.queue.shutdown();await pool.shutdown();
+      for(const spy of [...captureSpies,...sdkSpies])spy.mockRestore();owner.release();closeDatabase();
+    }
+    return;
+  }
   if (scenario === "native-runner-denial") {
     const rows = () => ["budget_work", "budget_request_reservations", "service_effect_s01_chats", "service_effect_s01_operations",
       "service_effect_s01_sources", "conversations", "entries", "tasks", "submissions", "documents", "document_revisions", "messages", "chat_cursors"]
       .map(table => root.query(`SELECT * FROM ${table}`).all());
     const before = rows();
-    let optionReads = 0;
     try {
-      for (const chat of ["web:default", "web:unknown", "dream:manual:fixture", "operation:fixture", "custom:room"]) {
-        const output = await pool.runAgent("unsupported direct native runner", chat, {
-          get budgetWorkId() { optionReads++; return `forbidden-native:${chat}`; },
-        });
-        expect(rows()).toEqual(before);
-        expect(output).toEqual({ status: "error", result: null, error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" });
-      }
-      expect(optionReads).toBe(0); expect(calls).toBe(0);
+      expect('runAgent' in pool).toBe(false);
+      expect(rows()).toEqual(before);expect(calls).toBe(0);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     } finally {
       backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
@@ -1031,7 +1897,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
 
   }
   if (nativeScheduler) {
-    const prohibited = [spyOn(pool, "runAgent"), spyOn(pool, "saveSessionPosition"), spyOn(pool, "restoreSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
+    const prohibited = [spyOn(pool, "saveSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
     prohibited.forEach(spy => spy.mockImplementation(() => { throw Error("legacy scheduler path"); }));
     const delivered: string[] = [];
     const scheduledStore = createCurrentPiclawScheduledRunStore(root, { hitFault: () => false, recordTrace() {} });
@@ -1276,19 +2142,19 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     const api = await import(join(reviewPackage, "runtime.ts"));
     const service = api.reviewService();
     expect(service.database.db).toBe(root);
-    const request = new Request("http://fixture/agent/addons/api/code-review/action", { method: "POST" });
-    admitAddonLocalRequest(request, { userId: "default", mode: "single-user" } as any, () => true);
+    const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
     let review: any, thread: any;
     writeFileSync(join(workspace, "review-source.ts"), "const saved = true;\n");
-    await withAddonLocalRequest(request, async ctx => {
-      expect(ctx!.ownerId).toBe("default");
-      const invoke = async (body: unknown) => {
-        const response = await api.handleReviewRequest(body, request, ctx);
-        expect(response.ok).toBe(true); return response.result;
-      };
-      review = await invoke({ action: "create", path: "review-source.ts", title: "Native review", target: { chatId: "web:default" }, requestId: "review-create" });
-      thread = await invoke({ action: "comment", reviewId: review.reviewId, fileId: review.files[0], side: "source", body: "NATIVE_SAVED_REVIEW_THREAD", requestId: "review-comment" });
-    });
+    const invoke = async (body: unknown) => {
+      const request = new Request("http://fixture/agent/addons/api/code-review/action", {method:"POST",body:JSON.stringify(body)});
+      admitAddonLocalRequest(request, {userId:"default",mode:"single-user"} as any, () => !request.signal.aborted);
+      const response = await handleRegisteredAddonConfigApiRequest(request,"code-review","action",(body,status=200)=>Response.json(body,{status}));
+      expect(response).not.toBeNull();
+      const receipt = await response!.json() as {ok:boolean;result:any};
+      expect(receipt.ok, JSON.stringify(receipt)).toBe(true); return receipt.result;
+    };
+    review = await invoke({ action: "create", path: "review-source.ts", title: "Native review", target: { chatId: "web:default" }, requestId: "review-create" });
+    thread = await invoke({ action: "comment", reviewId: review.reviewId, fileId: review.files[0], side: "source", body: "NATIVE_SAVED_REVIEW_THREAD", requestId: "review-comment" });
     const target = { chatId: "web:default", incarnation: first!.branchId, label: "Default" };
     const who = { ownerId: "default", actorId: "default", kind: "operator", workspaceId: createHash("sha256").update(workspace).digest("hex") };
     const submitted = service.submit(who, review.reviewId, { target, items: [{ threadId: thread.threadId, version: 1 }] }, { requestId: "review-send" });
@@ -1298,8 +2164,8 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
       await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
         const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
         const marked = { ...message, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
-        expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(submitted.dispatchId);
-        row = root.transaction(() => { const id = storeMessage(marked); const admit = bound.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
+        row = await admitSqliteWrite(root, () => { const id = storeMessage(marked); bindAddonLocalMessage(target.chatId, marked, root); const admit = bound.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; });
+        expect((await verifyAddonLocalMessage(target.chatId, marked))?.reference?.intentId).toBe(submitted.dispatchId);
       });
       return { status: "accepted", rowId: row };
     } });
@@ -1448,8 +2314,8 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
         await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
           const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
           const marked = { ...freshMessage, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
-          expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(freshDispatch.dispatchId);
-          freshRow = root.transaction(() => { const id = storeMessage(marked); const admit = reopened.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
+          freshRow = await admitSqliteWrite(root, () => { const id = storeMessage(marked); bindAddonLocalMessage(target.chatId, marked, root); const admit = reopened.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; });
+          expect((await verifyAddonLocalMessage(target.chatId, marked))?.reference?.intentId).toBe(freshDispatch.dispatchId);
         });
         return { status: "accepted", rowId: freshRow };
       } });
@@ -1534,7 +2400,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     return rowId;
   })();
   const dispatch = bound.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!);
-  const tableCancelled = codemodeTableCancelled || scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
+  const tableCancelled = codemodeTableCancelled || scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-binding-revoked";
   expect(dispatch).toBeDefined();
   if (scenario === "native-codemode-reopen") {
     let pending: Promise<unknown> | undefined;
@@ -1591,8 +2457,92 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     return;
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
-  const dispatchOutcome = await dispatch!();
+  let dispatchOutcome: Awaited<ReturnType<NonNullable<typeof dispatch>>>;
+  if(recoveryPackage) {
+    const pending=dispatch!();
+    try {
+      await recoveryBarrier!.entered;
+      const {QueuedFollowupLifecycleService}=await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+      const followups=new QueuedFollowupLifecycleService();
+      const queued=root.transaction(()=>followups.enqueueAcceptedFollowupOnce("recovery-attached-input","web:default","recovery accepted steer",new Date().toISOString(),{source:"user"},bound.getQueuedInputSourceAdmission!("web:default")!)).immediate();
+      expect(queued).not.toBeNull();
+      const steering=bound.getAcceptedQueuedSteering!("web:default")!;expect(steering).toBeDefined();
+      const accepted=await steering.accept(queued!);await accepted.dispatch();
+    } finally {recoveryBarrier!.hook.mockRestore();recoveryBarrier!.release();}
+    dispatchOutcome=await pending;
+  } else dispatchOutcome = await dispatch!();
+  if (recoveryPackage) {
+    try {
+      expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(2);
+      expect(root.query("SELECT submission_id FROM piclaw_durable_intent_bindings_v1").all()).toHaveLength(1);
+      expect((await pool.runSidePrompt("web:default","recovery side input",{budgetWorkId:"fixture-recovery-side"})).status).toBe("success");
+      expect(calls).toBe(3);
+      const service = (await import(join(recoveryPackage,"runtime.ts"))).reviewService();
+      const branch = (root.query("SELECT branch_id FROM chat_branches WHERE chat_jid='web:default'").get() as {branch_id:string}).branch_id;
+      service.createFromCapture({ownerId:"default",actorId:"default",kind:"operator",workspaceId:"recovery"},
+        {title:"Recovery review",focusPath:"saved.ts",target:{chatId:"web:default",incarnation:branch,label:"Default"}},
+        {workspaceId:"recovery",worktreeId:"fixture",mode:"source",base:null,head:null,capturedAt:"2026-01-01T00:00:00Z",
+          files:[{oldPath:null,newPath:"saved.ts",oldText:null,newText:"saved recovery source\n",change:"source"}]}, {requestId:"recovery-review"});
+      backend.stop(); await backend.close();
+      await qualifyNativeRecoveryUnitFixture(root,workspace,getDataDir(),scenario==="native-retention-unit");
+      expect(calls).toBe(3); expect(sdkSpies.every(spy=>spy.mock.calls.length===0)).toBe(true);
+    } finally {
+      backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies,...sdkSpies]) spy.mockRestore();
+      owner.release(); closeDatabase();
+    }
+    return;
+  }
   if (expectedFailedTurn) { expect(dispatchOutcome).toBe("settled"); assertFailedTurn(); }
+  if (scenario === "native-web-cursor-ack") {
+    expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
+    // Native terminal publication is committed, but polling cursor ACK is lost.
+    // Fresh native storage contains no recovery markers to reset or replay.
+    root.query("INSERT INTO chat_cursors(chat_jid,cursor_ts) VALUES(?,'')").run(message.chat_jid);
+    const execution = () => ["piclaw_durable_bindings_v1", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits", "entries", "tasks", "submissions", "record_ids"]
+      .map(table => root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const preserved = execution(), posts = root.query("SELECT * FROM messages ORDER BY rowid").all();
+    const cursorColumns = () => (root.query("PRAGMA main.table_info(chat_cursors)").all() as {name:string}[]).map(row=>row.name);
+    const expectedColumns = ["chat_jid","cursor_ts","queued_followups_json"];
+    root.exec("CREATE TRIGGER refuse_cursor_ack BEFORE UPDATE OF cursor_ts ON chat_cursors BEGIN SELECT RAISE(ABORT,'cursor ACK lost'); END");
+    let nextBase: ReturnType<typeof createRuntimeBaseServices> | undefined, nextPool: AgentPool | undefined, nextChannel: WebChannel | undefined;
+    try {
+      await expect(channel.processChat(message.chat_jid, "default")).rejects.toThrow("cursor ACK lost");
+      expect(root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid)).toEqual({ cursor_ts: "" });
+      expect(execution()).toEqual(preserved); expect(cursorColumns()).toEqual(expectedColumns);
+      expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(posts);
+      expect(calls).toBe(1);
+      root.exec("DROP TRIGGER refuse_cursor_ack");
+      backend.stop(); await backend.close(); await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      closeDatabase(); initDatabase(); root = getDb();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(backend.sessionOptions.getDurableSession!(message.chat_jid)?.sessionId).toBe(first!.sessionId);
+      nextBase = createRuntimeBaseServices({ dataDir: workspace });
+      nextPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+      nextChannel = new WebChannel(backend.bind({ queue: nextBase.queue, agentPool: nextPool }));
+      const { runWebStartupRecoveryBootstrap } = await import("../../runtime/src/runtime/startup.js");
+      const resumes: (() => void)[] = [];
+      runWebStartupRecoveryBootstrap(nextChannel, undefined, resume => resumes.push(resume));
+      expect(resumes).toHaveLength(1); expect(cursorColumns()).toEqual(expectedColumns);
+      resumes[0](); resumes[0](); // Repeated startup wakeups share one queue key.
+      const until = Date.now() + 5000;
+      while (Date.now() < until && (root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid) as {cursor_ts:string}).cursor_ts !== message.timestamp) await Bun.sleep(10);
+      expect(root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid)).toEqual({ cursor_ts: message.timestamp });
+      await nextBase.queue.shutdown();
+      expect(calls).toBe(1); expect(execution()).toEqual(preserved);
+      expect(cursorColumns()).toEqual(expectedColumns);
+      expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(posts);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    } finally {
+      root.exec("DROP TRIGGER IF EXISTS refuse_cursor_ack");
+      backend.stop(); await backend.close();
+      await nextChannel?.stop(); await nextBase?.queue.shutdown(); await nextPool?.shutdown();
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release();
+    }
+    return;
+  }
   if (scenario === "native-events") {
     expect(dispatchOutcome).toBe("settled");
     expect(nativeEvents).toHaveLength(1);
@@ -1931,7 +2881,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;
   }
-  if (codemodePlanCancelled || mcpCancelled || mcpConfigChanged || mcpCatalogChanged || mcpDisconnected || scenario === "native-codemode-cancel" || scenario === "native-codemode-harness") {
+  if (codemodePlanCancelled || mcpCancelled || mcpConfigChanged || mcpCatalogChanged || mcpDisconnected || scenario === "native-codemode-cancel" || scenario === "native-codemode-binding-revoked") {
     if (mcpCancelled || mcpConfigChanged) expect(existsSync(mcpMarker)).toBe(false);
     expect(dispatchOutcome).toBe(expectedFailedTurn || mcpConfigChanged || mcpCatalogChanged || mcpDisconnected ? "settled" : "pending");
     expect(codemodeNestedCaptures).toBe(mcpCatalogChanged || mcpDisconnected ? 0 : 1);
@@ -1955,7 +2905,7 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
       if (mcpCatalogChanged) expect(JSON.stringify([...observedResults.values()])).not.toContain("MCP_CATALOG_CHANGED");
     } else {
       expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: expectedFailedTurn ? "consumed" : "claimed" });
-      if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: scenario === "native-codemode-harness" ? "executing" : "cancelling" });
+      if (expectedFailedTurn) assertFailedTurn(); else expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: scenario === "native-codemode-binding-revoked" ? "executing" : "cancelling" });
       expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(expectedFailedTurn ? 1 : 0);
       expect(observedResults.size).toBe(0);
     }
@@ -2282,7 +3232,15 @@ for (const scenario of ["native-runner-denial", "native-routing-bash-active", "n
   }
   if (nativePlan) {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 7 : 4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    // Two model source captures + two plan snapshots, plus the real pending
+    // beforeTool admission added by the native background-policy hook. Goal
+    // adds request snapshots and its terminal fence at both model/nested tools.
+    // None may use a legacy session owner; exact call IDs distinguish the hooks.
+    expect(pendingAdmissionCaptures).toBe(codemodePlan ? nativeGoal ? 4 : 2 : 1);
+    expect(pendingAdmissionCalls).toEqual(codemodePlan ? nativeGoal
+      ? ["factory-tool-1","factory-tool-1","factory-tool-1/c1","factory-tool-1/c1"]
+      : ["factory-tool-1","factory-tool-1/c1"] : ["factory-tool-1"]);
+    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 8 : 5); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain(planInitiallyEmpty ? defaultPlanStep : "NATIVE_PLAN_OLD");

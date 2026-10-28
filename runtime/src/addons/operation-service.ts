@@ -9,6 +9,7 @@ import {
   operationSnapshot,
   readAddonOperation,
   readAddonOperationEvents,
+  readAddonOperationInputSequence,
   transitionAddonOperation,
 } from "../db/addon-operations.js";
 import {
@@ -408,10 +409,11 @@ export class AddonOperationService {
     id: string,
     controller: AbortController,
   ): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined,inputSequence:number|undefined;
     try {
       const record = readAddonOperation(id);
       if (!record || record.status !== "queued" || this.closed) return;
+      inputSequence=readAddonOperationInputSequence(id)??undefined;if(inputSequence===undefined)throw Error('Operation input identity unavailable');
       singleUser();
       const principal = {
         addonId: record.addonId,
@@ -431,6 +433,7 @@ export class AddonOperationService {
           admission.decision,
           null,
           "admission_changed",
+          inputSequence,
         );
         return;
       }
@@ -442,10 +445,11 @@ export class AddonOperationService {
           "rejected",
           null,
           "grant_changed",
+          inputSequence,
         );
         return;
       }
-      const working = transitionAddonOperation(id, ["queued"], "working");
+      const working = transitionAddonOperation(id, ["queued"], "working",null,null,inputSequence);
       if (!working) return;
       timer = setTimeout(
         () => controller.abort(new Error("operation_timeout")),
@@ -453,6 +457,7 @@ export class AddonOperationService {
       );
       const input: OperationExecution = {
         operationId: id,
+        inputSequence,
         chatJid: record.chatJid,
         workId: record.workId,
         text: record.text,
@@ -468,6 +473,7 @@ export class AddonOperationService {
         result.status,
         result.output ?? null,
         result.reason ?? null,
+        inputSequence,
       );
     } catch {
       // Provider/adapter exception details are not safe public output.
@@ -477,18 +483,41 @@ export class AddonOperationService {
         "failed",
         null,
         "execution_failed",
+        inputSequence,
       );
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
-  /** After restart, never replay an operation that may already have caused side effects. */
+  private startRecovery(id:string):void{
+    if(this.closed||this.running.has(id))return;
+    const controller=new AbortController();
+    const promise=Promise.resolve().then(async()=>{
+      let inputSequence:number|undefined;
+      try{
+        if(this.closed)return;singleUser();
+        const record=readAddonOperation(id);if(!record||!['working','cancel_requested'].includes(record.status))return;
+        inputSequence=readAddonOperationInputSequence(id)??undefined;if(inputSequence===undefined)throw Error('Recovery input epoch unavailable');
+        const result=await this.host.recover!({operationId:id,inputSequence,chatJid:record.chatJid,workId:record.workId,text:record.text,
+          principal:Object.freeze({addonId:record.addonId,principalId:record.principalId}),grant:Object.freeze(structuredClone(record.grant)),signal:controller.signal});
+        const known=result&&cleanResult(result);
+        transitionAddonOperation(id,['working','cancel_requested'],known?.status??'failed',known?.output??null,known?.reason??(known?null:'interrupted_execution_unknown'),inputSequence);
+      }catch{
+        // Missing/uncertain native evidence is not permission to execute again.
+        transitionAddonOperation(id,['working','cancel_requested'],'failed',null,'interrupted_execution_unknown',inputSequence);
+      }
+    }).finally(()=>{this.running.delete(id);});
+    this.running.set(id,{controller,promise});
+  }
+  /** After restart, reconcile existing native receipts without dispatch. Legacy
+   * or uncertain work keeps its non-replay interrupted outcome. */
   recover(): number {
     this.ensureOpen();
     let count = 0;
     for (const record of listRecoverableAddonOperations()) {
       if (this.running.has(record.id)) continue;
       if (record.status === "queued") this.start(record.id);
+      else if(this.host.recover)this.startRecovery(record.id);
       else
         transitionAddonOperation(
           record.id,

@@ -4,8 +4,6 @@ import { join } from "node:path";
 
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { clearProviderUsageCache, peekProviderUsage } from "../../src/agent-pool/provider-usage.js";
-import { AgentSessionManager } from "../../src/agent-pool/session-manager.js";
-import { waitFor } from "../helpers.js";
 import { AgentPool } from "../../src/agent-pool.js";
 import { AgentRuntimeFacade } from "../../src/agent-pool/runtime-facade.js";
 import { buildSessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
@@ -73,6 +71,258 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
 
   return { facade, pool, warnings, errors, cleared };
 }
+
+test("durable runtime lookup must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    getDurableSession: "invalid-durable-runtime-lookup" as unknown as (chatJid: string) => undefined,
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable runtime lookup must be callable");
+});
+
+test("durable compatibility readPosition must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid", {
+      sessionId: "invalid-binding",
+      branchId: "main",
+      readPosition: "invalid-position-reader",
+    } as unknown as { sessionId: string; branchId: string; readPosition: () => Promise<string | null> }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility readPosition must be callable");
+});
+
+test("durable compatibility readContextUsage must be callable", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-context-reader", {
+      sessionId: "invalid-binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readContextUsage: "invalid-context-reader",
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      readContextUsage: () => Promise<{ tokens: number | null; contextWindow: number | null }>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility readContextUsage must be callable");
+});
+
+test("durable compatibility chat key must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility chat key must be non-empty");
+});
+
+test("durable compatibility lifetimeSignal must be AbortSignal-like", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-signal", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: "invalid-signal-shape",
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      lifetimeSignal: AbortSignal;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable compatibility lifetimeSignal requires removeEventListener", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-signal-shape", {
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+      lifetimeSignal: AbortSignal;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable compatibility binding must be an object", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-binding", null as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility binding must be an object");
+});
+
+test("durable compatibility sessionId must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-session-id", {
+      sessionId: "",
+      branchId: "main",
+      readPosition: async () => null,
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility sessionId must be non-empty");
+});
+
+test("durable compatibility branchId must be non-empty", () => {
+  const pool = new Map<string, { runtime: any; lastUsed: number }>();
+  expect(() => new AgentRuntimeFacade({
+    pool,
+    durableSessions: new Map([["web:invalid-branch-id", {
+      sessionId: "binding",
+      branchId: "",
+      readPosition: async () => null,
+    } as unknown as {
+      sessionId: string;
+      branchId: string;
+      readPosition: () => Promise<string | null>;
+    }]]),
+    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
+    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
+    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
+    authPath: "/tmp/runtime-facade-auth.json",
+    clearAttachments: () => {},
+    refreshRuntime: async () => {},
+  })).toThrow("Durable compatibility branchId must be non-empty");
+});
+
+test("durable runtime binding must be an object", () => {
+  const { facade } = createFacade({ getDurableSession: () => null as any });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-binding")).toThrow("Durable runtime binding must be an object");
+});
+
+test("durable runtime binding requires non-empty sessionId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "", branchId: "main", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-session-id")).toThrow("Durable runtime sessionId must be non-empty");
+});
+
+test("durable runtime binding requires non-empty branchId", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "binding", branchId: "", readPosition: async () => null } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-branch-id")).toThrow("Durable runtime branchId must be non-empty");
+});
+
+test("durable runtime binding requires callable readPosition", () => {
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: "binding", branchId: "main", readPosition: "not-callable" } as any) });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-position")).toThrow("Durable runtime readPosition must be callable");
+});
+
+test("durable runtime lifetimeSignal must be AbortSignal-like", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: "invalid-runtime-signal-shape",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable runtime lifetimeSignal requires removeEventListener", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      lifetimeSignal: { aborted: false, addEventListener() {} },
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-signal-shape")).toThrow("Durable runtime lifetimeSignal must be AbortSignal-like");
+});
+
+test("durable runtime binding requires callable readModel when present", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readModel: "not-callable",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-model")).toThrow("Durable runtime readModel must be callable");
+});
+
+test("durable runtime binding requires callable readContextUsage when present", () => {
+  const { facade } = createFacade({
+    getDurableSession: () => ({
+      sessionId: "binding",
+      branchId: "main",
+      readPosition: async () => null,
+      readContextUsage: "not-callable",
+    } as any),
+  });
+  expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-read-context-usage")).toThrow("Durable runtime readContextUsage must be callable");
+});
 
 test("native host-only controls and state never construct a legacy session", async () => {
   let legacy = 0, acquired = 0, released = 0;
@@ -209,12 +459,12 @@ test("current model uses captured durable port and rejects unbound chats without
   expect(await fixture.facade.getCurrentModelLabel("bound")).toBe("persisted/model");
   await expect(fixture.facade.getCurrentModelLabel("unsupported")).rejects.toThrow("Durable session model unavailable");
   fixture.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
-  await expect(fixture.facade.getCurrentModelLabel("legacy")).rejects.toThrow("Durable application does not construct legacy sessions");
-  await expect(fixture.facade.getSessionTreeForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
-  await expect(fixture.facade.saveSessionPosition("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getCurrentModelLabel("legacy")).rejects.toThrow("Durable session model unavailable");
+  await expect(fixture.facade.getSessionTreeForChat("unknown")).rejects.toThrow("Durable session tree unavailable");
+  await expect(fixture.facade.saveSessionPosition("unknown")).rejects.toThrow("Durable session position unavailable");
   const legacy = createFacade();
   legacy.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
-  expect(await legacy.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
+  await expect(legacy.facade.getCurrentModelLabel("legacy")).rejects.toThrow("Durable session model unavailable");
 });
 
 test("tree summaries await captured public readers, preserve raw head and reject missing durable bindings", async () => {
@@ -227,13 +477,13 @@ test("tree summaries await captured public readers, preserve raw head and reject
   expect(fixture.facade.getSessionGenerationForChat("bound")).toBe("generation");
   expect(fixture.facade.getSessionGenerationForChat("unknown")).toBeNull();
   fixture.pool.set("unknown", { runtime: createRuntime({}), lastUsed: 0 });
-  await expect(fixture.facade.getSessionTreeSummaryForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getSessionTreeSummaryForChat("unknown")).rejects.toThrow("Durable session tree unavailable");
   await expect(fixture.facade.getSessionTreeSummaryForChat("unsupported")).rejects.toThrow("Durable session tree unavailable");
   const legacy = createFacade({ getOrCreateRuntime: async () => { throw Error("must not instantiate"); } });
   expect(await legacy.facade.getSessionTreeSummaryForChat("unknown")).toBeNull();
   const normal = createFacade();
   normal.pool.set("legacy", { runtime: createRuntime({ sessionManager: { getLeafId: () => "raw", getTree: () => [], getEntries: () => { throw Error("private entry count forbidden"); } } }), lastUsed: 0 });
-  expect(await normal.facade.getSessionTreeSummaryForChat("legacy")).toEqual({ leafId: "raw", total: 0 });
+  await expect(normal.facade.getSessionTreeSummaryForChat("legacy")).rejects.toThrow("Durable session tree unavailable");
 });
 
 test("durable context uses the captured native estimate and never legacy metadata or counters", async () => {
@@ -974,304 +1224,6 @@ test("AgentRuntimeFacade leaves legacy XML session-tree entries unnormalized", (
   expect((tree?.nodes[0] as any).previewText).toBeUndefined();
   expect((tree?.nodes[0] as any).rawDetail).toBeUndefined();
 });
-
-test("AgentRuntimeFacade clears attachments around slash commands", async () => {
-  const session = { marker: true };
-  let refreshCalls = 0;
-  const fixture = createFacade({
-    refreshRuntime: async () => {
-      refreshCalls += 1;
-    },
-    executeSlashCommandFn: async (incomingSession, chatJid, rawText) => ({
-      ok: incomingSession === session,
-      chatJid,
-      rawText,
-      refresh_runtime: true,
-    } as any),
-  });
-  fixture.pool.set("web:default", { runtime: createRuntime(session), lastUsed: Date.now() });
-
-  const result = await fixture.facade.applySlashCommand("web:default", "/tasks");
-  expect(result).toEqual({ ok: true, chatJid: "web:default", rawText: "/tasks", refresh_runtime: true });
-  expect(fixture.cleared).toEqual(["web:default", "web:default"]);
-  expect(refreshCalls).toBe(1);
-});
-
-test("AgentRuntimeFacade reports control-command session generation changes", async () => {
-  const previousSession = { sessionId: "session-old" };
-  const nextSession = { sessionId: "session-new" };
-  const runtime = createRuntime(previousSession);
-  const fixture = createFacade({
-    applyControlCommandFn: async () => {
-      runtime.session = nextSession as any;
-      return { status: "success", message: "Started a new session." };
-    },
-  });
-  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
-
-  await expect(fixture.facade.applyControlCommand("web:default", { type: "new_session", raw: "/new-session" } as any)).resolves.toEqual({
-    status: "success",
-    message: "Started a new session.",
-    sessionGeneration: "session-new",
-    sessionGenerationChanged: true,
-  });
-});
-
-test("AgentRuntimeFacade scopes command context usage to its originating session generation", async () => {
-  const session = { sessionId: "session-compact" };
-  const runtime = createRuntime(session);
-  const fixture = createFacade({
-    applyControlCommandFn: async () => ({
-      status: "success",
-      message: "Compaction complete.",
-      contextUsage: {
-        tokens: 123,
-        contextWindow: 1000,
-        percent: 12.3,
-        source: "compact_command",
-      },
-    }),
-  });
-  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
-
-  await expect(fixture.facade.applyControlCommand("web:default", { type: "compact", raw: "/compact" } as any)).resolves.toMatchObject({
-    sessionGeneration: "session-compact",
-    contextUsage: {
-      tokens: 123,
-      contextWindow: 1000,
-      percent: 12.3,
-      source: "compact_command",
-      sessionGeneration: "session-compact",
-    },
-  });
-});
-
-test("AgentRuntimeFacade keeps slow command usage scoped to the session that produced it", async () => {
-  const previousSession = { sessionId: "session-old" };
-  const nextSession = { sessionId: "session-new" };
-  const runtime = createRuntime(previousSession);
-  const fixture = createFacade({
-    applyControlCommandFn: async () => {
-      runtime.session = nextSession as any;
-      return {
-        status: "success",
-        message: "Compaction complete.",
-        contextUsage: { tokens: 900, contextWindow: 1000, percent: 90 },
-      };
-    },
-  });
-  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
-
-  await expect(fixture.facade.applyControlCommand("web:default", { type: "compact", raw: "/compact" } as any)).resolves.toMatchObject({
-    sessionGeneration: "session-new",
-    sessionGenerationChanged: true,
-    contextUsage: {
-      tokens: 900,
-      sessionGeneration: "session-old",
-    },
-  });
-});
-
-test("AgentRuntimeFacade refreshes runtime when a control command requests it without swapping sessions", async () => {
-  const session = { marker: true };
-  let refreshCalls = 0;
-  const fixture = createFacade({
-    refreshRuntime: async () => {
-      refreshCalls += 1;
-    },
-    applyControlCommandFn: async () => ({
-      status: "success",
-      message: "Agent restarted.",
-      refresh_runtime: true,
-    }),
-  });
-  fixture.pool.set("web:default", { runtime: createRuntime(session), lastUsed: Date.now() });
-
-  const result = await fixture.facade.applyControlCommand("web:default", { type: "restart", raw: "/restart" } as any);
-  expect(result).toEqual({
-    status: "success",
-    message: "Agent restarted.",
-    refresh_runtime: true,
-  });
-  expect(refreshCalls).toBe(1);
-});
-
-
-function createManagedFacade(bindSession: () => Promise<void> = async () => {}) {
-  const pool = new Map<string, { runtime: AgentSessionRuntime; lastUsed: number }>();
-  const manager = new AgentSessionManager({
-    pool,
-    mainSessionMaxSize: 1,
-    modelRuntime: {} as any,
-    settingsManager: { getDefaultProvider: () => null, getDefaultModel: () => null } as any,
-    createDefaultTools: () => [],
-    bindSession,
-    ensureBranchRegistration: () => {},
-  });
-  const fixture = createFacade({
-    pool,
-    getOrCreateRuntime: (chatJid) => manager.getOrCreate(chatJid),
-    acquireCommandProtection: (chatJid) => manager.acquireEvictionProtection(chatJid),
-    refreshRuntime: (chatJid, runtime) => manager.refreshRuntime(chatJid, runtime),
-  });
-  return { ...fixture, pool, manager };
-}
-
-function commandGate() {
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  let entered!: () => void;
-  const started = new Promise<void>((resolve) => { entered = resolve; });
-  return { held, release, entered, started };
-}
-
-for (const kind of ["extension", "control"] as const) {
-  for (const policy of ["ttl", "pool-limit"] as const) {
-    for (const fails of [false, true]) {
-      test(`facade retains idle-looking ${kind} handler under ${policy} until ${fails ? "failure" : "completion"}`, async () => {
-        const gate = commandGate();
-        const fixture = createManagedFacade();
-        let disposed = 0;
-        let otherDisposed = 0;
-        let handlerCalls = 0;
-        const handler = async () => {
-          handlerCalls += 1;
-          gate.entered();
-          await gate.held;
-          if (fails) throw new Error("held command failed");
-        };
-        const session = {
-          sessionId: "command-session",
-          isStreaming: false,
-          isBashRunning: false,
-          isCompacting: false,
-          isRetrying: false,
-          resourceLoader: { getSkills: () => ({ skills: [] }) },
-          promptTemplates: [],
-          subscribe: () => () => {},
-          extensionRunner: {
-            getCommand: (name: string) => name === "held" ? { handler } : null,
-            createCommandContext: () => ({}),
-            emitError: () => {},
-          },
-        };
-        const runtime = createRuntime(session);
-        runtime.dispose = async () => { disposed += 1; };
-        runtime.newSession = async () => { await handler(); return { cancelled: false }; };
-        const other = createRuntime({ isStreaming: false, isBashRunning: false, isCompacting: false });
-        other.dispose = async () => { otherDisposed += 1; };
-        fixture.pool.set("web:held", { runtime, lastUsed: Date.now() });
-        const pending = kind === "extension"
-          ? fixture.facade.applySlashCommand("web:held", "/held")
-          : fixture.facade.applyControlCommand("web:held", { type: "new_session", raw: "/new-session" });
-        // Observe rejection immediately: control handlers propagate exceptions,
-        // whereas extension dispatch converts them into an error result.
-        const settled = pending.then(result => ({ result, error: null }), error => ({ result: null, error }));
-        try {
-          await gate.started;
-          expect(handlerCalls).toBe(1);
-          expect([session.isStreaming, session.isBashRunning, session.isCompacting]).toEqual([false, false, false]);
-          expect(fixture.manager.hasProtectedRun("web:held")).toBe(true);
-          // Do not let getOrCreate's touch or the recent-use grace mask eviction.
-          fixture.pool.get("web:held")!.lastUsed = Date.now() - 20_000;
-          fixture.pool.set("web:other", { runtime: other, lastUsed: Date.now() - 10_000 });
-          const eviction = { mainIdleTtlMs: policy === "ttl" ? 1 : 60_000, mainSessionMaxSizeOverride: 1 };
-          fixture.manager.evictIdle(eviction);
-          expect(fixture.pool.get("web:held")?.runtime).toBe(runtime);
-          expect(fixture.pool.has("web:other")).toBe(false);
-          await waitFor(() => otherDisposed === 1);
-          expect(disposed).toBe(0);
-          gate.release();
-          const outcome = await settled;
-          if (fails && kind === "control") {
-            expect(outcome.error?.message).toBe("held command failed");
-          } else {
-            expect(outcome.error).toBeNull();
-            expect(outcome.result?.status).toBe(fails ? "error" : "success");
-            if (fails) expect(outcome.result?.message).toBe("held command failed");
-          }
-          expect(fixture.manager.hasProtectedRun("web:held")).toBe(false);
-          expect(fixture.manager.getInstrumentationSnapshot().evictionProtectedChats).toBe(0);
-          fixture.pool.get("web:held")!.lastUsed = Date.now() - 20_000;
-          if (policy === "pool-limit") {
-            fixture.pool.set("web:newer", { runtime: createRuntime({ isStreaming: false }), lastUsed: Date.now() });
-          }
-          fixture.manager.evictIdle(eviction);
-          expect(fixture.pool.has("web:held")).toBe(false);
-          await waitFor(() => disposed === 1);
-          expect(disposed).toBe(1);
-        } finally {
-          gate.release();
-          await settled;
-          await fixture.manager.shutdown();
-        }
-      });
-    }
-  }
-}
-
-for (const kind of ["slash", "control"] as const) {
-  for (const fails of [false, true]) {
-    test(`facade retains ${kind} protection through runtime refresh ${fails ? "failure" : "completion"}`, async () => {
-      const gate = commandGate();
-      const fixture = createManagedFacade(async () => {
-        gate.entered();
-        await gate.held;
-        if (fails) throw new Error("refresh failed");
-      });
-      let disposed = 0;
-      const runtime = createRuntime({ sessionId: "refresh-session", isStreaming: false, isBashRunning: false, isCompacting: false });
-      runtime.dispose = async () => { disposed += 1; };
-      fixture.pool.set("web:refresh", { runtime, lastUsed: Date.now() });
-      // The callbacks finish immediately; only the manager's bind/refresh is held.
-      const facade = createFacade({
-        pool: fixture.pool,
-        getOrCreateRuntime: (jid) => fixture.manager.getOrCreate(jid),
-        acquireCommandProtection: (jid) => fixture.manager.acquireEvictionProtection(jid),
-        refreshRuntime: (jid, incoming) => fixture.manager.refreshRuntime(jid, incoming),
-        executeSlashCommandFn: async () => ({ status: "success", message: "done", refresh_runtime: true }),
-        applyControlCommandFn: async () => ({ status: "success", message: "done", refresh_runtime: true }),
-      }).facade;
-      const pending = kind === "slash" ? facade.applySlashCommand("web:refresh", "/held")
-        : facade.applyControlCommand("web:refresh", { type: "new_session", raw: "/new-session" });
-      const settled = pending.then(result => ({ result, error: null }), error => ({ result: null, error }));
-      try {
-        await gate.started;
-        expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(true);
-        fixture.pool.get("web:refresh")!.lastUsed = Date.now() - 10_000;
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
-        expect(fixture.pool.get("web:refresh")?.runtime).toBe(runtime);
-        expect(disposed).toBe(0);
-        gate.release();
-        const outcome = await settled;
-        if (fails) expect(outcome.error?.message).toBe("refresh failed");
-        else expect(outcome.result?.status).toBe("success");
-        expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(false);
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1 });
-        expect(fixture.pool.has("web:refresh")).toBe(false);
-        await waitFor(() => disposed === 1);
-      } finally {
-        gate.release();
-        await settled;
-        await fixture.manager.shutdown();
-      }
-    });
-  }
-
-  test(`facade releases ${kind} protection when manager admission fails`, async () => {
-    const fixture = createManagedFacade();
-    fixture.manager.blockMcpAdmissions();
-    try {
-      const pending = kind === "slash" ? fixture.facade.applySlashCommand("web:denied", "/held")
-        : fixture.facade.applyControlCommand("web:denied", { type: "new_session", raw: "/new-session" });
-      await expect(pending).rejects.toThrow("Session admission is blocked");
-      expect(fixture.manager.hasProtectedRun("web:denied")).toBe(false);
-      expect(fixture.manager.getInstrumentationSnapshot().evictionProtectedChats).toBe(0);
-    } finally {
-      await fixture.manager.shutdown();
-    }
-  });
-}
 
 test("durable compact captures one port for the whole command without legacy fallback", async () => {
   let lookups = 0, compactions = 0, legacyCalls = 0, releases = 0;

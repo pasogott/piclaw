@@ -328,7 +328,6 @@ describe("core config", () => {
       });
       const persisted = runConfigSubprocess(workspace, [
         "call:getAgentRuntimeConfig",
-        "call:getSessionStorageConfig",
         "call:getToolUseMessageBudget",
         "call:getAgentLogConfig",
       ], {
@@ -348,13 +347,11 @@ describe("core config", () => {
         },
       }).snapshot;
       expect(persisted["call:getAgentRuntimeConfig"]).toEqual({ timeoutMs: 1111, backgroundTimeoutMs: 2222 });
-      expect(persisted["call:getSessionStorageConfig"]).toEqual({ maxSizeMb: 48, maxSizeBytes: 48 * 1024 * 1024, maxLines: 9000, maxCompactionsBeforeRotation: 5, autoRotate: false });
       expect(persisted["call:getToolUseMessageBudget"]).toBe(23);
       expect(persisted["call:getAgentLogConfig"]).toEqual({ retentionMs: 123456, cleanupIntervalMs: 654321 });
 
       const { snapshot, stderr } = runConfigSubprocess(workspace, [
         "call:getAgentRuntimeConfig",
-        "call:getSessionStorageConfig",
         "call:getToolUseMessageBudget",
         "call:getAgentLogConfig",
       ], {
@@ -374,17 +371,12 @@ describe("core config", () => {
         },
       });
       expect(snapshot["call:getAgentRuntimeConfig"]).toEqual({ timeoutMs: 3333, backgroundTimeoutMs: 4444 });
-      expect(snapshot["call:getSessionStorageConfig"]).toEqual({ maxSizeMb: 64, maxSizeBytes: 64 * 1024 * 1024, maxLines: 10000, maxCompactionsBeforeRotation: 7, autoRotate: true });
       expect(snapshot["call:getToolUseMessageBudget"]).toBe(31);
       expect(snapshot["call:getAgentLogConfig"]).toEqual({ retentionMs: 2 * 24 * 60 * 60 * 1000, cleanupIntervalMs: 7000 });
       for (const envKey of [
         "AGENT_TIMEOUT",
         "PICLAW_BACKGROUND_AGENT_TIMEOUT",
         "PICLAW_TURN_MAX_TOOL_USE_MESSAGES",
-        "PICLAW_SESSION_MAX_SIZE_MB",
-        "PICLAW_SESSION_MAX_LINES",
-        "PICLAW_SESSION_MAX_COMPACTIONS",
-        "PICLAW_SESSION_AUTO_ROTATE",
         "PICLAW_AGENT_LOG_RETENTION_DAYS",
         "PICLAW_AGENT_LOG_CLEANUP_INTERVAL_MS",
       ]) expectCompatWarningOnce(stderr, envKey);
@@ -561,95 +553,6 @@ describe("core config", () => {
     });
   });
 
-  test("recovery domains persist across restart and preserve compatibility fallbacks", () => {
-    const workspace = createTempWorkspace("piclaw-domain-config-recovery-");
-    try {
-      writeWorkspaceConfig(workspace.workspace, {
-        domains: {
-          recovery: {
-            loopGuardEnabled: false,
-            loopGuardMaxFailures: 5,
-            loopGuardWindowMs: 700000,
-            automaticRecoveryEnabled: false,
-            transientRecoveryEnabled: false,
-            transientRecoveryToolsEnabled: false,
-            automaticRecoveryMaxAttempts: 0,
-            automaticRecoveryTotalBudgetMs: 45000,
-          },
-          webRecovery: {
-            stalePreflightRecoveryMs: 300000,
-            stalePreflightBackoffMs: 15000000,
-          },
-        },
-      });
-      const persisted = runConfigSubprocess(workspace, ["call:getRecoveryPolicyConfig", "call:getWebRecoveryConfig"], {
-        env: {
-          PICLAW_RECOVERY_LOOP_GUARD_ENABLED: undefined,
-          PICLAW_RECOVERY_LOOP_GUARD_MAX_FAILURES: undefined,
-          PICLAW_RECOVERY_LOOP_GUARD_WINDOW_MS: undefined,
-          PICLAW_TURN_AUTO_RECOVERY_ENABLED: undefined,
-          PICLAW_TURN_TRANSIENT_RECOVERY_ENABLED: undefined,
-          PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED: undefined,
-          PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: undefined,
-          PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS: undefined,
-          PICLAW_STALE_PREFLIGHT_RECOVERY_MS: undefined,
-          PICLAW_STALE_PREFLIGHT_BACKOFF_MS: undefined,
-        },
-      }).snapshot;
-      expect(persisted["call:getRecoveryPolicyConfig"]).toEqual({
-        loopGuardEnabled: false,
-        loopGuardMaxFailures: 5,
-        loopGuardWindowMs: 700000,
-        automaticRecoveryEnabled: false,
-        transientRecoveryEnabled: false,
-        transientRecoveryToolsEnabled: false,
-        automaticRecoveryMaxAttempts: 0,
-        automaticRecoveryTotalBudgetMs: 45000,
-      });
-      expect(persisted["call:getWebRecoveryConfig"]).toEqual({ stalePreflightRecoveryMs: 300000, stalePreflightBackoffMs: 15000000 });
-
-      const { snapshot, stderr } = runConfigSubprocess(workspace, ["call:getRecoveryPolicyConfig", "call:getWebRecoveryConfig"], {
-        env: {
-          PICLAW_RECOVERY_LOOP_GUARD_ENABLED: "1",
-          PICLAW_RECOVERY_LOOP_GUARD_MAX_FAILURES: "invalid",
-          PICLAW_RECOVERY_LOOP_GUARD_WINDOW_MS: "600000",
-          PICLAW_TURN_AUTO_RECOVERY_ENABLED: "true",
-          PICLAW_TURN_TRANSIENT_RECOVERY_ENABLED: "true",
-          PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED: "true",
-          PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "4",
-          PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS: "50000",
-          PICLAW_STALE_PREFLIGHT_RECOVERY_MS: "240000",
-          PICLAW_STALE_PREFLIGHT_BACKOFF_MS: "14400000",
-        },
-      });
-      expect(snapshot["call:getRecoveryPolicyConfig"]).toEqual({
-        loopGuardEnabled: true,
-        loopGuardMaxFailures: 5,
-        loopGuardWindowMs: 600000,
-        automaticRecoveryEnabled: true,
-        transientRecoveryEnabled: true,
-        transientRecoveryToolsEnabled: true,
-        automaticRecoveryMaxAttempts: 4,
-        automaticRecoveryTotalBudgetMs: 50000,
-      });
-      expect(snapshot["call:getWebRecoveryConfig"]).toEqual({ stalePreflightRecoveryMs: 240000, stalePreflightBackoffMs: 14400000 });
-      for (const envKey of [
-        "PICLAW_RECOVERY_LOOP_GUARD_ENABLED",
-        "PICLAW_RECOVERY_LOOP_GUARD_WINDOW_MS",
-        "PICLAW_TURN_AUTO_RECOVERY_ENABLED",
-        "PICLAW_TURN_TRANSIENT_RECOVERY_ENABLED",
-        "PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED",
-        "PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS",
-        "PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS",
-        "PICLAW_STALE_PREFLIGHT_RECOVERY_MS",
-        "PICLAW_STALE_PREFLIGHT_BACKOFF_MS",
-      ]) expectCompatWarningOnce(stderr, envKey);
-      expect(stderr).not.toContain('"envKey":"PICLAW_RECOVERY_LOOP_GUARD_MAX_FAILURES"');
-    } finally {
-      workspace.cleanup();
-    }
-  });
-
   test("watchdog domain persists across restart with ordered compatibility aliases", () => {
     const workspace = createTempWorkspace("piclaw-domain-config-watchdog-");
     try {
@@ -704,12 +607,6 @@ describe("core config", () => {
             timeoutMs: 400000,
             backoffBaseMs: 120000,
             backoffMaxMs: 600000,
-            thresholdPercent: 70,
-            maxThresholdTokens: 123456,
-            autoCompactionScope: "body_after_prefix",
-            hardCeilingPercent: 98,
-            warningThreshold: 4,
-            backoffDecayFactor: 0.25,
             systemPromptOverheadTokens: 5000,
             compactionRequestOverheadTokens: 1200,
             tokenEstimateSafetyMultiplier: 1.25,
@@ -740,9 +637,7 @@ describe("core config", () => {
       } }).snapshot;
       expect(persisted["call:getCompactionRuntimeConfig"]).toMatchObject({
         autoCompactionEnabled: false, smartCompactionMethod: "pipelined", timeoutMs: 400000,
-        backoffBaseMs: 120000, backoffMaxMs: 600000, thresholdPercent: 70,
-        maxThresholdTokens: 123456, autoCompactionScope: "body_after_prefix",
-        hardCeilingPercent: 98, warningThreshold: 4, backoffDecayFactor: 0.25,
+        backoffBaseMs: 120000, backoffMaxMs: 600000,
         systemPromptOverheadTokens: 5000, compactionRequestOverheadTokens: 1200,
         tokenEstimateSafetyMultiplier: 1.25, progressiveCompaction: true,
         smartCompactionReasoning: "low",
@@ -770,9 +665,7 @@ describe("core config", () => {
       } });
       expect(snapshot["call:getCompactionRuntimeConfig"]).toMatchObject({
         autoCompactionEnabled: true, smartCompactionMethod: "pipelined", timeoutMs: 450000,
-        backoffBaseMs: 900000, backoffMaxMs: 900000, thresholdPercent: 70,
-        maxThresholdTokens: 0, autoCompactionScope: "total", hardCeilingPercent: 100,
-        warningThreshold: 5, backoffDecayFactor: 0.5,
+        backoffBaseMs: 900000, backoffMaxMs: 900000,
         systemPromptOverheadTokens: 6000, compactionRequestOverheadTokens: 1500,
         tokenEstimateSafetyMultiplier: 1.5, progressiveCompaction: true,
         smartCompactionReasoning: "high",
@@ -780,10 +673,7 @@ describe("core config", () => {
       expect(snapshot["call:getMidTurnToolExecutionHardCeiling"]).toBe(512);
       for (const envKey of [
         "PICLAW_AUTO_COMPACTION_ENABLED", "PICLAW_SMART_COMPACTION_METHOD", "PICLAW_COMPACTION_TIMEOUT_MS",
-        "PICLAW_COMPACTION_BACKOFF_BASE_MS", "PICLAW_COMPACTION_BACKOFF_MAX_MS",
-        "PICLAW_COMPACTION_MAX_THRESHOLD_TOKENS", "PICLAW_AUTO_COMPACTION_SCOPE",
-        "PICLAW_COMPACTION_HARD_CEILING_PERCENT", "PICLAW_COMPACTION_WARNING_THRESHOLD",
-        "PICLAW_COMPACTION_BACKOFF_DECAY_FACTOR", "PICLAW_SYSTEM_PROMPT_OVERHEAD_TOKENS",
+        "PICLAW_COMPACTION_BACKOFF_BASE_MS", "PICLAW_COMPACTION_BACKOFF_MAX_MS", "PICLAW_SYSTEM_PROMPT_OVERHEAD_TOKENS",
         "PICLAW_COMPACTION_REQUEST_OVERHEAD_TOKENS", "PICLAW_TOKEN_ESTIMATE_SAFETY_MULTIPLIER",
         "PICLAW_PROGRESSIVE_COMPACTION", "PICLAW_SMART_COMPACTION_REASONING",
         "PICLAW_MID_TURN_TOOL_EXECUTION_HARD_CEILING",
@@ -1190,33 +1080,6 @@ describe("core config", () => {
     } finally { workspace.cleanup(); }
   });
 
-  test("compaction delay fields persist across restart with zero-valued compatibility aliases", () => {
-    const workspace = createTempWorkspace("piclaw-domain-config-compaction-delays-");
-    try {
-      writeWorkspaceConfig(workspace.workspace, {
-        domains: { compaction: { idleAutoCompactionDelayMs: 7000, prePromptForegroundMs: 350 } },
-      });
-      const names = ["call:getIdleAutoCompactionDelayMs", "call:getPrePromptCompactionForegroundMs"];
-      const persisted = runConfigSubprocess(workspace, names, { env: {
-        PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS: undefined,
-        PICLAW_PREPROMPT_COMPACTION_FOREGROUND_MS: undefined,
-      } }).snapshot;
-      expect(persisted["call:getIdleAutoCompactionDelayMs"]).toBe(7000);
-      expect(persisted["call:getPrePromptCompactionForegroundMs"]).toBe(350);
-
-      const { snapshot, stderr } = runConfigSubprocess(workspace, names, { env: {
-        PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS: "0",
-        PICLAW_PREPROMPT_COMPACTION_FOREGROUND_MS: "invalid",
-      } });
-      expect(snapshot["call:getIdleAutoCompactionDelayMs"]).toBe(0);
-      expect(snapshot["call:getPrePromptCompactionForegroundMs"]).toBe(350);
-      expectCompatWarningOnce(stderr, "PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS");
-      expect(stderr).not.toContain('"envKey":"PICLAW_PREPROMPT_COMPACTION_FOREGROUND_MS"');
-    } finally {
-      workspace.cleanup();
-    }
-  });
-
   test("persisted web domain settings win in a fresh process when compatibility aliases are absent", () => {
     const workspace = createTempWorkspace("piclaw-domain-config-restart-");
     try {
@@ -1574,35 +1437,6 @@ describe("core config", () => {
   });
 
   test("mutable general-setting setters persist and apply immediately", async () => {
-    await withFreshConfig({}, async ({ workspace, config }) => {
-      config.setSessionStorageConfig({ maxSizeMb: 48, autoRotate: false });
-      config.setToolUseMessageBudget(21);
-
-      expect(config.getSessionStorageConfig()).toMatchObject({
-        maxSizeMb: 48,
-        maxSizeBytes: 48 * 1024 * 1024,
-        autoRotate: false,
-      });
-      expect(config.getToolUseMessageBudget()).toBe(21);
-      expect(process.env.PICLAW_SESSION_MAX_SIZE_MB).toBeUndefined();
-      expect(process.env.PICLAW_SESSION_AUTO_ROTATE).toBeUndefined();
-      expect(process.env.PICLAW_SESSION_MAX_LINES).toBeUndefined();
-      expect(process.env.PICLAW_SESSION_MAX_COMPACTIONS).toBeUndefined();
-      expect(process.env.PICLAW_TURN_MAX_TOOL_USE_MESSAGES).toBeUndefined();
-
-      const persisted = JSON.parse(readFileSync(join(workspace.workspace, ".piclaw", "config.json"), "utf8"));
-      expect(persisted).toMatchObject({
-        domains: {
-          agent: { toolUseMessageBudget: 21 },
-          session: {
-            maxSizeMb: 48,
-            autoRotate: false,
-            maxLines: 8000,
-            maxCompactionsBeforeRotation: 3,
-          },
-        },
-      });
-    });
   });
 
   test("web terminal and VNC setters persist domain values without mutating assigned env vars", async () => {

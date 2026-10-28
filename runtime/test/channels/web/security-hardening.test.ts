@@ -53,7 +53,7 @@ describe("parsePostPayload", () => {
     expect(result.data?.content).toBe("Hello world!");
   });
 
-  test("strips reserved restart metadata from public posts and replies while retaining safe blocks", () => {
+  test("strips reserved restart metadata from public posts and replies while retaining safe blocks", async () => {
     const stored: Array<{ contentBlocks?: unknown[]; threadId?: number }> = [];
     const channel = {
       storeMessage(_chatJid: string, _content: string, _isBot: boolean, _mediaIds: number[], options: { contentBlocks?: unknown[]; threadId?: number }) {
@@ -68,8 +68,8 @@ describe("parsePostPayload", () => {
       { type: "file", filename: "safe.txt" },
     ];
 
-    expect(storePost(channel, "web:test", { content: "post", content_blocks }, { isReply: false }).status).toBe(201);
-    expect(storePost(channel, "web:test", { content: "reply", thread_id: 7, content_blocks }, { isReply: true }).status).toBe(201);
+    expect((await storePost(channel, "web:test", { content: "post", content_blocks }, { isReply: false })).status).toBe(201);
+    expect((await storePost(channel, "web:test", { content: "reply", thread_id: 7, content_blocks }, { isReply: true })).status).toBe(201);
     expect(stored).toEqual([
       { contentBlocks: [{ type: "file", filename: "safe.txt" }], linkPreviews: undefined, threadId: undefined },
       { contentBlocks: [{ type: "file", filename: "safe.txt" }], linkPreviews: undefined, threadId: 7 },

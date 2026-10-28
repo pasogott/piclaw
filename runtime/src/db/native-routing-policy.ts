@@ -23,6 +23,15 @@ function hasNativeApplicationManifest(db: Database): boolean {
     WHERE kind='"app.application-conversations"' AND scope_kind='conversation' AND owner_id=1 AND retired_at IS NULL`).get();
 }
 
+/** A new host root is metadata only; the live native owner separately allocates
+ * its SDK context on admission. Keep metadata creation in the same SQL frame. */
+export function assertNativeRootCreation(db: Database): void {
+  if (!db.inTransaction || !hasNativeApplicationManifest(db)) throw Error("Native root creation requires its owner transaction");
+  const guards = controlGuards.get(db);
+  if (!guards?.size) throw Error("Native routing owner unavailable for root creation");
+  for (const guard of guards) guard.assert([]);
+}
+
 /** Native addresses/branch identities are immutable. Friendly handle rename is
  * supported separately. Legacy address moves/forks cannot publish native IDs. */
 export function requireLegacyRoutingMutation(db: Database, operation: string): void {

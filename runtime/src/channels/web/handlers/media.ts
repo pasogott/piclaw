@@ -1,3 +1,4 @@
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 /**
  * web/handlers/media.ts – HTTP handlers for media upload and retrieval.
  *
@@ -17,6 +18,7 @@ const mediaService = new MediaService();
 
 /** Minimal response contract needed by media endpoint handlers. */
 export interface MediaResponseContext {
+  authGateway?: Parameters<typeof captureWebRequestAuthority>[0];
   /** Build JSON responses for media endpoint success/error payloads. */
   json(payload: unknown, status?: number): Response;
 }
@@ -28,6 +30,7 @@ export interface MediaResponseContext {
  * @returns JSON response with created media metadata or validation errors.
  */
 export async function handleMediaUpload(channel: MediaResponseContext, req: Request): Promise<Response> {
+  const authorise = captureWebRequestAuthority(channel.authGateway, req);
   let form: FormData;
   try {
     form = await req.formData();
@@ -38,7 +41,7 @@ export async function handleMediaUpload(channel: MediaResponseContext, req: Requ
   const file = form.get("file");
   if (!(file instanceof File)) return channel.json({ error: "Missing file" }, 400);
 
-  const result = await mediaService.createFromFile(file);
+  const result = await mediaService.createFromFile(file, undefined, undefined, { authorise, signal: req.signal });
   return channel.json(result.body, result.status);
 }
 

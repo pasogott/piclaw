@@ -1,4 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { RegistrySnapshot, PromptInput } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 
@@ -33,14 +34,23 @@ export function assertModelContextFits(messages: readonly Message[], agent: unkn
   const overhead = promptSectionBytes ?? 0;
   if (!Number.isSafeInteger(overhead) || overhead < 0) throw Error("Dynamic prompt overhead unavailable");
   const tools = selectedTools ?? registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
-  const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
-  const usage = messages.reduce((max, message) => message.role === "assistant"
-    ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
   if (messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image"))) throw Error("Non-text context overhead unavailable");
-  if (!Number.isFinite(usage) || Math.max(bytes, usage) + overhead + 8192 + target.maxTokens > target.contextWindow) {
+  if (messages.some(message => message.role === "assistant" &&
+    [message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite, message.usage.totalTokens]
+      .some(value => !Number.isFinite(value) || value < 0))) throw Error("Model context usage unavailable");
+  // The SDK identifies the last applicable measured prefix, including prefix
+  // changes. Serialized metadata/signatures in that prefix are not token usage.
+  // Keep a byte-per-token upper bound for the unmeasured suffix and current
+  // configuration/schemas; never let a small old measurement hide new input.
+  const estimate = estimateContextTokens(messages);
+  const suffix = estimate.lastUsageIndex === null ? messages : messages.slice(estimate.lastUsageIndex + 1);
+  const unmeasuredBytes = new TextEncoder().encode(JSON.stringify([suffix, agent, tools])).length;
+  const inputBound = Math.max(estimate.tokens, estimate.usageTokens + unmeasuredBytes);
+  if (!Number.isFinite(inputBound) || inputBound < 0 || inputBound + overhead + 8192 + target.maxTokens > target.contextWindow) {
+    const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
     // Numeric-only diagnostics explain conservative admission without exposing
     // prompts, tool arguments, credentials or opaque reasoning signatures.
-    throw Error(`Candidate context bound exceeded; compact first (serialized input bytes=${bytes}, reported tokens=${usage}, dynamic prompt bytes=${overhead}, reserve=8192, output budget=${target.maxTokens}, context window=${target.contextWindow})`);
+    throw Error(`Candidate context bound exceeded; compact first (serialized input bytes=${bytes}, reported tokens=${estimate.usageTokens}, estimated context tokens=${estimate.tokens}, unmeasured input bytes=${unmeasuredBytes}, input token bound=${inputBound}, dynamic prompt bytes=${overhead}, reserve=8192, output budget=${target.maxTokens}, context window=${target.contextWindow})`);
   }
 }
 

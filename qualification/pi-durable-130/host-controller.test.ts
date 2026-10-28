@@ -11,6 +11,13 @@ import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/dura
 import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { AcceptedReplyThreadUnavailableError } from "../../runtime/durable-engine/src/host-message-thread.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
+import { backgroundPolicyFixture,backgroundPolicyReopenFixture,backgroundPolicyOwnerFixture } from "./background-policy-fixture.ts";
+
+test('background policy SDK: paused disk reopen preserves quota and same-input replay',backgroundPolicyReopenFixture);
+test('background policy SDK: document owner matches its public registration',backgroundPolicyOwnerFixture);
+
+for(const mode of ['allowed','limit','ceiling','forged-call','revoked','expired','configuration','parallel','reused-call-id','api-change','long-call'] as const)
+  test(`background policy SDK: ${mode}`,()=>backgroundPolicyFixture(mode));
 
 // Each scenario owns its fixture and keeps the existing 15-second deadline.
 for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrelated-settlement-error"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
@@ -100,8 +107,7 @@ for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrel
           } else s.close = async c => { await close(c); events.push("close"); };
           return s;
         },
-        runtime: { incarnation: f.incarnation, ...f.ports,
-          cancelOperationSource(input, expectedVersion) {
+        runtime: { incarnation: f.incarnation, ...f.ports, cancelOperationSource(input, expectedVersion) {
             f.db.transaction(() => {
               f.owner.assert();
               const row = f.db.query("SELECT version,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?")
@@ -114,8 +120,7 @@ for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrel
                 parentSourceSeq: input.sourceSeq, acceptedAt: at, createWakeIntent: false }), expectedVersion, "operator_abort", f.db);
               f.owner.assert();
             }).immediate();
-          },
-          work: { acceptSource: f.ports.work.acceptSource.bind(f.ports.work),
+          }, work: { acceptSource: f.ports.work.acceptSource.bind(f.ports.work),
             claimNext: f.ports.work.claimNext.bind(f.ports.work), appendIntent: f.ports.work.appendIntent.bind(f.ports.work),
             recordQueuedInput: f.ports.work.recordQueuedInput.bind(f.ports.work),
             getChatFrontier: f.ports.work.getChatFrontier.bind(f.ports.work),
@@ -123,15 +128,11 @@ for (const mode of ([["committed-answer"], ["unavailable-reply-thread"], ["unrel
             if (holdLookup) { entered.release(); await held.promise; }
             return f.ports.work.getOperation(id);
           }, acceptCancellation: f.ports.work.acceptCancellation.bind(f.ports.work),
-          bindHarness: f.ports.work.bindHarness.bind(f.ports.work), finishHarness: f.ports.work.finishHarness!.bind(f.ports.work) },
-          harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
-          existingConversationIds: [mode === "failed-open" ? 999999 as typeof f.base.root.id : f.base.root.id],
-          conversationFor: () => f.base.root.id, putAnswer(ref, text) { if (committed) f.putAnswer(ref, text); },
-          replyThreadFor() {
+          bindHarness: f.ports.work.bindHarness.bind(f.ports.work), finishHarness: f.ports.work.finishHarness!.bind(f.ports.work) }, harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } }, existingConversationIds: [mode === "failed-open" ? 999999 as typeof f.base.root.id : f.base.root.id], conversationFor: () => f.base.root.id, putAnswer(ref, text) { if (committed) f.putAnswer(ref, text); }, replyThreadFor() {
             if (mode === "unavailable-reply-thread") throw new AcceptedReplyThreadUnavailableError();
             if (mode === "unrelated-settlement-error") throw Error("fixture settlement failed");
             return null;
-          }, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
+          }, sessionId: f.incarnation, now: () => at },
         recovery: { manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }],
           work: f.ports.work, bindings: f.ports.bindings,
           async readAcceptedInput(source) {

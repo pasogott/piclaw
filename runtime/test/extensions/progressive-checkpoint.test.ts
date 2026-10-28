@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { clearDomainConfigRegistryForTests } from "../../src/core/domain-config.js";
 import { registerExtensionKvStore, type ExtensionKvStore } from "../../src/extension-kv-registry.js";
 import {
   buildProgressiveCheckpointFingerprint,
@@ -36,7 +35,6 @@ function units() {
 
 afterEach(() => {
   registerExtensionKvStore(memoryKv());
-  clearDomainConfigRegistryForTests();
 });
 
 test("source-unit chunking keeps every atomic group in one chunk", () => {

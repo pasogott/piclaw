@@ -4,6 +4,7 @@ import { AssistantEntry } from "../../../runtime/durable-engine/qualification/du
 import { context, type openFixture } from "./fixture.js";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
+import type {CurrentPiclawServiceWorkStore} from '../../../runtime/src/service-effects/current-piclaw/service-work-store.js';
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, effect, sealed } from "../../../runtime/durable-engine/src/host-effects.js";
 export { value, effect, sealed };
@@ -21,7 +22,7 @@ export function assertHandoffOwner(db: Database, fixture: Fixture, incarnation: 
 /** Qualification requires uninterrupted exclusive ownership, including inside adapters.
  * Generation checks do NOT establish that precondition or undo an adapter commit.
  * Own this connection exclusively. Never hold an SQL transaction across an await. */
-export function hostHandoff(db: Database, work: ServiceWorkStore, terminal: TerminalSettlementStore,
+export function hostHandoff(db: Database, work: ServiceWorkStore & Pick<CurrentPiclawServiceWorkStore,'finishHarness'>, terminal: TerminalSettlementStore,
   fixture: Fixture, incarnation: string, generation: number, payload: (ref: string, text: string) => void) {
   if (!incarnation) throw new Error("Store incarnation required");
   db.exec(`CREATE TABLE IF NOT EXISTS qualification_owner (singleton INTEGER PRIMARY KEY CHECK(singleton=1), incarnation TEXT NOT NULL, generation INTEGER NOT NULL);
@@ -85,14 +86,19 @@ export function hostHandoff(db: Database, work: ServiceWorkStore, terminal: Term
     operation = value(await work.getOperation(opId));
     fence();
     if (!operation) throw new Error("Missing host operation");
-    // The real adapter binds once, not a general running->finished lifecycle API.
-    // Bind only committed completion in this deliberately bounded qualification slice.
+    // Bind the actual committed SDK handle, then enter host settlement only
+    // after the exact submission/answer proof above.
     if (!operation.harness) {
       operation = value(await work.bindHarness(sealed({
         effect: effect(`bind:${requestId}:${generation}`, opId, source.sourceSeq), expectedVersion: operation.version,
-        sessionId: "qualification-session", lane: "main", harnessOperationId: opId,
-        state: "finished" as const, watchGeneration: generation })));
+        sessionId: "qualification-session", harnessOperationId: String(submission) })));
       fence();
+    }
+    if (operation.phase !== 'settling') {
+      const completion = {effect:{...effect(`finish:v2:${requestId}:${operation.version}`,opId,source.sourceSeq),operationId:opId},
+        expectedVersion:operation.version,expectedHarness:{sessionId:operation.harness!.sessionId,harnessOperationId:operation.harness!.harnessOperationId}};
+      completion.effect.requestHash=hashCanonicalRequest({method:'finishHarness.v1',...completion});
+      fence();operation=value(await work.finishHarness(completion));fence();
     }
     const cancelled = operation.cancellation !== null;
     const ref = `answer:${submission}`;

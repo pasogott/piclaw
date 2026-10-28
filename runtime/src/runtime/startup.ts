@@ -22,21 +22,18 @@ import {
   STORE_DIR,
   WORKSPACE_DIR,
   getPushoverConfig,
-  getToolOutputConfig,
   getProgressWatchdogSafetyWarning,
 } from "../core/config.js";
-import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, getFailedRun, initDatabase } from "../db.js";
+import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, initDatabase } from "../db.js";
 import type { AgentQueue } from "../queue.js";
 import { validateAccessStartup } from "../db/access-state.js";
 import { startAuthMaintenance } from "./auth-maintenance.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { prepareMcpInstanceConfig } from "../core/config-mcp.js";
-import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
 import { createLogger } from "../utils/logger.js";
 import { seedFreshWorkspaceCoreAddons } from "./core-addon-defaults.js";
-import { parseNonNegativeIntStrict } from "../utils/strict-int.js";
 import { patchConsoleTimestamps } from "./console-timestamps.js";
 import { startExternalProgressWatchdogMonitor } from "./progress-watchdog-supervisor.js";
 import { recoverPendingRestartHandoffs } from "./restart-handoff.js";
@@ -56,18 +53,7 @@ const STARTUP_MEMORY_SNAPSHOT_DIR = join(DATA_DIR, "startup-memory-snapshots");
 export const STARTUP_STATUS_CHAT_JID = "web:default";
 export const STARTUP_STATUS_TURN_ID = "startup:web:default";
 
-function parseStartupWarmupBoolean(value: string | undefined, fallback = false): boolean {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  return fallback;
-}
 
-function parseStartupWarmupLimit(value: string | undefined, fallback = 0): number {
-  const parsed = parseNonNegativeIntStrict(value, fallback);
-  return Math.max(0, Math.min(8, parsed));
-}
 const WORKSPACE_BOOTSTRAP_ENTRIES = [
   "AGENTS.md",
   ".mcp.json.example",
@@ -207,45 +193,11 @@ export function initializeRuntimeEnvironment(state: RuntimeState): ReturnType<ty
   }
   launchWorkspaceIndexProcess({ scope: "all" });
   startWorkspaceIndexReconciliation();
-  const toolOutputConfig = getToolOutputConfig();
-  startToolOutputCleanup(toolOutputConfig.retentionMs, toolOutputConfig.cleanupIntervalMs);
+  // The production native backend has not validated/imported history yet.
+  // File age or missing registration is not authority to prune its tool payloads.
   state.loadTimestamps();
   state.loadChats();
   return access;
-}
-
-export function resolveStartupSessionWarmupOptions(env: NodeJS.ProcessEnv = process.env): {
-  warmDefaultChat: boolean;
-  recentLimit: number;
-} {
-  return {
-    warmDefaultChat: parseStartupWarmupBoolean(env.PICLAW_STARTUP_WARM_DEFAULT_CHAT, false),
-    recentLimit: parseStartupWarmupLimit(env.PICLAW_STARTUP_WARMUP_RECENT_LIMIT, 0),
-  };
-}
-
-export function queueStartupSessionWarmup(
-  agentPool: AgentPool & {
-    scheduleChatWarmup?: (chatJid: string, options?: { priority?: boolean }) => boolean;
-    scheduleRecentChatWarmup?: (options?: { limit?: number; excludeChatJids?: string[] }) => string[];
-  },
-  options: { defaultChatJid?: string; recentLimit?: number; warmDefaultChat?: boolean } = {},
-): void {
-  const defaultChatJid = typeof options.defaultChatJid === "string" && options.defaultChatJid.trim()
-    ? options.defaultChatJid.trim()
-    : "web:default";
-  const warmDefaultChat = options.warmDefaultChat ?? false;
-  const recentLimit = Math.max(0, Math.min(8, Math.trunc(options.recentLimit ?? 0) || 0));
-
-  if (warmDefaultChat) {
-    agentPool.scheduleChatWarmup?.(defaultChatJid, { priority: true });
-  }
-  if (recentLimit > 0) {
-    agentPool.scheduleRecentChatWarmup?.({
-      limit: recentLimit,
-      excludeChatJids: warmDefaultChat ? [defaultChatJid] : [],
-    });
-  }
 }
 
 function sanitizeStartupSnapshotLabel(label: string): string {
@@ -315,7 +267,6 @@ export function buildStartupAgentStatus(options: {
 
 interface StartupRecoveryWebChannel {
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void;
-  recoverInflightRuns(): void;
   resumePendingChats(chatJid?: string): void;
 }
 
@@ -324,15 +275,6 @@ function parseModelLabel(label: string): { provider?: string; modelId: string } 
   const slash = trimmed.indexOf("/");
   if (slash > 0) return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
   return { modelId: trimmed };
-}
-
-function summarizeFailedRun(chatJid: string): Record<string, unknown> | null {
-  try {
-    const failed = getFailedRun(chatJid);
-    return failed ? { ...failed } as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
 }
 
 function getCursorSnapshot(chatJid: string): string | null {
@@ -361,15 +303,13 @@ async function buildSessionControlSnapshot(agentPool: AgentPool, chatJid: string
     model: models?.current ?? null,
     thinking_level: models?.thinking_level ?? null,
     context_usage: context,
-    failed_run: summarizeFailedRun(chatJid),
+    failed_run: null, // Compatibility response field; no legacy recovery authority.
     cursor: getCursorSnapshot(chatJid),
     tree: tree ? { leaf_id: tree.leafId, total: tree.total } : null,
   };
 }
 
 function assessSessionSnapshot(snapshot: Record<string, unknown>): string {
-  const failed = snapshot.failed_run as Record<string, unknown> | null;
-  if (failed) return "failed_run";
   if (snapshot.compacting) {
     const lastEvent = snapshot.last_event_at ? Date.parse(String(snapshot.last_event_at)) : 0;
     if (lastEvent && Date.now() - lastEvent > 5 * 60_000) return "stale_compaction";
@@ -462,19 +402,8 @@ function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): v
         modelId,
         raw: `/model ${resolved.model}`,
       });
-      const retried = web.retryFailedOnModelSwitch(target.chatJid);
-      if (retried) web.resumeChat(target.chatJid);
       message = result.message || `Model switch ${result.status}.`;
-      extra = { control_status: result.status, requested_model: model, resolved_model: resolved.model, retried_failed_run: retried };
-    } else if (request.action === "retry_failed") {
-      const retried = web.retryFailedOnModelSwitch(target.chatJid);
-      if (retried) web.resumeChat(target.chatJid);
-      message = retried ? "Failed run marked for retry and chat resumed." : "No failed run to retry.";
-      extra = { retried };
-    } else if (request.action === "skip_failed") {
-      const skipped = web.skipFailedOnModelSwitch(target.chatJid);
-      message = skipped ? "Failed run skipped." : "No failed run to skip.";
-      extra = { skipped };
+      extra = { control_status: result.status, requested_model: model, resolved_model: resolved.model };
     } else if (request.action === "wake") {
       web.resumeChat(target.chatJid);
       message = "Chat wake/resume queued.";
@@ -495,13 +424,7 @@ function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): v
         steps.push({ action: "switch_model", status: result.status, requested_model: request.model.trim(), resolved_model: resolved.model });
       }
 
-      const retried = web.retryFailedOnModelSwitch(target.chatJid);
-      if (retried) {
-        web.resumeChat(target.chatJid);
-        steps.push({ action: "retry_failed", retried: true });
-        steps.push({ action: "wake", resumed: true });
-        message = "Failed run marked for retry and chat resumed.";
-      } else if (before.streaming || before.compacting || before.active || (Array.isArray(before.active_tools) && before.active_tools.length > 0)) {
+      if (before.streaming || before.compacting || before.active || (Array.isArray(before.active_tools) && before.active_tools.length > 0)) {
         const result = await agentPool.applyControlCommand(target.chatJid, { type: "abort", raw: "/abort" });
         steps.push({ action: "abort", status: result.status });
         web.resumeChat(target.chatJid);
@@ -512,7 +435,7 @@ function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): v
         steps.push({ action: "wake", resumed: true });
         message = "Chat wake/resume queued.";
       }
-      extra = { assessment_before: assessment, steps, retried_failed_run: retried };
+      extra = { assessment_before: assessment, steps };
     } else {
       throw new Error(`Unsupported session_control action: ${request.action}`);
     }
@@ -529,13 +452,12 @@ export function runWebStartupRecoveryBootstrap(
 ): void {
   const startedAt = new Date().toISOString();
   web.updateAgentStatus(STARTUP_STATUS_CHAT_JID, buildStartupAgentStatus({
-    phase: "recovering_inflight",
-    detail: "Restoring runtime state and recovering interrupted chats.",
+    phase: "recovering_native",
+    detail: "Restoring native runtime state and accepted restart handoffs.",
     startedAt,
   }));
 
   try {
-    web.recoverInflightRuns();
     recoverRestartHandoffs?.();
     web.updateAgentStatus(STARTUP_STATUS_CHAT_JID, buildStartupAgentStatus({
       phase: "resuming_pending",
@@ -585,7 +507,6 @@ export async function startWebChannel(
   // register their HTTP routes during the first session resource reload.
   // createSessionInDir() freezes the registry after that initial load pass.
 
-
   // Wire the first-class add-on runtime API to the web channel's in-process
   // message storage/queue/run path. Add-ons should use this instead of
   // synthesizing authenticated localhost HTTP requests to /agent/:id/message.
@@ -594,6 +515,11 @@ export async function startWebChannel(
     const interaction = web.storeMessage(chatJid, content, isBot, mediaIds, {
       contentBlocks,
     });
+    if (!interaction) return null;
+    web.broadcastEvent(isBot ? "agent_response" : "new_post", interaction);
+    return interaction.id;
+  }, async (chatJid, content, isBot, mediaIds, contentBlocks, authorise, signal) => {
+    const interaction = await web.admitMessage(chatJid,content,isBot,mediaIds,contentBlocks,authorise,signal);
     if (!interaction) return null;
     web.broadcastEvent(isBot ? "agent_response" : "new_post", interaction);
     return interaction.id;
@@ -612,7 +538,6 @@ export async function startWebChannel(
   await initializeWebAddonMessagingRuntime(agentPool, web);
 
   captureStartupMemorySnapshot(agentPool, { label: "post-web-start" });
-  queueStartupSessionWarmup(agentPool, resolveStartupSessionWarmupOptions());
   runWebStartupRecoveryBootstrap(web, () => {
     recoverPendingRestartHandoffs(web);
   }, (resume) => {

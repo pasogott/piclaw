@@ -53,16 +53,12 @@ export interface SettingsData {
   /* general */
   assistantName?: string;
   userName?: string;
-  sessionAutoRotate?: boolean;
-  sessionMaxSizeMb?: number;
+
   toolUseBudget?: number;
   webTerminalEnabled?: boolean;
   sessionIsolation?: "none" | "summary" | "full";
   widgetToken?: string;
-  automaticRecoveryEnabled?: boolean;
-  automaticRecoveryMaxAttempts?: number;
-  automaticRecoveryTotalBudgetMs?: number;
-  automaticRecoveryEffectiveBudgetMs?: number;
+
   searchMatchMode?: "or" | "and";
   composeUploadLimitMb?: number;
   workspaceUploadLimitMb?: number;

@@ -42,9 +42,7 @@ async function fixture() {
     operationId: claimed.operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,
     payloadRef: source.payloadRef, requestId: "authority:request", requestHash: "a".repeat(64), submissionId: 42 as never }];
   const before = { operation: claimed.operation, inputs };
-  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq),
-    expectedVersion: claimed.operation.version, sessionId: "authority:session", lane: "main",
-    harnessOperationId: "42", state: "running" as const, watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("authority:bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "authority:session", harnessOperationId: "42" })));
   root.exec("CREATE TABLE authority_probe (value TEXT)");
   return { root, before, captured: { operation, inputs } };
 }
@@ -88,8 +86,8 @@ for (const outcome of ["success", "error", "cancel", "revoke"] as const) {
       const bindings = { historyDatabase: root, cwd: "/fixture", accessMode: () => "single-user", allowAllChats: () => false,
         async readFile() { return undefined; }, async admitConversationInput() { throw Error("Tool must not admit input"); } };
       const nativeApi = addon.createLateNightRegrets(createHostRegretsBindings({ ...bindings, root, chat: captured.operation.chatJid,
-        assertCurrent: authority.assertCurrent, transactionalWrite: authority.write, readExchanges: addon.readExchanges, accountedDecision: port }));
-      nativeApi.setConfig({ enabled: true, review_scope: "current", decision_model: "openai-codex/synthetic" });
+        assertCurrent: authority.assertCurrent, transactionalWrite: authority.admitWrite, readExchanges: addon.readExchanges, accountedDecision: port }));
+      await nativeApi.setConfig({ enabled: true, review_scope: "current", decision_model: "openai-codex/synthetic" });
       root.query("INSERT INTO chats(jid) VALUES(?)").run(captured.operation.chatJid);
       root.query("INSERT INTO messages(id,chat_jid,sender,sender_name,content,timestamp,is_bot_message) VALUES('regrets-human',?,'human','Human','Please be concise',?,0)").run(captured.operation.chatJid,new Date(Date.now()-1000).toISOString());
       let captures = 0;

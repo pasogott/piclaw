@@ -32,10 +32,6 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "replaceQueuedFollowupPlaceholder"
   | "getThreadRootId"
   | "resumeChat"
-  | "skipFailedOnModelSwitch"
-  | "retryFailedOnModelSwitch"
-  | "recoverInflightRuns"
-  | "recoverStaleInflightRun"
   | "resumePendingChats"
   | "loadState"
   | "saveState"
@@ -50,7 +46,7 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
 
 type WebChannelRuntimePublicSurfaceStorage = Pick<
   WebMessageProcessingStorageService,
-  "processChat" | "storeMessage" | "admitUserMessage"
+  "processChat" | "storeMessage" | "admitUserMessage" | "admitMessage"
 >;
 
 type WebChannelRuntimePublicSurfaceBroadcast = Pick<
@@ -489,22 +485,6 @@ export class WebChannelRuntimePublicSurfaceService {
     this.channel.runtimeFollowupFacade.resumeChat(chatJid, threadRootId);
   }
 
-  skipFailedOnModelSwitch(chatJid: string): boolean {
-    return this.channel.runtimeFollowupFacade.skipFailedOnModelSwitch(chatJid);
-  }
-
-  retryFailedOnModelSwitch(chatJid: string): boolean {
-    return this.channel.runtimeFollowupFacade.retryFailedOnModelSwitch(chatJid);
-  }
-
-  recoverInflightRuns(): void {
-    this.channel.runtimeFollowupFacade.recoverInflightRuns();
-  }
-
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean {
-    return this.channel.runtimeFollowupFacade.recoverStaleInflightRun(chatJid, options);
-  }
-
   resumePendingChats(chatJid?: string): void {
     this.channel.runtimeFollowupFacade.resumePendingChats(chatJid);
   }
@@ -553,6 +533,10 @@ export class WebChannelRuntimePublicSurfaceService {
 
   async processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void> {
     return this.channel.messageProcessingStorageService.processChat(chatJid, agentId, threadRootId);
+  }
+
+  admitMessage(...args: Parameters<WebMessageProcessingStorageService["admitMessage"]>): Promise<InteractionRow | null> {
+    return this.channel.messageProcessingStorageService.admitMessage(...args);
   }
 
   admitUserMessage(...args: Parameters<WebMessageProcessingStorageService['admitUserMessage']>): Promise<InteractionRow | null> {

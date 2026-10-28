@@ -1,4 +1,5 @@
-import { hasNativeRouting, requireLegacyRoutingMutation } from "../db/native-routing-policy.js";
+import { admitSqliteWrite } from "../db/sqlite-async-admission.js";
+import { hasNativeRouting, requireLegacyRoutingMutation, assertNativeRootCreation } from "../db/native-routing-policy.js";
 /**
  * agent-pool/branch-manager.ts – Branch identity, listing, and fork lifecycle helpers.
  *
@@ -28,7 +29,6 @@ import { sanitiseJid } from "./session-paths.js";
 import { existsSync, readdirSync, renameSync, rmSync } from "fs";
 import { join } from "path";
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
-import { createDeferredBranchSeed, writeDeferredBranchSeed } from "./branch-seeding.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { getDb } from "../db/connection.js";
 import { commitOwnedFork, findOwnedFork } from "../db/owned-forks.js";
@@ -69,8 +69,7 @@ export interface ActiveChatAgent {
 export interface AgentBranchManagerOptions {
   pool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
-  getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
-  refreshRuntime: (chatJid: string, runtime: AgentSessionRuntime) => Promise<void>;
+  getOrCreateRuntime?: (chatJid: string) => Promise<AgentSessionRuntime>;
   isActive: (chatJid: string) => boolean;
   scheduleSessionWarmup?: (chatJid: string) => void;
   cancelSessionWarmup?: (chatJid: string) => void;
@@ -274,19 +273,17 @@ export class AgentBranchManager {
     chatJid: string,
     options: { agentName?: string | null } = {},
   ): Promise<ChatBranchRecord> {
-    const owner = requireOwnedSessionExecution(chatJid);
     const session = this.options.pool.get(chatJid)?.runtime.session ?? null;
-    if (owner) {
-      const renamed = renameOwnedSessionHandle(getDb(), owner, chatJid, options.agentName ?? "");
-      if (session && !hasNativeRouting(getDb())) session.setSessionName(renamed.agent_name);
-      return getChatBranchByChatJid(chatJid)!;
-    }
-    this.ensureBranchRegistration(chatJid, session);
-    const nextAgentName = options.agentName !== undefined ? options.agentName : undefined;
-    const renamed = renameChatBranchIdentity({
-      chat_jid: chatJid,
-      agent_name: nextAgentName,
-    });
+    const database = getDb(), agentName = options.agentName;
+    const renamed = await admitSqliteWrite(database, () => {
+      const owner = requireOwnedSessionExecution(chatJid);
+      if (owner) {
+        renameOwnedSessionHandle(database, owner, chatJid, agentName ?? "");
+        return getChatBranchByChatJid(chatJid)!;
+      }
+      this.ensureBranchRegistration(chatJid, session);
+      return renameChatBranchIdentity({ chat_jid: chatJid, agent_name: agentName });
+    }, () => { if (getDb() !== database) throw new ChatAccessDenied(); });
 
     if (session && !hasNativeRouting(getDb())) {
       try {
@@ -374,30 +371,22 @@ export class AgentBranchManager {
   }
 
   async createRootChatSession(agentName: string): Promise<ChatBranchRecord> {
-    if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
-    const normalized = normalizeAgentHandlePart(agentName || "");
-    if (!normalized) throw new Error("Root session handle must contain at least one letter or number.");
-    if (normalized === "branch") throw new Error("Root session handle cannot be 'branch'.");
-
-    const chatJid = `web:${normalized}`;
-    const existingByJid = getChatBranchByChatJid(chatJid);
-    if (existingByJid) {
-      throw new Error(`Root session already exists: ${chatJid}`);
-    }
-
-    const existingByHandle = getChatBranchByAgentName(normalized);
-    if (existingByHandle && !existingByHandle.archived_at) {
-      throw new Error(`Session handle already exists: @${normalized}`);
-    }
-
-    storeChatMetadata(chatJid, new Date().toISOString(), normalized);
-    const branch = ensureChatBranch({
-      chat_jid: chatJid,
-      root_chat_jid: chatJid,
-      parent_branch_id: null,
-      agent_name: normalized,
-    });
-    this.options.scheduleSessionWarmup?.(chatJid);
+    const database = getDb();
+    const branch = await admitSqliteWrite(database, () => {
+      const native = hasNativeRouting(database);
+      if (native) assertNativeRootCreation(database);
+      if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
+      const normalized = normalizeAgentHandlePart(agentName || "");
+      if (!normalized) throw new Error("Root session handle must contain at least one letter or number.");
+      if (normalized === "branch") throw new Error("Root session handle cannot be 'branch'.");
+      const chatJid = `web:${normalized}`;
+      if (getChatBranchByChatJid(chatJid)) throw new Error(`Root session already exists: ${chatJid}`);
+      const byHandle = getChatBranchByAgentName(normalized);
+      if (byHandle && !byHandle.archived_at) throw new Error(`Session handle already exists: @${normalized}`);
+      storeChatMetadata(chatJid, new Date().toISOString(), normalized);
+      return ensureChatBranch({chat_jid:chatJid, root_chat_jid:chatJid, parent_branch_id:null, agent_name:normalized});
+    }, () => { if (getDb() !== database || readAccessConfig().mode !== "single-user") throw new ChatAccessDenied(); });
+    if (!hasNativeRouting(database)) this.options.scheduleSessionWarmup?.(branch.chat_jid);
     return branch;
   }
 
@@ -434,18 +423,21 @@ export class AgentBranchManager {
   }
 
   async pruneChatBranch(chatJid: string): Promise<ChatBranchRecord> {
-    if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
-    const session = this.options.pool.get(chatJid)?.runtime.session ?? null;
-    const existing = this.ensureBranchRegistration(chatJid, session);
-    const isRootChat = existing.chat_jid === existing.root_chat_jid;
-    if (isRootChat && existing.chat_jid === "web:default") {
-      throw new Error("Cannot archive the default chat session.");
-    }
-    if (this.options.isActive(chatJid)) {
-      throw new Error(isRootChat ? "Cannot archive a session while it is active." : "Cannot prune a branch while it is active.");
-    }
+    const database = getDb();
+    const archived = await admitSqliteWrite(database, () => {
+      if (readAccessConfig().mode !== "single-user") throw new ChatAccessDenied();
+      const session = this.options.pool.get(chatJid)?.runtime.session ?? null;
+      const existing = this.ensureBranchRegistration(chatJid, session);
+      const isRootChat = existing.chat_jid === existing.root_chat_jid;
+      if (isRootChat && existing.chat_jid === "web:default") {
+        throw new Error("Cannot archive the default chat session.");
+      }
+      if (this.options.isActive(chatJid)) {
+        throw new Error(isRootChat ? "Cannot archive a session while it is active." : "Cannot prune a branch while it is active.");
+      }
 
-    const archived = archiveChatBranch(chatJid);
+      return archiveChatBranch(chatJid);
+    }, () => { if (getDb() !== database || readAccessConfig().mode !== "single-user") throw new ChatAccessDenied(); });
     const mainEntry = this.options.pool.get(chatJid);
     if (mainEntry) {
       try {
@@ -533,6 +525,7 @@ export class AgentBranchManager {
     });
 
     try {
+      if (!this.options.getOrCreateRuntime) throw Error("Native session restoration does not construct legacy sessions");
       await this.options.getOrCreateRuntime(chatJid);
     } catch (err) {
       this.options.onWarn?.("Restored branch but failed to warm its session", {
@@ -555,6 +548,7 @@ export class AgentBranchManager {
       const existing = findOwnedFork(getDb(), owner, sourceChatJid, options.requestId ?? "");
       if (existing) return { ...existing, display_name: null };
     }
+    if (!this.options.getOrCreateRuntime) throw Error("Native branch fork does not construct legacy sessions");
     const sourceSession = (await this.options.getOrCreateRuntime(sourceChatJid)).session;
     const sourceIsActive = isSessionActive(sourceSession);
     const stableForkLeafId = this.options.activeForkBaseLeafByChat.has(sourceChatJid)
@@ -568,6 +562,7 @@ export class AgentBranchManager {
     const requestedAgentName = typeof options.agentName === "string" && options.agentName.trim()
       ? options.agentName.trim()
       : sourceBranch.agent_name;
+    const { createDeferredBranchSeed, writeDeferredBranchSeed } = await import("./branch-seeding.js");
     if (owner) {
       const seed = await createDeferredBranchSeed(sourceSession, {
         stableLeafId: stableForkLeafId, sessionName: requestedAgentName, sourceIsActive,

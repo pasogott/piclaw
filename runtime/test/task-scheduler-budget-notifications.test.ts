@@ -11,7 +11,8 @@ import { ensureBudgetWork, getDb, getTaskRunLogs, initDatabase, persistBudgetDec
 import { createTask, updateTask } from "../src/db/tasks.js";
 import { createCurrentPiclawScheduledRunStore } from "../src/service-effects/current-piclaw/scheduled-run-store.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../src/service-effects/contracts/common.js";
-import { pollScheduledRunsOnce, runScheduledTask } from "../src/task-scheduler.js";
+import { pollScheduledRunsOnce } from "../src/task-scheduler.js";
+import { runAdmittedScheduledTask } from "./helpers/admitted-scheduled-task.js";
 import type { SchedulerDeps } from "../src/task-scheduler.js";
 import type { ScheduledRunStore } from "../src/service-effects/contracts/scheduled-run-store.js";
 
@@ -68,21 +69,13 @@ function pendingStatus(decisionId: string): string | null {
 function agentDeps(options: {
   sendMessage: SchedulerDeps["sendMessage"];
   sendNudge?: SchedulerDeps["sendNudge"];
-  runAgent?: SchedulerDeps["agentPool"]["runAgent"];
+  dispatchScheduledAgent?: NonNullable<SchedulerDeps["agentPool"]["dispatchScheduledAgent"]>;
 }): SchedulerDeps {
   return {
     queue: {} as SchedulerDeps["queue"],
     agentPool: {
-      saveSessionPosition: async () => "leaf-before-budget-stop",
-      restoreSessionPosition: async () => undefined,
-      getCurrentModelLabel: async () => null,
-      applyControlCommand: async () => ({ status: "success", message: "" }),
-      runAgent: options.runAgent ?? (async () => ({
-        status: "error",
-        result: null,
-        error: BLOCKED_ERROR,
-        failureCategory: "provider_budget",
-      })),
+      isDurableRuntime:()=>true,
+      dispatchScheduledAgent: options.dispatchScheduledAgent ?? (async () => ({status:'error',result:null,error:BLOCKED_ERROR,failureCategory:'provider_budget'})),
     } as SchedulerDeps["agentPool"],
     sendMessage: options.sendMessage,
     sendNudge: options.sendNudge,
@@ -129,11 +122,11 @@ describe("scheduled budget stop notifications", () => {
     const nudges: string[] = [];
     const task = getDb().prepare("SELECT * FROM scheduled_tasks WHERE id=?").get(TASK_ID) as any;
 
-    const outcome = await runScheduledTask(task, agentDeps({
-      runAgent: async (prompt, _chatJid, options) => {
+    const outcome = await runAdmittedScheduledTask(task, agentDeps({
+      dispatchScheduledAgent: async (lease) => {
         runAgentCalls += 1;
-        expect(prompt).toBe("private scheduled prompt");
-        decisionId = persistPendingStop(options.budgetWorkId!);
+        expect(lease.record.taskId).toBe(TASK_ID);
+        decisionId = persistPendingStop(`scheduled:${lease.record.runId}`);
         return { status: "error", result: null, error: BLOCKED_ERROR, failureCategory: "provider_budget" } as any;
       },
       sendMessage: async (jid, text) => {
@@ -164,9 +157,9 @@ describe("scheduled budget stop notifications", () => {
     const sent: Array<{ jid: string; text: string }> = [];
     const task = getDb().prepare("SELECT * FROM scheduled_tasks WHERE id=?").get(TASK_ID) as any;
     const deps = agentDeps({
-      runAgent: async (_prompt, _chatJid, options) => {
+      dispatchScheduledAgent: async (lease) => {
         runAgentCalls += 1;
-        decisionId = persistPendingStop(options.budgetWorkId!);
+        decisionId = persistPendingStop(`scheduled:${lease.record.runId}`);
         return { status: "error", result: null, error: BLOCKED_ERROR, failureCategory: "provider_budget" } as any;
       },
       sendMessage: async (jid, text) => {
@@ -176,7 +169,7 @@ describe("scheduled budget stop notifications", () => {
       },
     });
 
-    const outcome = await runScheduledTask(task, deps);
+    const outcome = await runAdmittedScheduledTask(task, deps);
     expect(outcome.status).toBe("error");
     expect(getTaskRunLogs(TASK_ID)).toHaveLength(1);
     expect(runAgentCalls).toBe(1);
@@ -289,8 +282,8 @@ describe("scheduled budget stop notifications", () => {
       return realQuery(sql);
     }) as any);
     try {
-      const outcome = await runScheduledTask(database.prepare("SELECT * FROM scheduled_tasks WHERE id=?").get(TASK_ID) as any, agentDeps({ runAgent: async (_p, _c, options) => {
-        decision = persistPendingStop(options.budgetWorkId!);
+      const outcome = await runAdmittedScheduledTask(database.prepare("SELECT * FROM scheduled_tasks WHERE id=?").get(TASK_ID) as any, agentDeps({ dispatchScheduledAgent: async (lease) => {
+        decision = persistPendingStop(`scheduled:${lease.record.runId}`);
         return { status: "error", result: null, error: BLOCKED_ERROR, failureCategory: "provider_budget" } as any;
       }, sendMessage: async () => { sends++; } }));
       expect(outcome.status).toBe("error");

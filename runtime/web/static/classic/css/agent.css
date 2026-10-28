@@ -274,6 +274,23 @@
     box-sizing: border-box;
 }
 
+/* Keep live pane content inside the chat viewport, with one scroll region. */
+.agent-status-panel-core {
+    min-height: 0;
+    max-height: calc(var(--app-height, 100dvh) * 0.6);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+}
+
+/* The existing pill stays reachable while a long pane scrolls underneath it. */
+.agent-status-panel-core > .agent-thinking[data-collapsible='true'] > .agent-thinking-title {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: var(--bg-secondary);
+}
+
 .agent-thinking {
     padding: calc(var(--chat-surface-padding-y) + var(--output-pad, 0px)) calc(var(--chat-surface-padding-x) + var(--output-pad, 0px));
     margin: 0;
@@ -517,39 +534,28 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
     flex: 0 0 auto;
     width: auto;
+    min-height: 24px;
     margin: 0 0 0 auto;
     padding: 2px 8px;
     border: 1px solid color-mix(in srgb, var(--turn-color, var(--accent-color)) 24%, transparent);
     border-radius: 999px;
     background: color-mix(in srgb, var(--turn-color, var(--accent-color)) 10%, transparent);
-    text-align: left;
-    cursor: pointer;
     color: var(--turn-color, var(--accent-color));
     font-size: var(--font-size-xs);
-    font-family: inherit;
-    font-weight: 600;
-    line-height: 1.2;
     white-space: nowrap;
-    transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+    cursor: pointer;
 }
 
-.agent-thinking-truncation-arrow {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: var(--ui-disclosure-triangle-size);
-    line-height: 1;
-}
-
-.agent-thinking-truncation:hover,
-.agent-thinking-truncation:focus-visible {
+.agent-thinking-truncation:hover {
     color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--turn-color, var(--accent-color)) 42%, var(--border-color));
-    background: color-mix(in srgb, var(--turn-color, var(--accent-color)) 16%, transparent);
-    outline: none;
+    border-color: color-mix(in srgb, var(--turn-color, var(--accent-color)) 40%, transparent);
+}
+
+.agent-thinking-truncation:focus-visible {
+    outline: 2px solid var(--turn-color, var(--accent-color));
+    outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

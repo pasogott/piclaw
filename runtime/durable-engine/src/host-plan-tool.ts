@@ -1,3 +1,4 @@
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import type { Database } from "bun:sqlite";
 import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
 import type { TSchema } from "@earendil-works/pi-ai";
@@ -21,6 +22,7 @@ export function createHostPlanTool(definition: ToolDefinition<TSchema, JsonValue
   root: Database;
   assertOwner(): void;
   runtime(): Pick<HostConversationRuntime, "captureToolSource">;
+  createTool: (write: <T>(body: () => T) => Promise<T>) => ToolDefinition<any, any, any>;
 }) {
   if (definition.name !== "plan") throw Error("Expected registered Plan tool");
   return createHostTool(definition, {
@@ -43,7 +45,8 @@ export function createHostPlanTool(definition: ToolDefinition<TSchema, JsonValue
       const authority = createPlanKvAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); });
       return withExtensionKvAuthority(authority, () => {
         authority.assertCurrent();
-        return call.execute(call.toolCallId, { ...params, chat_jid: chatJid }, call.signal, call.onUpdate, undefined as never);
+        const execute = options.createTool(body => admitSqliteWrite(options.root, body, authority.assertCurrent, call.signal)).execute;
+        return execute(call.toolCallId, { ...params, chat_jid: chatJid }, call.signal, call.onUpdate, undefined as never);
       });
     },
   }, { callers: ["model", "tools"] });

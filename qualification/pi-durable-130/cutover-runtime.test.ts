@@ -107,10 +107,7 @@ async function setup() {
   let runtime: InactiveHostRuntime | undefined;
   let options: RuntimeOptions;
   async function open() {
-    options = { incarnation: "host-A", owner: { assert: () => owner.assert(), release() {} },
-      openStorage: () => SqliteStorage.open(new OwnedSqlite(owner)),
-      harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
-      work, terminal, existingConversationIds: [conversationId], conversationFor(chat, branch) {
+    options = { incarnation: "host-A", owner: { assert: () => owner.assert(), release() {} }, openStorage: () => SqliteStorage.open(new OwnedSqlite(owner)), harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } }, work, terminal, existingConversationIds: [conversationId], conversationFor(chat, branch) {
         if (chat !== "web:cutover" || branch !== "main") throw Error("Unknown branch"); return conversationId;
       }, bindings: createHostDurableBindings(db, { domain: identity.domain, incarnation: "host-A",
         assertOwner() { owner.assert(); assertWriter("candidate:one"); },
@@ -118,9 +115,7 @@ async function setup() {
         async resolveContent(ref) {
           const row = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
           if (!row) throw Error("Missing host payload"); return row.content;
-        } }),
-      authorizeScheduling() { assertWriter("candidate:one"); }, putAnswer: (ref, text) => { payloads.putText(ref, text); },
-      sessionId: "copied-runtime-session", lane: "main", generation: owner.token.generation, now: () => at };
+        } }), authorizeScheduling() { assertWriter("candidate:one"); }, putAnswer: (ref, text) => { payloads.putText(ref, text); }, sessionId: "copied-runtime-session", now: () => at };
     runtime = await InactiveHostRuntime.open(options, context); return runtime;
   }
   let committedMessages: unknown[] = [];

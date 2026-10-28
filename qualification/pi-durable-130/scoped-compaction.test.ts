@@ -54,7 +54,7 @@ for(const same of [false,true])test(`controller compacts ${same?'the busy curren
   const claimed=value(await f.ports.work.claimNext(sealed({effect:effect('claim:'+id),chatJid:f.chatJid,expectedFrontier:0,newOperationId:f.incarnation,claimedAt:at})))!;
   const input:AcceptedInput={incarnation:f.incarnation,conversationId:root.id,chatJid:f.chatJid,branchId:'main',operationId:claimed.operation.operationId,sourceId:id,sourceSeq:source.sourceSeq,payloadRef:id,requestId:f.primaryRequestId,requestHash:hashCanonicalRequest({type:'input',requestId:f.primaryRequestId,content:'use-tool'})};
   const submissionId=await controller.runtime.submit(input);
-  const op=value(await f.ports.work.getOperation(f.incarnation))!;value(await f.ports.work.bindHarness(sealed({effect:effect('bind:'+id,f.incarnation,source.sourceSeq),expectedVersion:op.version,sessionId:f.incarnation,lane:'main',harnessOperationId:String(submissionId),state:'running',watchGeneration:f.generation})));
+  const op=value(await f.ports.work.getOperation(f.incarnation))!;value(await f.ports.work.bindHarness(sealed({ effect:effect('bind:'+id,f.incarnation,source.sourceSeq), expectedVersion:op.version, sessionId:f.incarnation, harnessOperationId:String(submissionId) })));
   await f.base.host.toolEntered.promise;
   const before=(await controller.runtime.inspectAuthority()).inspection.tasks.find(t=>t.record.kind==='pi.tool')!.record;
   const entered=barrier();f.base.host.finalContent=[{type:'text',text:'PRESERVED_DECISIONS'}];

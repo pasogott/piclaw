@@ -7,8 +7,6 @@ import {
   STARTUP_STATUS_TURN_ID,
   buildStartupAgentStatus,
   initializeWebAddonMessagingRuntime,
-  queueStartupSessionWarmup,
-  resolveStartupSessionWarmupOptions,
   runWebStartupRecoveryBootstrap,
 } from "../../src/runtime/startup.js";
 import { getChatTransport } from "../../src/extensions/chat-transport-registry.js";
@@ -303,9 +301,6 @@ export {};
         queued_prewarms: 0,
         prewarm_queue_length: 0,
         prewarm_cooldowns: 0,
-        recovery_attempts_total: 0,
-        recovery_recovered_runs: 0,
-        recovery_exhausted_runs: 0,
       });
     } finally {
       ws.cleanup();
@@ -382,9 +377,6 @@ export {};
       updateAgentStatus: (chatJid, status) => {
         events.push({ kind: "status", chatJid, status });
       },
-      recoverInflightRuns: () => {
-        events.push({ kind: "recover" });
-      },
       resumePendingChats: () => {
         events.push({ kind: "resume" });
       },
@@ -394,20 +386,19 @@ export {};
       resumePending = resume;
     });
 
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(4);
     expect(events[0]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
         type: "intent",
         intent_key: "startup",
-        phase: "recovering_inflight",
+        phase: "recovering_native",
         turn_id: STARTUP_STATUS_TURN_ID,
       },
     });
-    expect(events[1]).toEqual({ kind: "recover" });
-    expect(events[2]).toEqual({ kind: "handoff" });
-    expect(events[3]).toMatchObject({
+    expect(events[1]).toEqual({ kind: "handoff" });
+    expect(events[2]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
@@ -417,7 +408,7 @@ export {};
         turn_id: STARTUP_STATUS_TURN_ID,
       },
     });
-    expect(events[4]).toMatchObject({
+    expect(events[3]).toMatchObject({
       kind: "status",
       chatJid: STARTUP_STATUS_CHAT_JID,
       status: {
@@ -428,82 +419,10 @@ export {};
       },
     });
 
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(4);
     expect(resumePending).toBeFunction();
     (resumePending as () => void)();
-    expect(events[5]).toEqual({ kind: "resume" });
-  });
-
-  test("queueStartupSessionWarmup is disabled by default", () => {
-    const scheduled: Array<{ chatJid: string; priority?: boolean }> = [];
-    const recentCalls: Array<{ limit?: number; excludeChatJids?: string[] }> = [];
-
-    queueStartupSessionWarmup({
-      scheduleChatWarmup: (chatJid: string, options?: { priority?: boolean }) => {
-        scheduled.push({ chatJid, priority: options?.priority });
-        return true;
-      },
-      scheduleRecentChatWarmup: (options?: { limit?: number; excludeChatJids?: string[] }) => {
-        recentCalls.push(options || {});
-        return [];
-      },
-    } as any);
-
-    expect(scheduled).toEqual([]);
-    expect(recentCalls).toEqual([]);
-  });
-
-  test("queueStartupSessionWarmup can explicitly warm the default chat and recent chats", () => {
-    const scheduled: Array<{ chatJid: string; priority?: boolean }> = [];
-    const recentCalls: Array<{ limit?: number; excludeChatJids?: string[] }> = [];
-
-    queueStartupSessionWarmup({
-      scheduleChatWarmup: (chatJid: string, options?: { priority?: boolean }) => {
-        scheduled.push({ chatJid, priority: options?.priority });
-        return true;
-      },
-      scheduleRecentChatWarmup: (options?: { limit?: number; excludeChatJids?: string[] }) => {
-        recentCalls.push(options || {});
-        return [];
-      },
-    } as any, { warmDefaultChat: true, recentLimit: 5 });
-
-    expect(scheduled).toEqual([{ chatJid: "web:default", priority: true }]);
-    expect(recentCalls).toEqual([{ limit: 5, excludeChatJids: ["web:default"] }]);
-  });
-
-  test("resolveStartupSessionWarmupOptions reads env-backed warmup controls", () => {
-    expect(resolveStartupSessionWarmupOptions({
-      PICLAW_STARTUP_WARM_DEFAULT_CHAT: "true",
-      PICLAW_STARTUP_WARMUP_RECENT_LIMIT: "3",
-    } as NodeJS.ProcessEnv)).toEqual({
-      warmDefaultChat: true,
-      recentLimit: 3,
-    });
-
-    expect(resolveStartupSessionWarmupOptions({
-      PICLAW_STARTUP_WARM_DEFAULT_CHAT: "off",
-      PICLAW_STARTUP_WARMUP_RECENT_LIMIT: "99",
-    } as NodeJS.ProcessEnv)).toEqual({
-      warmDefaultChat: false,
-      recentLimit: 8,
-    });
-
-    expect(resolveStartupSessionWarmupOptions({
-      PICLAW_STARTUP_WARM_DEFAULT_CHAT: "yes",
-      PICLAW_STARTUP_WARMUP_RECENT_LIMIT: "3oops",
-    } as NodeJS.ProcessEnv)).toEqual({
-      warmDefaultChat: true,
-      recentLimit: 0,
-    });
-
-    expect(resolveStartupSessionWarmupOptions({
-      PICLAW_STARTUP_WARM_DEFAULT_CHAT: "yes",
-      PICLAW_STARTUP_WARMUP_RECENT_LIMIT: "0",
-    } as NodeJS.ProcessEnv)).toEqual({
-      warmDefaultChat: true,
-      recentLimit: 0,
-    });
+    expect(events[4]).toEqual({ kind: "resume" });
   });
 });
 

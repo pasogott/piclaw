@@ -81,6 +81,12 @@ applicationTest("historical core upgrade classifies its one approved spelling di
     expect(db.query("SELECT * FROM piclaw_agent_sessions").all()).toEqual(before.sessions);
     expect(db.query("SELECT * FROM piclaw_agent_entries ORDER BY entry_seq").all()).toEqual(before.entries);
     expect(db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='piclaw-agent-sessions'").all()).toEqual(before.receipts);
+    expect(db.query('SELECT rowid,* FROM host_legacy_chat_cursor_state_v1 ORDER BY rowid').all()).toEqual(before.cursors);
+    expect((db.query('PRAGMA main.table_info(chat_cursors)').all() as {name:string}[]).map(row=>row.name)).toEqual(['chat_jid','cursor_ts','queued_followups_json']);
+    expect(db.query('SELECT rowid,* FROM chat_cursors ORDER BY rowid').all()).toEqual(before.cursors.map((row:any)=>({rowid:row.rowid,chat_jid:row.chat_jid,cursor_ts:row.cursor_ts,queued_followups_json:row.queued_followups_json})));
+    const cursorReceipts = db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'").all();
+    expect(cursorReceipts).toHaveLength(1);
+    expect(result.objects.filter(object=>object.owner==='archive:chat-cursor-state').every(object=>object.presence==='optional-preserved')).toBe(true);
     expect(db.query("SELECT name FROM chats WHERE jid='web:historical'").get()).toEqual({ name: "Retained label" });
     expect(db.query("SELECT branch_id,agent_name FROM chat_branches WHERE chat_jid='web:historical'").get()).toEqual({ branch_id: "retained-branch", agent_name: "retained-agent" });
     expect(db.query("SELECT input_tokens,output_tokens,total_tokens,model,provider FROM token_usage WHERE chat_jid='web:historical'").get())
@@ -109,6 +115,8 @@ applicationTest("historical core upgrade classifies its one approved spelling di
     const persistent = (objects: typeof result.objects) => objects.filter(object => object.owner !== "sqlite:planner-statistics");
     expect(persistent(reopened.objects)).toEqual(persistent(result.objects));
     expect(getDb().query("SELECT * FROM piclaw_schema_migrations WHERE owner='piclaw-agent-sessions'").all()).toEqual(before.receipts);
+    expect(getDb().query("SELECT * FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'").all()).toEqual(cursorReceipts);
+    expect(getDb().query('SELECT rowid,* FROM host_legacy_chat_cursor_state_v1 ORDER BY rowid').all()).toEqual(before.cursors);
   } finally { closeDatabase(); }
 });
 

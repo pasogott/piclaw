@@ -17,6 +17,8 @@ import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } f
 import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import-schema.js";
+import { assertNativeBackgroundExecution,claimNativeBackgroundTool,nativeBackgroundToolReceiptKnown } from './host-background-policy.js';
+import { nativeBackgroundIdentity,readNativeBackgroundPolicy,type NativeBackgroundPolicy } from '../../src/agent-pool/background-operation-contract.js';
 import { projectPublicHistory } from "./session-tree.js";
 import { materializePlanContext, materializeGoalContext, type GoalContextIdentity } from "./host-plan-context.js";
 import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
@@ -71,17 +73,17 @@ export interface MaterializedAnswer {
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
-  readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void;
+  readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void | Promise<void>;
   /** New work is sealed while an exact native shutdown request settles. */
   readonly assertAdmission?: (input?: AcceptedInput) => void;
   /** Host timeline root for this exact accepted input, including queued messages. */
   readonly replyThreadFor?: (input: AcceptedInput) => number | null;
   /** Public evidence preparation outside SQLite; effect is invocation-local. */
   readonly prepareTerminalEffect?: (input: AcceptedInput, answer?: SettledAnswer) => Promise<TerminalDatabaseEffect | undefined>;
-  readonly onMaintenanceSettled?: (workId: string) => void;
-  readonly cancelSideSource?: (input: AcceptedInput) => void;
+  readonly onMaintenanceSettled?: (workId: string) => void | Promise<void>;
+  readonly cancelSideSource?: (input: AcceptedInput) => void | Promise<void>;
   /** Atomically persist operator cancellation against this exact operation version. */
-  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number) => void;
+  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number, retryTaskId?: number, cause?: 'background_cancelled' | 'background_timeout') => void | Promise<void>;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   readonly withSessionResetGuard?: <T>(chatJid: string, body: () => Promise<T>) => Promise<T>;
@@ -118,8 +120,6 @@ export interface RuntimeOptions {
   readonly materializeAnswer?: (ref: string, answer: SettledAnswer, operation: OperationSnapshot) => Promise<MaterializedAnswer>;
   readonly onStorageFailure?: (error: unknown) => void;
   readonly sessionId: string;
-  readonly lane: string;
-  readonly generation: number;
   readonly now: () => string;
 }
 
@@ -187,8 +187,8 @@ function currentHarnessSettings(options: HarnessOptions) {
 }
 function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
-    openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
-  return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
+    openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId } = o;
+  return Object.freeze({ incarnation, sessionId, captured: true as const,
     codemodeExecute: o.codemodeExecute,
     onStorageFailure: o.onStorageFailure?.bind(o),
     assertAdmission: o.assertAdmission?.bind(o),
@@ -270,8 +270,8 @@ export class HostConversationRuntime {
   static async open(config: RuntimeOptions, context: Context): Promise<HostConversationRuntime> {
     const options = runtimeSnapshot(config);
     options.owner.assert(); // Before storage normalization/construction, including SQLite open recovery.
-    if (!options.incarnation || !Number.isSafeInteger(options.generation) || options.generation < 1 || !options.existingConversationIds.length)
-      throw new Error("Explicit store identity, generation and existing manifest required");
+    if (!options.incarnation || !options.sessionId || !options.existingConversationIds.length)
+      throw new Error("Explicit store identity, session binding and existing manifest required");
     const storage = await options.openStorage();
     let harness: Harness | undefined;
     try {
@@ -300,6 +300,15 @@ export class HostConversationRuntime {
       this.fence();
       (this.options.existingConversationIds as ConversationId[]).push(binding.conversationId);
       return binding;
+    });
+  }
+  /** Existing private context publication never appends another conversation
+   * identity to the scheduling/recovery domain. */
+  prepareBackgroundInput(id:ConversationId,update:(tx:import('@earendil-works/pi-durable').Tx)=>Promise<void>,check:()=>void){
+    this.options.assertAdmission?.();
+    return this.observe(async()=>{
+      this.fence();check();if(!this.options.existingConversationIds.includes(id))throw Error('Existing background context is not registered');
+      await this.harness.commit(async tx=>{this.fence();check();await update(tx);this.fence();check();},this.context);this.fence();check();
     });
   }
   /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
@@ -891,7 +900,7 @@ export class HostConversationRuntime {
           const view = await conversation.context(context); assertOwner();
           if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || (!scoped && view.head?.id !== entryId)) throw new Error("Compaction context not committed");
         }
-        o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`);
+        await o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`); assertOwner();
         return { compacted: entryId !== undefined };
       };
       return settleTask();
@@ -1027,7 +1036,7 @@ export class HostConversationRuntime {
         if (entryId === undefined) return;
         const entry = await this.harness.commit(tx => tx.entry(entryId!), context);
         this.fence();
-        if (entry?.kind === "pi.compaction" && entry.conversationId === copy.conversationId) this.options.onMaintenanceSettled?.(workId);
+        if (entry?.kind === "pi.compaction" && entry.conversationId === copy.conversationId) { await this.options.onMaintenanceSettled?.(workId); this.fence(); }
       })().catch(() => { /* Uncertain closure retains its durable accounting work. */ });
       return { chatJid: copy.chatJid, workId, assertCurrent };
     });
@@ -1381,6 +1390,36 @@ export class HostConversationRuntime {
       });
     });
   }
+  /** Exact accepted private input, public SDK configuration and bounded quota.
+   * The same synchronous source fence also guards the actual host effect. */
+  qualifyBackgroundRequest(inputs:readonly HostInputBinding[],raw:NativeBackgroundPolicy,call?:{taskId:TaskId;callId:string;toolName:string}){
+    const policy=readNativeBackgroundPolicy(raw),captured=inputs.map(input=>Object.freeze({...inputSnapshot(input),submissionId:input.submissionId})),identity=nativeBackgroundIdentity(policy);
+    if(captured.length!==1||captured[0]!.sourceId!==identity.sourceId||captured[0]!.operationId!==identity.operationId||captured[0]!.chatJid!==identity.chatJid)throw Error('Exact background accepted input required');
+    const input=captured[0]!,actual=call&&Object.freeze({...call});
+    return this.observe(async()=>{
+      const check=()=>this.assertCapturedSourceCurrent(captured),guard=this.options.withPromptContextGuard;
+      if(!guard)throw Error('Background SDK transaction guard unavailable');check();
+      await guard(check,()=>this.harness.commit(async tx=>{
+        if(actual)await claimNativeBackgroundTool(tx,input.conversationId,policy,actual,Date.now(),check);
+        else await assertNativeBackgroundExecution(tx,input.conversationId,policy,Date.now(),check);
+      },this.context));check();
+    });
+  }
+  /** Passive tool receipt inspection for an already settled input. Never grants
+   * scheduling, task replay or current spending permission. */
+  backgroundToolOutcomesKnown(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      const known=await this.harness.commit(async tx=>{
+        let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+        do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.tool'},100,cursor);
+          for(const task of page.items)if(!await nativeBackgroundToolReceiptKnown(tx,task))return false;
+          cursor=page.next;
+        }while(cursor!==undefined);return true;
+      },this.context);this.fence();return known;
+    },true);
+  }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     return this.captureSource(conversationId, taskId);
@@ -1483,8 +1522,7 @@ export class HostConversationRuntime {
         if (!current || current.chatJid !== input.chatJid || current.phase !== "executing" || current.cancellation ||
           !current.claimedSourceSeqs.includes(input.sourceSeq) || (operation && (operation.operationId !== current.operationId || operation.version !== current.version)))
           throw Error("Host operation authority unavailable");
-        if (current.harness ? current.harness.sessionId !== o.sessionId || current.harness.lane !== o.lane ||
-          current.harness.watchGeneration !== o.generation || current.harness.state !== "running" ||
+        if (current.harness ? current.harness.sessionId !== o.sessionId ||
           (!live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId) && data.role !== "intent")
           : callId !== undefined || data.role !== "primary" || current.primarySourceSeq !== input.sourceSeq)
           throw Error("Exact host harness required");
@@ -1519,8 +1557,7 @@ export class HostConversationRuntime {
       const current = value(await o.work.getOperation(operation.operationId)); this.fence();
       if (!current || current.version !== operation.version || current.phase !== "executing" || current.cancellation ||
         current.harness?.harnessOperationId !== operation.harness?.harnessOperationId ||
-        current.harness?.sessionId !== operation.harness?.sessionId || current.harness?.lane !== operation.harness?.lane ||
-        current.harness?.watchGeneration !== operation.harness?.watchGeneration || current.harness?.state !== operation.harness?.state)
+        current.harness?.sessionId !== operation.harness?.sessionId)
         throw Error("Host operation authority unavailable");
       this.assertCapturedSourceCurrent(inputs);
       return { inputs: Object.freeze(inputs), operation, sourceModel };
@@ -1540,9 +1577,8 @@ export class HostConversationRuntime {
     if (!operation || operation.chatJid !== input.chatJid ||
       (intent ? operation.primarySourceSeq === input.sourceSeq : operation.primarySourceSeq !== input.sourceSeq) ||
       !operation.claimedSourceSeqs.includes(input.sourceSeq)) throw new Error("Unaccepted operation/source");
-    if (intent && (!operation.harness || operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
-      operation.harness.watchGeneration !== o.generation || !operation.harness.harnessOperationId ||
-      (!operation.terminal && operation.harness.state !== "running" && !(operation.phase === "settling" && operation.harness.state === "finished")))) throw new Error("Exact host harness required");
+    if (intent && (!operation.harness || operation.harness.sessionId !== o.sessionId || !operation.harness.harnessOperationId ||
+      (!operation.terminal && !["executing","cancelling","settling"].includes(operation.phase)))) throw new Error("Exact host harness required");
     if (intent) {
       const primary = await this.harness.submission(Number(operation.harness!.harnessOperationId) as SubmissionId, this.context); this.fence();
       const status = await primary?.status(this.context); this.fence();
@@ -1641,6 +1677,16 @@ export class HostConversationRuntime {
     if (!admitted || admitted.id !== submission.id) throw new Error("Submission binding conflict");
     await port.recordSubmission(input, submission.id); this.fence();
     return submission.id;
+  }
+  /** ACK-only recovery of an existing, content/provenance-checked submission.
+   * Never creates an input or grants scheduler progress. */
+  acknowledgeExistingInput(input:AcceptedInput){
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);const record=await this.record(copy);this.fence();
+      if(!record)throw Error('Existing SDK input acknowledgement required');
+      await this.port(false).recordSubmission(copy,record.id);this.fence();return record.id;
+    },true);
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy), true); }
@@ -1801,7 +1847,8 @@ export class HostConversationRuntime {
         throw new Error("Unsupported final assistant content");
       if (message.stopReason !== "stop" && message.stopReason !== "length") throw new Error("Unsupported final assistant stop reason");
       const text = message.content.map(part => part.type === "text" ? part.text : "").join("");
-      if (text.length > 65536) throw new Error("Answer exceeds qualification bound");
+      const addonBackground=/^background:[a-f0-9]{64}$/.test(input.sourceId)&&input.chatJid.startsWith('operation:')&&this.options.operationConversationFor?.(input)===input.conversationId;
+      if (addonBackground ? Buffer.byteLength(text,'utf8')>256*1024 : text.length>65536) throw new Error("Answer exceeds qualification bound");
       answer = freezeTree({ message: structuredClone(message), text });
     }
     return { operation, submissionId: record.id, status, answer };
@@ -1836,8 +1883,7 @@ export class HostConversationRuntime {
       const state = await this.readState(copy); this.fence();
       if (state.operation.terminal) return false;
       const harness = state.operation.harness;
-      if (!state.submissionId || !harness || harness.sessionId !== o.sessionId || harness.lane !== o.lane ||
-          harness.watchGeneration !== o.generation || harness.harnessOperationId !== String(state.submissionId))
+      if (!state.submissionId || !harness || harness.sessionId !== o.sessionId || harness.harnessOperationId !== String(state.submissionId))
         throw Error("Exact host harness required");
       const intents = await o.bindings.intents?.list(copy) ?? []; this.fence();
       const expected = state.operation.claimedSourceSeqs.filter(seq => seq !== copy.sourceSeq && seq !== state.operation.cancellation?.sourceSeq);
@@ -1859,7 +1905,7 @@ export class HostConversationRuntime {
       let taskId = await readAbortTask(); this.fence();
       if (retryOnly && taskId === undefined) return false;
       // A racing attachment/completion rejects this SQL CAS before any SDK abort.
-      o.cancelOperationSource(copy, state.operation.version, retryOnly ? taskId : undefined); this.fence();
+      await o.cancelOperationSource(copy, state.operation.version, retryOnly ? taskId : undefined); this.fence();
       await this.progress(copy);
       for (const id of ids) { await this.harness.abortSubmission(id, this.context, copy.conversationId); this.fence(); }
       while (taskId !== undefined) {
@@ -1882,6 +1928,86 @@ export class HostConversationRuntime {
       throw error;
     });
   }
+  /** Capture cleanup while the fresh private Dream source is still owned.
+   * The returned join is deliberately outside detachable observation tracking:
+   * shutdown must be able to close SDK resources before this waiter returns. */
+  captureDreamCleanup(input:AcceptedInput):Promise<()=>Promise<void>>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!copy.chatJid.startsWith('dream:')||!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact private Dream cleanup owner required');
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Fresh ownerless Dream context required');
+      const context=withoutAbortSignal(this.context);
+      let joined:Promise<void>|undefined;
+      return()=>joined??=(async()=>{
+        if(this.closed||this.storageClosing){await this.storageEnded;return;}
+        try{
+          this.options.owner.assert();
+          const conversation=await this.harness.conversation(copy.conversationId,context);
+          if(!conversation)throw Error('Private Dream cleanup context missing');
+          await conversation.abort(context,{background:true});
+        }catch(error){
+          // Do not release Dream's FD lease merely because observation/abort
+          // failed. SDK close owns actual provider/tool resource cleanup.
+          log.warn('Private Dream cleanup awaits confirmed SDK close',{operation:'durable_dream.cleanup_pending',conversationId:copy.conversationId});
+          await this.storageEnded;
+          throw error;
+        }
+      })();
+    });
+  }
+  /** Join the private context's SDK-owned compaction work before releasing its
+   * accepted source/lease. Observation detaches on close; SDK close still owns
+   * the real tasks and provider cleanup. No new scheduler progress is granted. */
+  joinBackgroundCompactions(input:AcceptedInput){
+    const copy=inputSnapshot(input),context=withAbortSignal(this.observations.signal,this.context);
+    return this.observe(async()=>{
+      await this.checked(copy);this.fence();
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||this.options.operationConversationFor?.(copy)!==copy.conversationId)throw Error('Exact background compaction join required');
+      const joined=new Set<number>();
+      for(;;){
+        const tasks=await this.harness.commit(async tx=>{
+          const found:import('@earendil-works/pi-durable').TaskRecord<unknown,unknown,CompactionResult>[]=[];let cursor:import('@earendil-works/pi-durable').Cursor|undefined;
+          do{const page=await tx.scanTasks({conversationId:copy.conversationId,kind:'pi.compaction'},100,cursor);
+            for(const task of page.items)if(!joined.has(task.id))found.push(task as typeof found[number]);cursor=page.next;
+          }while(cursor!==undefined);return found;
+        },context);this.fence();if(!tasks.length)return;
+        for(const candidate of tasks){
+          const reason=(candidate.input as {reason?:string}).reason;
+          if(!['threshold','overflow'].includes(reason??''))throw Error('Unqualified private compaction task');
+          const task=candidate.state.status==='terminal'?candidate:await this.harness.waitForTask(candidate.id,context);this.fence();
+          if(task.state.status!=='terminal')throw Error('Private compaction task remains live');
+          if(task.state.outcome.status==='completed'&&task.state.outcome.result.submissionId!==undefined){
+            const submission=await this.harness.submission(task.state.outcome.result.submissionId,context);this.fence();
+            const status=await submission?.wait(context);this.fence();
+            if(!status||status.type!=='write'||status.conversationId!==copy.conversationId||!['done','unanswered'].includes(status.status))throw Error('Private compaction write remains uncertain');
+          }
+          joined.add(candidate.id);
+        }
+      }
+    });
+  }
+  /** Only an exact private ownerless/unforked context may be aborted wholesale.
+   * Cancellation is owner cleanup and does not require a current spend grant. */
+  abortBackground(input:AcceptedInput,cause:'background_cancelled'|'background_timeout'='background_cancelled'):Promise<boolean>{
+    const copy=inputSnapshot(input);
+    return this.observe(async()=>{
+      const o=this.options;
+      if(!/^background:[a-f0-9]{64}$/.test(copy.sourceId)||copy.requestId!==copy.sourceId||copy.payloadRef!==copy.sourceId||
+        o.operationConversationFor?.(copy)!==copy.conversationId||o.conversationFor(copy.chatJid,copy.branchId)!==copy.conversationId||!o.cancelOperationSource)throw Error('Exact private background abort required');
+      const state=await this.readState(copy);this.fence();
+      if(state.operation.terminal)return false;
+      const record=await this.harness.commit(tx=>tx.conversation(copy.conversationId),this.context);this.fence();
+      if(!record||record.parent||record.owner)throw Error('Exact private background abort required');
+      const completed=state.status?.status==='done';
+      if(!completed&&!state.operation.cancellation)await o.cancelOperationSource(copy,state.operation.version,undefined,cause);
+      this.fence();await this.progress(completed?undefined:copy);
+      const conversation=await this.harness.conversation(copy.conversationId,this.context);this.fence();
+      if(!conversation)throw Error('Missing private background conversation');
+      await conversation.abort(this.context,{background:true});this.fence();return !completed;
+    });
+  }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */
   /** Only the exact ownerless side fork may be aborted as a whole. */
   abortSidePrompt(input: AcceptedInput): Promise<void> {
@@ -1896,7 +2022,7 @@ export class HostConversationRuntime {
       if (state.operation.terminal) return;
       const record = await this.harness.commit(tx => tx.conversation(copy.conversationId), this.context); this.fence();
       if (record?.parent?.conversationId !== o.conversationFor(copy.chatJid, copy.branchId) || record.owner) throw Error("Exact isolated side prompt required");
-      if (!state.operation.cancellation) o.cancelSideSource(copy);
+      if (!state.operation.cancellation) await o.cancelSideSource(copy);
       this.fence();
       const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
       if (!conversation) throw Error("Missing side conversation");
@@ -2005,7 +2131,7 @@ export class HostConversationRuntime {
   private async settleInput(input: AcceptedInput) {
     const primary = await this.readState(input); const o = this.options;
     if (primary.operation.terminal) {
-      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId, primary.answer?.processExit); return terminal;
+      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); await o.onOperationSettled?.(input.operationId, primary.answer?.processExit); this.fence(); return terminal;
     }
     const initialVersion = primary.operation.version;
     const primarySubmissionId = primary.submissionId;
@@ -2019,23 +2145,22 @@ export class HostConversationRuntime {
     if (!operation) throw new Error("Missing operation");
     // Never refresh away an attachment/version fence after inspecting accepted inputs.
     if (operation.version !== initialVersion) return null;
-    if (operation.harness?.state === "running") {
-      if (!o.work.finishHarness) throw new Error("Host harness completion API required");
-      if (operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
-        operation.harness.watchGeneration !== o.generation || operation.harness.harnessOperationId !== String(primarySubmissionId))
+    if (!operation.harness) {
+      if (!primarySubmissionId) throw Error("Exact host primary binding required");
+      operation = value(await o.work.bindHarness(sealed({effect:effect(`runtime:bind:v2:${input.requestId}`,input.operationId,input.sourceSeq),
+        expectedVersion:operation.version,sessionId:o.sessionId,harnessOperationId:String(primarySubmissionId)}))); this.fence();
+    }
+    if (operation.phase !== "settling") {
+      if (!o.work.finishHarness) throw new Error("Host settlement API required");
+      if (operation.harness!.sessionId !== o.sessionId || operation.harness!.harnessOperationId !== String(primarySubmissionId))
         throw new Error("Exact host harness required");
       const request = {
-        effect: { ...effect(`runtime:finish:${input.requestId}:${operation.version}`, input.operationId, input.sourceSeq), operationId: input.operationId },
-        expectedVersion: operation.version, expectedHarness: operation.harness,
+        effect: {...effect(`runtime:finish:v2:${input.requestId}:${operation.version}`,input.operationId,input.sourceSeq),operationId:input.operationId},
+        expectedVersion:operation.version,expectedHarness:operation.harness!,
       } satisfies FinishHarnessRequest;
-      request.effect.requestHash = hashCanonicalRequest({ method: "finishHarness.v1", ...request } as unknown as CanonicalJsonValue);
+      request.effect.requestHash=hashCanonicalRequest({method:"finishHarness.v1",...request} as unknown as CanonicalJsonValue);
       this.fence();
-      operation = value(await o.work.finishHarness(request)); this.fence();
-    }
-    if (!operation.harness) {
-      operation = value(await o.work.bindHarness(sealed({ effect: effect(`runtime:bind:${input.requestId}:${o.generation}`, input.operationId, input.sourceSeq),
-        expectedVersion: operation.version, sessionId: o.sessionId, lane: o.lane, harnessOperationId: String(state.submissionId),
-        state: "finished" as const, watchGeneration: o.generation }))); this.fence();
+      operation=value(await o.work.finishHarness(request));this.fence();
     }
     const cancelled = operation.cancellation !== null, ref = `runtime-answer:${o.incarnation}:${state.submissionId}`;
     // Scheduled delivery belongs to EF-S07, not the ordinary-message publisher.
@@ -2070,7 +2195,7 @@ export class HostConversationRuntime {
     if (modelFailed) log.warn("Native turn failed; no automatic replay", { operation: "durable_turn.model_failed",
       chatJid: input.chatJid, operationId: input.operationId, conversationId: input.conversationId, submissionId: state.submissionId,
       ...(parseModelFailure(state.status?.status === "unanswered" ? state.status.detail : undefined) ?? { category: "unknown" }) });
-    o.onOperationSettled?.(input.operationId, state.answer?.processExit); return terminal;
+    await o.onOperationSettled?.(input.operationId, state.answer?.processExit); this.fence(); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.

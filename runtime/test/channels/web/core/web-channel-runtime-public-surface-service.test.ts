@@ -214,17 +214,6 @@ describe("web channel runtime public surface service", () => {
         resumeChat: (chatJid, threadRootId) => {
           calls.push(`resume:${chatJid}:${threadRootId ?? "null"}`);
         },
-        skipFailedOnModelSwitch: (chatJid) => {
-          calls.push(`skip:${chatJid}`);
-          return true;
-        },
-        retryFailedOnModelSwitch: (chatJid) => {
-          calls.push(`retry:${chatJid}`);
-          return false;
-        },
-        recoverInflightRuns: () => {
-          calls.push("recover");
-        },
         resumePendingChats: (chatJid) => {
           calls.push(`resume-pending:${chatJid ?? ""}`);
         },
@@ -302,9 +291,6 @@ describe("web channel runtime public surface service", () => {
     expect(service.replaceQueuedFollowupPlaceholder("web:test", 22, "updated", [1, 2], [{ type: "text" }], 6, true)?.id).toBe(4);
     expect(service.getThreadRootId("web:test", "m-1")).toBe(43);
     service.resumeChat("web:test", 12);
-    service.skipFailedOnModelSwitch("web:test");
-    service.retryFailedOnModelSwitch("web:test");
-    service.recoverInflightRuns();
     service.resumePendingChats("web:test");
     service.loadState();
     service.saveState();
@@ -342,9 +328,6 @@ describe("web channel runtime public surface service", () => {
       "replace:web:test:22:updated:1,2:6:1",
       "thread-root:web:test:m-1",
       "resume:web:test:12",
-      "skip:web:test",
-      "retry:web:test",
-      "recover",
       "resume-pending:web:test",
       "load",
       "save",

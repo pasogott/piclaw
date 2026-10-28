@@ -1,3 +1,5 @@
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
+import { captureInputTarget } from "../messaging/input-request-authority.js";
 /**
  * web/handlers/posts.ts – HTTP handlers for timeline post endpoints.
  *
@@ -21,6 +23,9 @@ import { parsePostPayload, storePost } from "../posts-service.js";
  * @returns JSON response with stored post payload or validation errors.
  */
 export async function handlePost(channel: WebChannelLike, req: Request, isReply: boolean, chatJid: string): Promise<Response> {
+  const requestAuthority = captureWebRequestAuthority(channel.authGateway, req);
+  const target = channel.admitUserMessage ? captureInputTarget(chatJid) : () => {};
+  const authorise = (phase?: "before" | "after") => { requestAuthority(); target(phase); };
   let data: unknown;
   try {
     data = await req.json();
@@ -31,7 +36,7 @@ export async function handlePost(channel: WebChannelLike, req: Request, isReply:
   const parsed = parsePostPayload(data);
   if (!parsed.ok || !parsed.data) return channel.json({ error: parsed.error }, 400);
 
-  const result = storePost(channel, chatJid, parsed.data, { isReply });
+  const result = await storePost(channel, chatJid, parsed.data, { isReply, authorise, signal: req.signal });
 
   if (result.status === 201) {
     const interaction = result.body as InteractionRow | null;

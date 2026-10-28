@@ -24,6 +24,68 @@ function fixture(name: string, trace: string[]) {
   };
   return { failure, state, port, backend };
 }
+const preparedBackground = {incarnation:'native-domain',conversationId:7,chatJid:'operation:accepted',branchId:'background:'+'a'.repeat(64),operationId:'operation:background:'+'a'.repeat(64),sourceSeq:1,
+  sourceId:'background:'+'a'.repeat(64),payloadRef:'background:'+'a'.repeat(64),requestId:'background:'+'a'.repeat(64),requestHash:'0'.repeat(64)};
+test('background admission facade: waits for confirmed cleanup and never replays an uncertain call',async()=>{
+  const trace:string[]=[],old=fixture('old',trace),next=fixture('new',trace),gate=deferred<void>(),failure=Error('uncertain source publication');let prepares=0,oldCalls=0,nextCalls=0;
+  old.state.closeGate=gate.promise;const signal=new AbortController().signal;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,prepareAddonOperation:async()=>{oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,prepareAddonOperation:async(id,received)=>{expect(id).toBe('accepted');expect(received).toBe(signal);nextCalls++;return preparedBackground;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted',signal)).rejects.toBe(failure);expect(oldCalls).toBe(1);
+  let finished=false;const explicitRetry=backend.sessionOptions.prepareAddonOperation!('accepted',signal).then(value=>{finished=true;return value;});
+  await tick();expect(finished).toBe(false);expect(nextCalls).toBe(0);expect(prepares).toBe(1);
+  gate.resolve();expect(await explicitRetry).toEqual(preparedBackground);expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);expect(prepares).toBe(2);
+  await backend.close();await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toThrow('Native runtime closing');
+});
+test('background admission facade: uncertain cleanup prevents replacement admission',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('uncertain close');let prepares=0;
+  old.state.closeError=cleanup;const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,prepareAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.prepareAddonOperation!('accepted')).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
+test('background execution facade: joins cleanup, requires explicit same-owner retry and never automatically replays',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('unknown native dispatch');let prepares=0,oldCalls=0,nextCalls=0;
+  const signal=new AbortController().signal;old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchAddonOperation:async()=>{oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,dispatchAddonOperation:async(id,received)=>{expect([id,received]).toEqual(['accepted',signal]);nextCalls++;return{status:'success',result:'original native receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(failure);expect(oldCalls).toBe(1);
+  let finished=false;const explicit=backend.sessionOptions.dispatchAddonOperation!('accepted',signal).then(result=>{finished=true;return result;});
+  await tick();expect(finished).toBe(false);expect(prepares).toBe(1);expect(nextCalls).toBe(0);
+  gate.resolve();expect(await explicit).toEqual({status:'success',result:'original native receipt'});expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);expect(prepares).toBe(2);
+  await backend.close();await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toThrow('Native runtime closing');
+});
+test('background execution facade: uncertain cleanup prevents replacement or any retry',async()=>{
+  const old=fixture('old',[]),failure=Error('unknown dispatch'),cleanup=Error('uncertain close');let prepares=0;
+  old.state.closeError=cleanup;const signal=new AbortController().signal;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.dispatchAddonOperation!('accepted',signal)).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
+test('background receipt recovery facade: waits for confirmed cleanup and never repeats a failed observation',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('uncertain receipt read');let prepares=0,oldReads=0,newReads=0;
+  old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,reconcileAddonOperation:async()=>{oldReads++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,reconcileAddonOperation:async(id,epoch)=>{expect([id,epoch]).toEqual(['accepted',1]);newReads++;return{status:'success',result:'persisted receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(failure);
+  let done=false;const explicit=backend.sessionOptions.reconcileAddonOperation!('accepted',1).then(result=>{done=true;return result;});
+  await tick();expect(done).toBe(false);expect(prepares).toBe(1);expect(newReads).toBe(0);gate.resolve();
+  expect(await explicit).toEqual({status:'success',result:'persisted receipt'});expect(oldReads).toBe(1);expect(newReads).toBe(1);await backend.close();
+});
+test('background receipt recovery facade: uncertain cleanup refuses replacement reads',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('uncertain close');let prepares=0;old.state.closeError=cleanup;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,reconcileAddonOperation:async()=>{old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.reconcileAddonOperation!('accepted',1)).rejects.toBe(cleanup);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
+});
+
 function failAbort(f: ReturnType<typeof fixture>, method: "abort" | "abortRetry" = "abort") {
   const error = Error("Session failed after a storage error");
   f.port[method] = async () => { f.failure.resolve(error); await tick(); throw error; };
@@ -170,4 +232,26 @@ test("missing backend pending observation fails closed instead of settling accep
   expect(() => coordinator.waitForPending({ chatJid: "web:test", messageId: "accepted", rowId: 1 }))
     .toThrow("Native channel binding method unavailable: dispatchAcceptedInput.waitForPending");
   await backend.close();
+});
+
+test('Dream dispatch facade: preserves original invocation and deadline, joins cleanup and never automatically replays',async()=>{
+  const old=fixture('old',[]),next=fixture('new',[]),gate=deferred<void>(),failure=Error('uncertain Dream dispatch');let prepares=0,oldCalls=0,nextCalls=0;
+  const request={invocationId:'00000000-0000-4000-8000-000000000001',chatJid:'web:test',mode:'manual' as const,days:2,model:'fixture/original',timeoutMs:1000,acceptedAt:'2026-01-01T00:00:00.000Z',assertCurrent(){}};
+  old.state.closeGate=gate.promise;
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchDreamOperation:async received=>{expect(received).toBe(request);oldCalls++;old.failure.resolve(failure);throw failure;}}};
+  const replacement:RuntimeBackend={...next.backend,sessionOptions:{...next.backend.sessionOptions,dispatchDreamOperation:async received=>{expect(received).toBe(request);nextCalls++;return{status:'success',result:'same invocation receipt'};}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>++prepares===1?first:replacement);
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(failure);expect(oldCalls).toBe(1);await tick();expect(nextCalls).toBe(0);
+  let ended=false;const explicit=backend.sessionOptions.dispatchDreamOperation!(request).then(value=>{ended=true;return value;});await tick();expect(ended).toBe(false);expect(prepares).toBe(1);
+  gate.resolve();expect(await explicit).toEqual({status:'success',result:'same invocation receipt'});expect(oldCalls).toBe(1);expect(nextCalls).toBe(1);await backend.close();
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toThrow('Native runtime closing');
+});
+
+test('Dream dispatch facade: unconfirmed cleanup cannot replace or replay an invocation',async()=>{
+  const old=fixture('old',[]),failure=Error('failed storage'),cleanup=Error('unconfirmed Dream cleanup');let prepares=0,calls=0;old.state.closeError=cleanup;
+  const request={invocationId:'00000000-0000-4000-8000-000000000002',chatJid:'web:test',mode:'manual' as const,days:2,model:null,timeoutMs:1000,acceptedAt:'2026-01-01T00:00:00.000Z',assertCurrent(){}};
+  const first:RuntimeBackend={...old.backend,sessionOptions:{...old.backend.sessionOptions,dispatchDreamOperation:async()=>{calls++;old.failure.resolve(failure);throw failure;}}};
+  const backend=await createRecoverableRuntimeBackend(async()=>{prepares++;return first;});
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(failure);await tick();
+  await expect(backend.sessionOptions.dispatchDreamOperation!(request)).rejects.toBe(cleanup);expect(calls).toBe(1);expect(prepares).toBe(1);await expect(backend.close()).rejects.toBe(cleanup);
 });

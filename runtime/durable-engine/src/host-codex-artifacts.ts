@@ -16,7 +16,7 @@ export interface CodexArtifactBinding {
   readonly hostOperationId: string;
   readonly chatJid: string;
   assertCurrent(): void;
-  write<T>(body: () => T): T;
+  write<T>(body: () => T): T | Promise<T>;
 }
 export interface CodexImageActivity {
   kind: 'image';
@@ -52,7 +52,7 @@ export function createHostCodexArtifactStore(root: Database, operation: CodexOpe
       if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel) || resolve(workspace, image.relativePath) !== path || !rel.startsWith('.pi/openai-codex-images/')) throw Error('Image outside actual workspace');
       const bytes = await readFile(path); check();
       const ref: CodexArtifactRef = { codexOperationId: operation.id, path: rel, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, callId: image.callId, responseId: image.responseId, mimeType: `image/${image.outputFormat}` };
-      binding.write(() => {
+      await binding.write(() => {
         check();
         const refs = read();
         const prior = refs.find(r => r.path === ref.path);
@@ -90,9 +90,8 @@ export function createHostCodexAnswerMaterializer(options: {
         JOIN service_effect_s01_chats ch ON ch.chat_jid=o.chat_jid AND ch.active_operation_id=o.operation_id
         WHERE o.operation_id=? AND o.chat_jid=? AND o.version=? AND o.phase=?
         AND o.primary_source_seq=? AND o.cancellation_source_id IS NULL AND o.terminal_disposition IS NULL
-        AND o.harness_session_id=? AND o.harness_lane=? AND o.harness_operation_id IS ?
-        AND o.harness_state=? AND o.harness_watch_generation=?`).get(operation.operationId, operation.chatJid,
-          operation.version, operation.phase, operation.primarySourceSeq, h.sessionId, h.lane, h.harnessOperationId, h.state, h.watchGeneration);
+        AND o.harness_session_id=? AND o.harness_operation_id IS ?`).get(operation.operationId, operation.chatJid,
+          operation.version, operation.phase, operation.primarySourceSeq, h.sessionId, h.harnessOperationId);
       if (!current || !['executing', 'settling'].includes(operation.phase)) throw Error('Codex answer authority unavailable');
       const sources = root.query(`SELECT s.source_seq FROM service_effect_s01_sources s
         JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq

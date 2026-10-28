@@ -14,24 +14,9 @@ import { registerPreShutdownHook } from "../../../runtime/shutdown-registry.js";
 import { AgentBuffers } from "../agent/agent-buffers.js";
 import { AgentStatusStore } from "../agent/agent-status-store.js";
 import { WebChannelState } from "./channel-state.js";
-import {
-  getThreadRootId as getThreadRootIdForChat,
-  resumeChat as resumeWebChat,
-  retryFailedOnModelSwitch as retryFailedOnModelSwitchForChat,
-  skipFailedOnModelSwitch as skipFailedOnModelSwitchForChat,
-  type ChatRunControlStore,
-  type ResumeChatContext,
-} from "./chat-run-control.js";
+import { getThreadRootId as getThreadRootIdForChat, resumeChat as resumeWebChat, type ChatRunControlStore, type ResumeChatContext } from "./chat-run-control.js";
 import { PendingSteeringStore } from "./pending-steering.js";
-import {
-  recoverInflightRuns as recoverWebInflightRuns,
-  recoverStaleInflightRun as recoverWebStaleInflightRun,
-  resumePendingChats as resumeWebPendingChats,
-  type PersistedDraftRecoveryEntry,
-  type RecoverStaleInflightRunOptions,
-  type WebRecoveryContext,
-  type WebRecoveryStore,
-} from "./recovery.js";
+import { resumePendingChats as resumeWebPendingChats, type WebPendingResumeContext, type WebPendingResumeStore } from "./recovery.js";
 
 /** Runtime callbacks required to bridge recovery/resume helpers back into WebChannel orchestration. */
 export interface WebChannelRuntimeStateCallbacks {
@@ -57,8 +42,6 @@ interface WebChannelStateStoreLike {
   getAgentStatuses(): Record<string, Record<string, unknown>>;
   setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void;
   getContextUsage(chatJid: string): Record<string, unknown> | null;
-  setDraftRecovery(chatJid: string, entry: PersistedDraftRecoveryEntry | null): void;
-  getDraftRecovery(chatJid: string): PersistedDraftRecoveryEntry | null;
 }
 
 interface PendingSteeringStoreLike {
@@ -98,7 +81,6 @@ export class WebChannelRuntimeStateService {
   private readonly pendingSteeringStore: PendingSteeringStoreLike;
   private readonly agentStatusStore: AgentStatusStoreLike;
   private readonly agentBuffers: AgentBuffersLike;
-  private readonly draftRecoveryChatByTurnId = new Map<string, string>();
 
   constructor(
     private readonly callbacks: WebChannelRuntimeStateCallbacks,
@@ -122,19 +104,13 @@ export class WebChannelRuntimeStateService {
     };
   }
 
-  private getRecoveryContext(): WebRecoveryContext {
+  private getPendingResumeContext(): WebPendingResumeContext {
     return {
-      isNativeRuntime: () => this.callbacks.isNativeRuntime?.() === true,
       assistantName: this.callbacks.getAssistantName(),
       defaultAgentId: this.options.defaultAgentId,
       enqueue: (task, key, laneKey) => this.callbacks.enqueue(task, key, laneKey),
       processChat: (chatJid, agentId, threadRootId) =>
         this.callbacks.processChat(chatJid, agentId, threadRootId ?? undefined),
-      getDraftRecovery: (chatJid) => this.state.getDraftRecovery(chatJid),
-      clearDraftRecovery: (chatJid) => {
-        this.state.setDraftRecovery(chatJid, null);
-        this.state.save();
-      },
       recoveryDelayMs: RECOVERY_REPLAY_DELAY_MS,
       sleep: (ms) => Bun.sleep(ms),
     };
@@ -148,24 +124,8 @@ export class WebChannelRuntimeStateService {
     resumeWebChat(chatJid, threadRootId, this.getResumeChatContext());
   }
 
-  skipFailedOnModelSwitch(chatJid: string, store?: ChatRunControlStore): boolean {
-    return skipFailedOnModelSwitchForChat(chatJid, store);
-  }
-
-  retryFailedOnModelSwitch(chatJid: string, store?: ChatRunControlStore): boolean {
-    return retryFailedOnModelSwitchForChat(chatJid, store);
-  }
-
-  recoverInflightRuns(store?: WebRecoveryStore): void {
-    recoverWebInflightRuns(this.getRecoveryContext(), store);
-  }
-
-  recoverStaleInflightRun(chatJid: string, options?: RecoverStaleInflightRunOptions, store?: WebRecoveryStore): boolean {
-    return recoverWebStaleInflightRun(this.getRecoveryContext(), chatJid, options, store);
-  }
-
-  resumePendingChats(chatJid?: string, store?: WebRecoveryStore): void {
-    resumeWebPendingChats(this.getRecoveryContext(), chatJid, store);
+  resumePendingChats(chatJid?: string, store?: WebPendingResumeStore): void {
+    resumeWebPendingChats(this.getPendingResumeContext(), chatJid, store);
   }
 
   loadState(): void {
@@ -185,21 +145,6 @@ export class WebChannelRuntimeStateService {
   }
 
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void {
-    const turnId = typeof status?.turn_id === "string"
-      ? status.turn_id
-      : typeof status?.turnId === "string"
-        ? status.turnId
-        : "";
-    if (turnId) {
-      this.draftRecoveryChatByTurnId.set(turnId, chatJid);
-    }
-    if (status?.type === "done" || status?.type === "error") {
-      if (turnId) {
-        this.draftRecoveryChatByTurnId.delete(turnId);
-      }
-      this.state.setDraftRecovery(chatJid, null);
-      this.state.save();
-    }
     this.agentStatusStore.update(chatJid, status);
   }
 
@@ -243,21 +188,7 @@ export class WebChannelRuntimeStateService {
 
   updateDraftBuffer(turnId: string, text: string, totalLines: number): void {
     this.agentBuffers.updateBuffer(turnId, "draft", text, totalLines);
-    const chatJid = this.draftRecoveryChatByTurnId.get(turnId);
-    if (!chatJid) return;
-    const normalizedText = typeof text === "string" ? text : "";
-    if (!normalizedText.trim()) {
-      this.state.setDraftRecovery(chatJid, null);
-      this.state.save();
-      return;
-    }
-    this.state.setDraftRecovery(chatJid, {
-      turnId,
-      text: normalizedText,
-      totalLines,
-      updatedAt: Date.now(),
-    });
-    this.state.save();
+
   }
 
   getBuffer(turnId: string, panel: "thought" | "draft"): WebAgentBufferEntry | undefined {

@@ -34,7 +34,6 @@ const { createAgentSession, createAgentSessionRuntime, DefaultResourceLoader, Mo
 const { InMemoryCredentialStore, createAssistantMessageEventStream, getCurrentSystemPrompt } = await import('@earendil-works/pi-ai');
 const { toolActivation } = await import('../src/extensions/tool-activation.js');
 const { currentContextTools, providerTranscriptContext } = await import('../src/extensions/transcript-context-compat.js');
-const { createRunToolCeilingController } = await import('../src/agent-pool/run-tool-ceiling.js');
 const { AgentSessionManager } = await import('../src/agent-pool/session-manager.js');
 const { createSessionInDir } = await import('../src/agent-pool/session.js');
 const { getInstalledAddonExtensionPaths } = await import('../src/addons/package-entries.js');
@@ -179,8 +178,11 @@ try {
   assert(!batchRequests[0].declared.includes('plan'));
   assert(batchRequests[1].declared.includes('plan'));
   assert.deepEqual(batch.find(r => r.name === 'activate_tools').details.newlyActivated, ['plan']); cases++;
-  const ceiling = createRunToolCeilingController({ chatJid: 'web:fixture:branch:a', runOptions: { toolCeilingFilter: name => name !== 'plan' } });
-  ceiling.apply(session);
+  // Historical SDK activation negative control; the production Core ceiling owner is retired.
+  const savedTools = session.getActiveToolNames();
+  const setTools = session.setActiveToolsByName.bind(session);
+  session.setActiveToolsByName = (names: string[]) => setTools(names.filter(name => name !== 'plan'));
+  session.setActiveToolsByName(savedTools);
   for (let n = 0; n < 2; n++) {
     const denied = await run(session, `ceiling-denied-${n}`, [[activate()], [read()]]);
     assert.deepEqual(denied[0].details.unavailable, ['plan']); assert.deepEqual(denied[0].details.newlyActivated, []);
@@ -188,7 +190,7 @@ try {
     assert.equal(denied[1].isError, true);
     assert.equal(denied[1].text, 'Tool plan not found'); cases++;
   }
-  ceiling.release(); success(await run(session, 'ceiling-release', [[activate()], [read()]])); cases++;
+  session.setActiveToolsByName = setTools; setTools(savedTools); success(await run(session, 'ceiling-release', [[activate()], [read()]])); cases++;
   for (const options of [{ tools: ['activate_tools'] }, { tools: [] }, { exclude: ['plan'] }]) {
     const filtered = await create('file', options.tools, options.exclude);
     assert(!filtered.getAllTools().some((t: any) => t.name === 'plan'));

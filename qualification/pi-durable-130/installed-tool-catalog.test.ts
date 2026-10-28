@@ -15,11 +15,11 @@ import { SettingsManager } from "../../node_modules/@earendil-works/pi-coding-ag
 import { loadApplicationExtensionCatalog, qualifyInstalledPlan, assertApplicationExtensionCatalogSupported } from "../../runtime/durable-engine/src/host-extension-catalog.ts";
 
 const root = process.env.DURABLE_ADDONS_ROOT;
-if (!root) throw Error("DURABLE_ADDONS_ROOT required: pinned Plan 0.1.25 sources, never live packages");
+if (!root) throw Error("DURABLE_ADDONS_ROOT required: pinned Plan 0.1.27 sources, never live packages");
 const pins = {
-  "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+  "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
   "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+  "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c",
 };
 
 test("installed pinned Plan executes the public registry definition against root extension_kv; default still blocks missing operation binding", async () => {
@@ -42,8 +42,7 @@ test("installed pinned Plan executes the public registry definition against root
   const source = value(await work.acceptSource(sealed({ effect: effect("plan:accept"), chatJid, sourceId: "plan:source", kind: "message" as const,
     payloadRef: "plan:payload", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const claimed = value(await work.claimNext(sealed({ effect: effect("plan:claim"), chatJid, expectedFrontier: 0, newOperationId: "plan:operation", claimedAt: at })))!;
-  const operation = value(await work.bindHarness(sealed({ effect: effect("plan:bind", claimed.operation.operationId, source.sourceSeq),
-    expectedVersion: claimed.operation.version, sessionId: "plan:session", lane: "main", harnessOperationId: "42", state: "running" as const, watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("plan:bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "plan:session", harnessOperationId: "42" })));
   // Committed root evidence; this fixture does not claim public run-capture proof.
   const captured = { operation, inputs: [{ incarnation: "plan:copy", conversationId: 2 as never,
     chatJid, branchId: "main", operationId: operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,
@@ -60,7 +59,7 @@ test("installed pinned Plan executes the public registry definition against root
       expect(createHash("sha256").update(await Bun.file(source).bytes()).digest("hex")).toBe(hash);
       copyFileSync(source, join(pkg, file));
     }
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     const agentDir = join(dir, "agent"); mkdirSync(agentDir);
     delete globals.__piclaw_registerAddonConfigApi;
     delete globals.__PICLAW_BROADCAST_EVENT__;
@@ -95,10 +94,10 @@ test("installed pinned Plan executes the public registry definition against root
     expect(prompt.message).toMatchObject({ customType: "plan_sidebar_context", display: false });
     // Restoring an untrusted declaration revokes qualification even though the
     // registered tool and exported builders are unchanged.
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@qualification/plan", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@qualification/plan", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     expect(await qualifyInstalledPlan(catalog, dir)).toBeUndefined();
     expect(() => qualified!.assertCurrent()).toThrow("Installed Plan source changed");
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     qualified!.assertCurrent();
     for (const file of Object.keys(pins)) {
       const path = join(pkg, file);
@@ -121,7 +120,7 @@ test("installed pinned Plan executes the public registry definition against root
     let duringCapture = () => {};
     // The hash-pinned Plan result is JSON; the generic Pi catalog deliberately
     // erases its details type. No argument/input narrowing is delegated to this.
-    const port = createHostPlanTool(definition as Parameters<typeof createHostPlanTool>[0], { root: db, assertOwner,
+    const port = createHostPlanTool(definition as Parameters<typeof createHostPlanTool>[0], { root: db, assertOwner, createTool: qualified!.addon.createPlanTool,
       runtime: () => ({ async captureToolSource(conversationId, taskId, callId) {
         captures++;
         expect(Number(conversationId)).toBe(2); expect(Number(taskId)).toBe(99); expect(callId).toBe("production-plan-port");
@@ -143,7 +142,8 @@ test("installed pinned Plan executes the public registry definition against root
     await expect(port.execute({ action: "write", markdown: "REVOKED_DURING_CAPTURE" }, api, context)).rejects.toThrow();
     active = true; duringCapture = () => {};
     expect(extensionKvGet("plan-sidebar", "plan", "chat", chatJid)).toMatchObject({ markdown: "PORT_CLONED_BEFORE_AWAIT" });
-    const execute = (args: Record<string, unknown>) => withExtensionKvAuthority(authority, () => definition.execute("installed-plan-port", args as never,
+    const admittedDefinition = qualified!.addon.createPlanTool(body => authority.admitWrite!(body));
+    const execute = (args: Record<string, unknown>) => withExtensionKvAuthority(authority, () => admittedDefinition.execute("installed-plan-port", args as never,
       controller.signal, undefined, undefined as never));
     expect(getExtensionKvStore()).toBe(cached);
     expect(() => cached.get("plan-sidebar", "plan", "chat", chatJid)).toThrow("authority required");
@@ -166,9 +166,9 @@ test("installed pinned Plan executes the public registry definition against root
     db.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(operation.operationId);
     await expect(execute({ action: "write", chat_jid: chatJid, markdown: "CANCELLED" })).rejects.toThrow("Stale host operation authority");
     db.query("UPDATE service_effect_s01_operations SET phase='executing' WHERE operation_id=?").run(operation.operationId);
-    await expect(withExtensionKvAuthority(authority, async () => cached.set("plan-sidebar", "rollback", {
+    await expect(withExtensionKvAuthority(authority, () => authority.admitWrite!(() => cached.set("plan-sidebar", "rollback", {
       toJSON() { active = false; return "FORBIDDEN"; },
-    }, "chat", chatJid))).rejects.toThrow("Owner revoked");
+    }, "chat", chatJid)))).rejects.toThrow("Owner revoked");
     expect(extensionKvGet("plan-sidebar", "rollback", "chat", chatJid)).toBeNull();
     active = true; controller.abort();
     await expect(execute({ action: "write", chat_jid: chatJid, markdown: "FORBIDDEN" })).rejects.toThrow();
@@ -197,7 +197,7 @@ for (const scenario of ["renamed-after-load", "unqualified-name-before-load", "w
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const file of Object.keys(pins)) copyFileSync(resolve(root!, "addons/plan-sidebar", file), join(pkg, file));
     const manifest = { name: scenario === "unqualified-name-before-load" ? "@qualification/plan" : canonicalName,
-      version: scenario === "unsupported-version" ? "0.1.26" : "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } };
+      version: scenario === "unsupported-version" ? "99.0.0" : "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } };
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     if (scenario === "unsupported-code") writeFileSync(join(pkg, "compat/chat-context.ts"), `${await Bun.file(join(pkg, "compat/chat-context.ts")).text()}\n// unsupported executable input\n`);
     if (scenario === "shadowed-helper") writeFileSync(join(pkg, "compat/chat-context.js"), 'export function getChatJid() { return "web:spoofed"; }');
@@ -269,7 +269,7 @@ test("same-path same-CWD unsupported Plan cache cannot qualify restored approved
   try {
     mkdirSync(join(pkg, "compat"), { recursive: true }); mkdirSync(agentDir);
     for (const file of Object.keys(pins)) copyFileSync(resolve(root!, "addons/plan-sidebar", file), join(pkg, file));
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.27", type: "module", pi: { extensions: ["./index.ts"] } }));
     const marker = join(dir, "factory-executions");
     writeFileSync(join(pkg, "index.ts"), `import { appendFileSync } from "node:fs";
       appendFileSync(${JSON.stringify(marker)}, "BAD\\n");

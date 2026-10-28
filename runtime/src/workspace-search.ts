@@ -15,6 +15,7 @@ import { workspaceIndexPolicySnapshot, workspaceIndexPathDecision, workspaceInde
 import {
   getWorkspaceIndexStatus,
   markWorkspaceIndexCoreStale,
+  type WorkspaceIndexStaleAdmission,
   normalizeWorkspaceSearchScope,
   refreshWorkspaceIndex,
   type WorkspaceIndexBackgroundRefreshParams,
@@ -91,14 +92,14 @@ export function setBackgroundWorkspaceIndexRefreshRequesterForTests(
   requestBackgroundWorkspaceIndexRefreshImpl = requester ?? defaultBackgroundRefresh;
 }
 
-export function markWorkspaceIndexStale(params?: { scope?: WorkspaceSearchScope | string; paths?: string[] }): void {
-  for (const scope of markWorkspaceIndexCoreStale(params)) {
-    requestBackgroundWorkspaceIndexRefresh({ scope });
-  }
+export function markWorkspaceIndexStale(params?: { scope?: WorkspaceSearchScope | string; paths?: string[] }, admission?: WorkspaceIndexStaleAdmission): Promise<void> {
+  return markWorkspaceIndexCoreStale(params, admission).then(scopes => {
+    for (const scope of scopes) requestBackgroundWorkspaceIndexRefresh({ scope });
+  });
 }
 
 /** Full-text search across indexed workspace files. */
-export async function searchWorkspace(params: WorkspaceSearchParams): Promise<WorkspaceSearchResult> {
+export async function searchWorkspace(params: WorkspaceSearchParams, owner?: { refreshStaleInline: true }): Promise<WorkspaceSearchResult> {
   const access=workspaceIndexAccess();
   const policy=access.mode==='single-user'?workspaceIndexPolicySnapshot():null;
   const query = params.query.trim();
@@ -116,7 +117,8 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
   } else {
     const status = getWorkspaceIndexStatus({ scope });
     if (status.state !== "ready") {
-      requestBackgroundWorkspaceIndexRefresh({ scope, max_kb: params.max_kb });
+      if(owner?.refreshStaleInline)await refreshWorkspaceIndex({scope,max_kb:params.max_kb});
+      else requestBackgroundWorkspaceIndexRefresh({ scope, max_kb: params.max_kb });
     }
   }
 

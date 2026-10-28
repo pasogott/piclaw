@@ -3,6 +3,71 @@ import { applyOwnedMigrations } from "../../db/migrations.js";
 
 const SCHEMA_PREFIX = "service_effect_s01_";
 
+
+// Original operational rows keep their rowids/FKs. Only exclusive SDK observations
+// are archived; accepted-source membership, binding, cancellation and delivery stay.
+const HISTORICAL_OPERATIONS_SQL = `CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}operations (
+      operation_id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version >= 1),
+      phase TEXT NOT NULL CHECK(phase IN ('accepted','claimed','starting_harness','executing','suspended','cancelling','settling','terminal')),
+      primary_source_seq INTEGER NOT NULL,
+      cancellation_source_id TEXT,
+      cancellation_source_seq INTEGER,
+      cancellation_cause TEXT,
+      cancellation_requested_at TEXT,
+      harness_session_id TEXT,
+      harness_lane TEXT,
+      harness_operation_id TEXT,
+      harness_state TEXT CHECK(harness_state IS NULL OR harness_state IN ('not_started','running','suspended','aborting','finished')),
+      harness_watch_generation INTEGER CHECK(harness_watch_generation IS NULL OR harness_watch_generation >= 0),
+      terminal_disposition TEXT CHECK(terminal_disposition IS NULL OR terminal_disposition IN ('completed','cancelled','failed','skipped','superseded')),
+      terminal_message_row_id INTEGER,
+      terminal_error_code TEXT,
+      terminal_committed_at TEXT,
+      UNIQUE(chat_jid, operation_id),
+      FOREIGN KEY(chat_jid, primary_source_seq)
+        REFERENCES ${SCHEMA_PREFIX}sources(chat_jid, source_seq)
+    ) STRICT;`;
+const OPERATIONS_SQL = `CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}operations (
+      operation_id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version >= 1),
+      phase TEXT NOT NULL CHECK(phase IN ('accepted','claimed','starting_harness','executing','suspended','cancelling','settling','terminal')),
+      primary_source_seq INTEGER NOT NULL,
+      cancellation_source_id TEXT,
+      cancellation_source_seq INTEGER,
+      cancellation_cause TEXT,
+      cancellation_requested_at TEXT,
+      harness_session_id TEXT,
+      harness_operation_id TEXT,
+      terminal_disposition TEXT CHECK(terminal_disposition IS NULL OR terminal_disposition IN ('completed','cancelled','failed','skipped','superseded')),
+      terminal_message_row_id INTEGER,
+      terminal_error_code TEXT,
+      terminal_committed_at TEXT,
+      UNIQUE(chat_jid, operation_id),
+      FOREIGN KEY(chat_jid, primary_source_seq)
+        REFERENCES ${SCHEMA_PREFIX}sources(chat_jid, source_seq)
+    ) STRICT;`;
+const HARNESS_ARCHIVE = `${SCHEMA_PREFIX}legacy_harness_v1`;
+const HARNESS_ARCHIVE_SQL = `CREATE TABLE ${HARNESS_ARCHIVE} (
+  operation_id TEXT PRIMARY KEY, operation_rowid INTEGER NOT NULL UNIQUE,
+  harness_lane TEXT, harness_state TEXT, harness_watch_generation INTEGER
+) STRICT;`;
+const HARNESS_RETIREMENT = {owner:"service_effect_s01",id:"retire-harness-mirrors-v1",order:2,sql:`
+${HARNESS_ARCHIVE_SQL}
+INSERT INTO ${HARNESS_ARCHIVE}(operation_id,operation_rowid,harness_lane,harness_state,harness_watch_generation)
+  SELECT operation_id,rowid,harness_lane,harness_state,harness_watch_generation FROM ${SCHEMA_PREFIX}operations ORDER BY rowid;
+ALTER TABLE ${SCHEMA_PREFIX}operations DROP COLUMN harness_lane;
+ALTER TABLE ${SCHEMA_PREFIX}operations DROP COLUMN harness_state;
+ALTER TABLE ${SCHEMA_PREFIX}operations DROP COLUMN harness_watch_generation;
+`};
+const FRESH_BINDING = {owner:"service_effect_s01",id:"native-harness-binding-v1",order:2,sql:OPERATIONS_SQL};
+const ACTIVE_OPERATION_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}one_active_operation
+      ON ${SCHEMA_PREFIX}operations(chat_jid) WHERE phase <> 'terminal';`;
+const OPEN_OPERATION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}open_operations
+      ON ${SCHEMA_PREFIX}operations(chat_jid, phase, operation_id);`;
+
 // Keep the historical declarations exact: unrecognised constraints must not be
 // erased by the narrow queue rebuild. The membership parent is never rebuilt
 // (EF-S07 source_bindings also references it).
@@ -122,6 +187,44 @@ function preflightQueueUpgrade(database: Database): void {
   }
 }
 
+
+
+function invalidHarnessSchema(): never {throw Error("EF-S01 harness retirement requires recognised schema and receipts");}
+/** Before base/ledger DDL, recognise only the original/target declarations.
+ * Mirror-free native state without its receipt is NOT legacy input.
+ * DROP COLUMN keeps every inbound FK attached to the original parent table. */
+function preflightHarnessRetirement(database: Database): typeof HARNESS_RETIREMENT | typeof FRESH_BINDING {
+  const operation = schemaSql(database, `${SCHEMA_PREFIX}operations`), archive = schemaSql(database,HARNESS_ARCHIVE);
+  const old = operation !== null && normaliseSql(operation) === normaliseSql(HISTORICAL_OPERATIONS_SQL);
+  const current = operation !== null && normaliseSql(operation) === normaliseSql(OPERATIONS_SQL);
+  if (operation !== null && !old && !current || archive !== null && normaliseSql(archive) !== normaliseSql(HARNESS_ARCHIVE_SQL)) invalidHarnessSchema();
+  const receipts = schemaSql(database,"piclaw_schema_migrations") === null ? [] : database.query(
+    "SELECT id,migration_order FROM main.piclaw_schema_migrations WHERE owner='service_effect_s01' AND migration_order>=2").all() as {id:string;migration_order:number}[];
+  if (receipts.length) {
+    const expected = archive === null ? FRESH_BINDING : HARNESS_RETIREMENT;
+    if (receipts.length !== 1 || receipts[0]?.id !== expected.id || receipts[0]?.migration_order !== 2 || !current) invalidHarnessSchema();
+  } else if (archive !== null || current) invalidHarnessSchema();
+  if (database.query(`SELECT 1 FROM sqlite_schema WHERE tbl_name=? COLLATE NOCASE AND
+      (type='trigger' OR type='index' AND sql IS NOT NULL AND lower(name) NOT IN (?,?)) LIMIT 1`)
+      .get(`${SCHEMA_PREFIX}operations`,`${SCHEMA_PREFIX}one_active_operation`,`${SCHEMA_PREFIX}open_operations`)) invalidHarnessSchema();
+  if (database.query("SELECT 1 FROM sqlite_schema WHERE tbl_name=? COLLATE NOCASE AND type='index' AND sql IS NOT NULL LIMIT 1").get(HARNESS_ARCHIVE)) invalidHarnessSchema();
+  for (const [name,expected] of [[`${SCHEMA_PREFIX}one_active_operation`,ACTIVE_OPERATION_INDEX_SQL],[`${SCHEMA_PREFIX}open_operations`,OPEN_OPERATION_INDEX_SQL]]) {
+    const actual=schemaSql(database,name!);if(actual!==null&&normaliseSql(actual)!==normaliseSql(expected!))invalidHarnessSchema();
+  }
+  // Views/triggers could otherwise retain a deleted observation or change meaning.
+  const schemas = (database.query('PRAGMA database_list').all() as {name:string}[]).some(row=>row.name==='temp') ? ['main','temp'] : ['main'];
+  for (const schema of schemas) {
+    const catalog = schema === "main" ? "main.sqlite_schema" : "sqlite_temp_schema";
+    if (database.query(`SELECT 1 FROM ${catalog} WHERE type IN ('view','trigger') AND
+      (lower(tbl_name)=? OR instr(lower(coalesce(sql,'')),?)>0 OR instr(lower(coalesce(sql,'')),?)>0) LIMIT 1`)
+      .get(`${SCHEMA_PREFIX}operations`,`${SCHEMA_PREFIX}operations`,HARNESS_ARCHIVE)) invalidHarnessSchema();
+    if (database.query(`SELECT 1 FROM ${catalog} s,pragma_foreign_key_list(s.name,?) f
+      WHERE s.type='table' AND lower(f."table")=? AND lower(f."to") IN ('harness_lane','harness_state','harness_watch_generation') LIMIT 1`)
+      .get(schema,`${SCHEMA_PREFIX}operations`)) invalidHarnessSchema();
+  }
+  return old || archive !== null ? HARNESS_RETIREMENT : FRESH_BINDING;
+}
+
 /**
  * Install the latent EF-S01 schema on an explicitly supplied isolated database.
  * The caller owns the connection. Production startup composes this schema with
@@ -139,6 +242,7 @@ export function installServiceWorkSchema(database: Database): void {
 
   const install = () => {
     preflightQueueUpgrade(database);
+    const harnessRetirement = preflightHarnessRetirement(database);
     database.exec(`
     CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}chats (
       chat_jid TEXT PRIMARY KEY,
@@ -175,32 +279,10 @@ export function installServiceWorkSchema(database: Database): void {
         DEFERRABLE INITIALLY DEFERRED
     ) STRICT;
 
-    CREATE TABLE IF NOT EXISTS ${SCHEMA_PREFIX}operations (
-      operation_id TEXT PRIMARY KEY,
-      chat_jid TEXT NOT NULL,
-      version INTEGER NOT NULL CHECK(version >= 1),
-      phase TEXT NOT NULL CHECK(phase IN ('accepted','claimed','starting_harness','executing','suspended','cancelling','settling','terminal')),
-      primary_source_seq INTEGER NOT NULL,
-      cancellation_source_id TEXT,
-      cancellation_source_seq INTEGER,
-      cancellation_cause TEXT,
-      cancellation_requested_at TEXT,
-      harness_session_id TEXT,
-      harness_lane TEXT,
-      harness_operation_id TEXT,
-      harness_state TEXT CHECK(harness_state IS NULL OR harness_state IN ('not_started','running','suspended','aborting','finished')),
-      harness_watch_generation INTEGER CHECK(harness_watch_generation IS NULL OR harness_watch_generation >= 0),
-      terminal_disposition TEXT CHECK(terminal_disposition IS NULL OR terminal_disposition IN ('completed','cancelled','failed','skipped','superseded')),
-      terminal_message_row_id INTEGER,
-      terminal_error_code TEXT,
-      terminal_committed_at TEXT,
-      UNIQUE(chat_jid, operation_id),
-      FOREIGN KEY(chat_jid, primary_source_seq)
-        REFERENCES ${SCHEMA_PREFIX}sources(chat_jid, source_seq)
-    ) STRICT;
+    ${OPERATIONS_SQL}
 
-    CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}one_active_operation
-      ON ${SCHEMA_PREFIX}operations(chat_jid) WHERE phase <> 'terminal';
+
+    ${ACTIVE_OPERATION_INDEX_SQL}
 
     ${OPERATION_SOURCES_SQL}
 
@@ -234,10 +316,11 @@ export function installServiceWorkSchema(database: Database): void {
 
     CREATE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}pending_sources
       ON ${SCHEMA_PREFIX}sources(chat_jid, state, source_seq);
-    CREATE INDEX IF NOT EXISTS ${SCHEMA_PREFIX}open_operations
-      ON ${SCHEMA_PREFIX}operations(chat_jid, phase, operation_id);
+    ${OPEN_OPERATION_INDEX_SQL}
   `);
-    applyOwnedMigrations(database, [QUEUE_UPGRADE]);
+    applyOwnedMigrations(database, [QUEUE_UPGRADE,harnessRetirement]);
+    if (normaliseSql(schemaSql(database,`${SCHEMA_PREFIX}operations`) ?? "") !== normaliseSql(OPERATIONS_SQL)) invalidHarnessSchema();
+    if (harnessRetirement.id === HARNESS_RETIREMENT.id && normaliseSql(schemaSql(database,HARNESS_ARCHIVE) ?? "") !== normaliseSql(HARNESS_ARCHIVE_SQL)) invalidHarnessSchema();
     // A receipt must not hide schema drift or a missing prerequisite index.
     if (normaliseSql(schemaSql(database, `${SCHEMA_PREFIX}queued_inputs`) ?? "") !== normaliseSql(FINAL_QUEUE_SQL)
       || normaliseSql(schemaSql(database, `${SCHEMA_PREFIX}operation_source_membership`) ?? "") !== normaliseSql(PARENT_INDEX_SQL)

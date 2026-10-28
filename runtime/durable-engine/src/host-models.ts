@@ -1,7 +1,9 @@
+import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import type { HostCodexModelServices } from "./host-codex-model-services.js";
 import { createLogger } from "../../src/utils/logger.js";
 import { taskModelRequestScope } from "./task-model-boundary-shim.js";
 import { classifyModelFailure, modelFailureDetail, type ModelFailure, type ModelFailurePhase } from "./host-model-failure.js";
+import type { ModelFailureEvidence } from "./host-model-failure-evidence.js";
 const log = createLogger("durable.models");
 import {
   createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
@@ -23,7 +25,9 @@ export interface HostModelPolicy {
   /** Invocation-local source fence retained through asynchronous credential resolution. */
   captureSourceGuard?(signal: AbortSignal | undefined): (() => void) | Promise<() => void>;
   onEvent?(event: AssistantMessageEvent, requestSignal?: AbortSignal): void;
+  retainFailure?(evidence: ModelFailureEvidence): string | Promise<string>;
   prepareRequest?(model: Model<Api>, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<{
+    readonly id?: string;
     dispatch(): Promise<void>; settle(message: AssistantMessage): Promise<void>; abandon(): Promise<void>;
   } | undefined>;
   /** Includes host model approval and budget admission; never auth/login approval. */
@@ -94,6 +98,12 @@ function requestOptions(options: SimpleStreamOptions = {}, deferred = false): Si
 function catalogCost(cost: AnyModel["cost"]): AnyModel["cost"] {
   const rates = (c: AnyModel["cost"]) => ({ input: c.input, output: c.output, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
   return { ...rates(cost), tiers: cost.tiers?.map((tier) => ({ ...rates(tier), inputTokensAbove: tier.inputTokensAbove })) };
+}
+function requestCeilingFrame(model:Model<Api>):string{
+  const cost=model.cost;
+  if(!cost||cost.tiers!==undefined&&!Array.isArray(cost.tiers))return 'unqualified';
+  const rates=(entry:typeof cost)=>[entry.input,entry.output,entry.cacheRead,entry.cacheWrite];
+  return JSON.stringify([model.contextWindow,model.maxTokens,rates(cost),(cost.tiers??[]).map(tier=>[tier.inputTokensAbove,...rates(tier)])]);
 }
 function usage(value?: Usage): Usage | undefined {
   return value && { input: value.input, output: value.output, cacheRead: value.cacheRead,
@@ -219,6 +229,8 @@ export function createHostModels(
     let terminalUsage: Usage | undefined;
     let phase: ModelFailurePhase = "validation";
     let providerFailure: ModelFailure | undefined;
+    let dispatchBudgetFailure: ModelFailure | undefined;
+    let providerError: unknown;
     let scope: ReturnType<typeof taskModelRequestScope>;
     let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
@@ -237,18 +249,19 @@ export function createHostModels(
         model = validatedChatModel(model);
         context = freeze(data(context));
         if (deferred) {
+          phase = "admission";
           if (!hostModelRuntime120.streamDeferred) throw new Error("Host operation unavailable");
           const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
           phase = "provider";
           const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
           for await (const event of stream) {
-            if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); providerFailure = classifyModelFailure("provider", event.error); throw new Error("Host request failed"); }
+            if (event.type === "error") { providerError = event.error; captureTerminalUsage(event.error); providerFailure = classifyModelFailure("provider", event.error); await request?.settle(event.error); throw new Error("Host request failed"); }
             if (event.type === "done") await request?.settle(event.message);
           output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
               : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
           }
           const result = await stream.result();
-          if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); providerFailure = classifyModelFailure("provider", result); throw new Error("Host request failed"); }
+          if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; captureTerminalUsage(result); providerFailure = classifyModelFailure("provider", result); await request?.settle(result); throw new Error("Host request failed"); }
           output.end(projectMessage(result, model));
           return;
         }
@@ -277,18 +290,26 @@ export function createHostModels(
           if (!current || (current.type ?? "chat") !== "chat" || current.provider !== ref.provider ||
             current.id !== ref.id || current.api !== listed.api ||
             (hasImages && !current.input.includes("image"))) throw new Error("Model owner changed");
+          if(requestCeilingFrame(current)!==requestCeilingFrame(listed as Model<Api>))throw new BudgetRequestError('budget_denied');
           return current;
         };
         const physical = assertPhysicalCompatible();
         phase = "conversion";
         codex = await policy.codex?.bind(physical, signal, options?.signal);
         const hostOptions = { ...safeOptions, ...codex?.options, signal, transformHeaders: async (headers: Record<string, string | null>) => {
-          signal.throwIfAborted();
-          assertSource();
-          policy.assertCurrent(ref, "chat", signal);
-          assertPhysicalCompatible();
-          await request?.dispatch();
-          return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
+          try{
+            signal.throwIfAborted();
+            assertSource();
+            policy.assertCurrent(ref, "chat", signal);
+            assertPhysicalCompatible();
+            await request?.dispatch();
+            return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
+          }catch(error){
+            // Host admission may be serialised into an ordinary provider error
+            // by the root transport. Retain only its exact budget classification.
+            const failure=classifyModelFailure('admission',error);if(failure.category==='budget')dispatchBudgetFailure=failure;
+            throw error;
+          }
         } };
         phase = "provider";
         const stream = simple
@@ -302,7 +323,7 @@ export function createHostModels(
         }
         const result = await stream.result();
         captureTerminalUsage(result);
-        if (result.stopReason === "error" || result.stopReason === "aborted") providerFailure = classifyModelFailure("provider", result);
+        if (result.stopReason === "error" || result.stopReason === "aborted") { providerError = result; providerFailure = dispatchBudgetFailure??classifyModelFailure("provider", result); }
         phase = "accounting";
         await request?.settle(result);
         phase = "conversion";
@@ -313,15 +334,23 @@ export function createHostModels(
       } catch (cause) {
         // Preserve the provider reason even when accounting/conversion fails next.
         const failure = providerFailure ? { ...providerFailure, phase } : classifyModelFailure(phase, cause);
+        let evidenceId: string | undefined;
+        try {
+          const retained = await policy.retainFailure?.({ provider: model.provider, model: model.id, requestId: request?.id,
+            scope: scope ? { conversationId: scope.conversationId, taskId: scope.taskId, kind: scope.taskKind } : undefined, failure, providerFailure, error: cause, providerError: providerError ?? (phase === "provider" ? cause : undefined) });
+          if (retained !== undefined) { modelFailureDetail({ ...failure, evidenceId: retained }); evidenceId = retained; }
+        } catch {
+          log.warn("Native model failure evidence could not be retained", { operation: "durable_model.evidence_failed", phase, taskId: scope?.taskId, conversationId: scope?.conversationId });
+        }
         log.warn("Native model request failed", { operation: "durable_model.request_failed", provider: model.provider,
-          model: model.id, taskId: scope?.taskId, conversationId: scope?.conversationId, ...failure });
+          model: model.id, taskId: scope?.taskId, conversationId: scope?.conversationId, ...failure, ...(evidenceId ? { evidenceId } : {}) });
         try { await codex?.finish(); } catch {
           log.warn("Native model conversion cleanup remains unresolved", { operation: "durable_model.cleanup_failed", phase: "conversion", taskId: scope?.taskId, conversationId: scope?.conversationId });
         }
         // Persist only the bounded classification; never provider text or partial output.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
           provider: model.provider, model: model.id, timestamp: Date.now(),
-          stopReason: "error", errorMessage: modelFailureDetail(failure),
+          stopReason: "error", errorMessage: modelFailureDetail({ ...failure, ...(evidenceId ? { evidenceId } : {}) }),
           usage: terminalUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
@@ -336,6 +365,21 @@ export function createHostModels(
       }
     })();
     return output;
+  };
+  const operationFailure = async (model: AnyModel, phase: ModelFailure["phase"], cause: unknown, signal?: AbortSignal, providerError?: unknown) => {
+    const failure = classifyModelFailure(phase, providerError ?? cause);
+    let evidenceId: string | undefined;
+    try {
+      const scope = taskModelRequestScope(signal);
+      const retained = await policy.retainFailure?.({ provider: model.provider, model: model.id,
+        scope: scope ? { conversationId: scope.conversationId, taskId: scope.taskId, kind: scope.taskKind } : undefined,
+        failure, error: cause, providerError: providerError ?? (phase === "provider" ? cause : undefined) });
+      if (retained !== undefined) { modelFailureDetail({ ...failure, evidenceId: retained }); evidenceId = retained; }
+    } catch {
+      log.warn("Native model failure evidence could not be retained", { operation: "durable_model.evidence_failed", phase });
+    }
+    log.warn("Native model request failed", { operation: "durable_model.request_failed", provider: model.provider, model: model.id, ...failure, ...(evidenceId ? { evidenceId } : {}) });
+    return modelFailureDetail({ ...failure, ...(evidenceId ? { evidenceId } : {}) });
   };
   const operationModel = (operation: "generateImages" | "classify", model: AnyModel) => {
     const type = operation === "generateImages" ? "image" : "classifier";
@@ -368,10 +412,12 @@ export function createHostModels(
     return physical;
   };
   const images = async (model: ImageModel<ImageApi>, context: ImagesContext, options?: ImagesOptions): Promise<AssistantImages> => {
+    let phase: ModelFailure["phase"] = "admission", providerError: unknown;
     try {
       const hostOptions = await admit("generateImages", model, options);
       const physical = physicalOfType("image", model);
       if (!hostModelRuntime120.generateImages) throw new Error("Host operation is unavailable");
+      phase = "provider";
       const result = await hostModelRuntime120.generateImages(physical, data(context), hostOptions);
       if (result.stopReason !== "stop") throw new Error("Host request failed");
       return data({ api: model.api, provider: model.provider, model: model.id, stopReason: "stop" as const,
@@ -379,16 +425,18 @@ export function createHostModels(
         output: result.output.map((part) => part.type === "image"
           ? { type: "image" as const, data: part.data, mimeType: part.mimeType }
           : { type: "text" as const, text: part.text }) });
-    } catch {
+    } catch (cause) {
       return { api: model.api, provider: model.provider, model: model.id, output: [],
-        stopReason: "error", errorMessage: "Host model request failed", timestamp: Date.now() };
+        stopReason: "error", errorMessage: await operationFailure(model, phase, cause, options?.signal, providerError), timestamp: Date.now() };
     }
   };
   const classify = async (model: ClassifierModel<ClassifierApi>, context: ClassifierContext, options?: ClassifierOptions): Promise<ClassifierResult> => {
+    let phase: ModelFailure["phase"] = "admission", providerError: unknown;
     try {
       const hostOptions = await admit("classify", model, options);
       const physical = physicalOfType("classifier", model);
       if (!hostModelRuntime120.classify) throw new Error("Host operation is unavailable");
+      phase = "provider";
       const result = await hostModelRuntime120.classify(physical, data(context), hostOptions);
       if (result.stopReason !== "stop") throw new Error("Host request failed");
       return data({ api: model.api, provider: model.provider, model: model.id, stopReason: "stop" as const,
@@ -398,9 +446,9 @@ export function createHostModels(
             probabilities: Object.fromEntries(Object.entries(answer.probabilities)), confidence: answer.confidence }
             : answer.type === "score" ? { type: answer.type, score: answer.score, confidence: answer.confidence }
               : { type: answer.type, probability: answer.probability }])) });
-    } catch {
+    } catch (cause) {
       return { api: model.api, provider: model.provider, model: model.id, answers: {},
-        stopReason: "error", errorMessage: "Host model request failed", timestamp: Date.now() };
+        stopReason: "error", errorMessage: await operationFailure(model, phase, cause, options?.signal, providerError), timestamp: Date.now() };
     }
   };
   const fetchDeferred = (model: Model<Api>, handle: DeferredHandle, options?: DeferredFetchOptions) =>

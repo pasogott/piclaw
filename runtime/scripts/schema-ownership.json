@@ -9,9 +9,30 @@
     "host.scheduled-history/occurrence-payload-v1": "{\"base\":\"047d08b1b8f78d5e3bd25b559da6c1917e1dd939\",\"owner\":\"host.scheduled-history\",\"id\":\"occurrence-payload-v1\",\"migration_order\":1,\"checksum\":\"7d717432ca22388076f53de373fb1ee710b92ad8368107bc7186a850cdae03f4\"}",
     "host.scheduled-definitions/versioned-payload-v1": "{\"base\":\"852e677276dc85e6504190e52286548ad1dcb54b\",\"owner\":\"host.scheduled-definitions\",\"id\":\"versioned-payload-v1\",\"migration_order\":1,\"checksum\":\"0e14073a0e90dcd92be152464e52faf4604777f2e6f6b1d75e88d3f894cfeb31\"}",
     "host.usage-reports/event-payload-v1": "{\"base\":\"96172d04b369980f7066de99d118df790b303a06\",\"owner\":\"host.usage-reports\",\"id\":\"event-payload-v1\",\"migration_order\":1,\"checksum\":\"0da9f38aeba12085f66855a829c0277b225137d08de7acdf04d17391109484ed\"}",
-    "host.historical-accounts/offline-empty-v1": "{\"base\":\"bae0a32550a17711957b75ae8d45bbc6b008e4c9\",\"historicalSource\":\"cdc214fcc06349dc9d315c2d17c866764e4557d5\",\"owner\":\"host.historical-accounts\",\"id\":\"offline-empty-v1\",\"migration_order\":1,\"checksum\":\"746a4c82365ce5a36baf333a86d4331c9272e9c812920652ab0c7743ba2bc09e\"}"
+    "host.historical-accounts/offline-empty-v1": "{\"base\":\"bae0a32550a17711957b75ae8d45bbc6b008e4c9\",\"historicalSource\":\"cdc214fcc06349dc9d315c2d17c866764e4557d5\",\"owner\":\"host.historical-accounts\",\"id\":\"offline-empty-v1\",\"migration_order\":1,\"checksum\":\"746a4c82365ce5a36baf333a86d4331c9272e9c812920652ab0c7743ba2bc09e\"}",
+    "host.chat-cursors/native-frontier-prequeue-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"native-frontier-prequeue-v1\",\"migration_order\":1,\"checksum\":\"8e9e5d0741ff9d493dd3b1032cd0cb2ee9b2ba703c9cf1dcb2c7b4ad7b4afdb3\"}",
+    "host.chat-cursors/native-frontier-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"native-frontier-v1\",\"migration_order\":1,\"checksum\":\"e5f26cdd5e61243ef522e2cedc1ec175c96df433feed354f6418479a988f72d5\"}",
+    "host.chat-cursors/polling-frontier-v1": "{\"base\":\"fc16a0c51d76b7200e263997619d434609afa043\",\"owner\":\"host.chat-cursors\",\"id\":\"polling-frontier-v1\",\"migration_order\":1,\"checksum\":\"539339d735a1b5fa7411e90c948484746a7d71675ebb60e01b860f0d702fb0ef\"}",
+    "service_effect_s01/native-harness-binding-v1": "{\"base\":\"75e5b08d5399beb1c3728e4d96ec6fdbebda08bf\",\"owner\":\"service_effect_s01\",\"id\":\"native-harness-binding-v1\",\"migration_order\":2,\"checksum\":\"e88db3dc4c81f5f3dd319ed92a2a79aa92e759d6ae12c6eb1180351daddc0742\"}",
+    "service_effect_s01/retire-harness-mirrors-v1": "{\"base\":\"75e5b08d5399beb1c3728e4d96ec6fdbebda08bf\",\"owner\":\"service_effect_s01\",\"id\":\"retire-harness-mirrors-v1\",\"migration_order\":2,\"checksum\":\"eb5306aba410376f94eb9d4a2c9bcdbbf9ba2fad0337b4d06994143640a9d809\"}"
   },
   "owners": {
+    "core:background-contexts": {
+      "category": "core",
+      "initializer": "runtime/durable-engine/src/host-background-context.ts#publishNativeBackgroundContext",
+      "writers": ["runtime/durable-engine/src/host-background-context.ts"],
+      "sourceOfTruth": "Single application-owned stable operation-context key to private SDK conversation/session identity. This index grants no execution and is excluded from public chat/session ingress.",
+      "replayRetention": "Preserve private identities and source-keyed policy families across input epochs and ACK/reopen. Staged contexts retain their immutable payload references; no duplicate allocation, physical pruning or implicit source replay.",
+      "references": ["runtime/durable-engine/src/application-bootstrap.ts", "runtime/durable-engine/src/default-application-runtime.ts", "runtime/src/agent-pool/background-operation-contract.ts"]
+    },
+    "core:background-policy": {
+      "category": "core",
+      "initializer": "runtime/durable-engine/src/host-background-policy.ts#bindNativeBackgroundPolicy (opt-in public SDK allocation transaction)",
+      "writers": ["runtime/durable-engine/src/host-background-policy.ts"],
+      "sourceOfTruth": "The immutable accepted payload owns background policy. Each source-keyed SDK document family member binds its input/hash and bounds exact public tool-task quota claims; it is not execution permission or an effect/replay receipt.",
+      "replayRetention": "Preserve the binding and claimed task IDs across ACK loss/reopen. Same-policy binding never resets quota. Forks start unbound. No physical SDK pruning, policy renewal, schema migration or automatic registration.",
+      "references": ["runtime/src/agent-pool/background-operation-contract.ts", "runtime/durable-engine/src/host-background-policy.ts"]
+    },
     "core:access_state": {
       "category": "core",
       "initializer": "runtime/src/db/access-state.ts#initializeAccessSchema",
@@ -202,7 +223,7 @@
     },
     "core:chat_cursors": {
       "category": "core",
-      "initializer": "runtime/src/db/connection.ts#createSchema",
+      "initializer": "runtime/src/db/chat-cursor-storage.ts#initializeChatCursorStorage",
       "writers": [
         "runtime/src/dream.ts",
         "runtime/src/db/chat-branches.ts",
@@ -210,9 +231,11 @@
         "runtime/src/db/chat-cursors.ts"
       ],
       "sourceOfTruth": "Host routing/delivery compatibility progress cursors; legacy seed from router_state is one-time. These cursors grant no native operation, execution or continuation authority.",
-      "replayRetention": "No blanket retention established.",
+      "replayRetention": "Polling position and queued payload/provenance survive the owned frontier migration unchanged. They grant no native execution or accepted-source frontier authority. Retired execution/recovery values are retained separately in the optional immutable historical archive; fresh roots create no archive.",
       "references": [
-        "runtime/src/db/connection.ts"
+        "runtime/src/db/chat-cursor-storage.ts",
+        "runtime/src/db/chat-cursors.ts",
+        "runtime/durable-engine/src/host-frontier.ts"
       ]
     },
     "core:chat_projects": {
@@ -559,8 +582,8 @@
         "runtime/src/service-effects/current-piclaw/terminal-settlement-store.ts",
         "runtime/src/service-effects/current-piclaw/service-work-store.ts"
       ],
-      "sourceOfTruth": "S01 durable accepted sources/operations/queue/intents and decision receipts; replay identity is authoritative, not a disposable projection.",
-      "replayRetention": "service-work-store.ts decision replay/idempotency checks; no broad terminal cleanup/TTL found. Preserve source and operation membership.",
+      "sourceOfTruth": "Host operation admission, source membership, version/cancellation/terminal-delivery phases and immutable session/primary-execution binding. SDK tasks own live status, lane and physical generations; no persisted native execution observation is authoritative here.",
+      "replayRetention": "Preserve operation/source identity, active-operation uniqueness, cancellation, terminal delivery and idempotency receipts. Owned order2 retires only three SDK mirrors, retaining original values in an optional forensic archive without retargeting any inbound FK. No TTL, recovery replay or physical retention authority is created.",
       "references": [
         "runtime/src/service-effects/current-piclaw/service-work-schema.ts",
         "runtime/src/service-effects/current-piclaw/service-work-store.ts"
@@ -1122,7 +1145,8 @@
       "references": [
         "addon:code-review/database.ts",
         "addon:code-review/store.ts",
-        "runtime/durable-engine/src/default-application-runtime.ts"
+        "runtime/durable-engine/src/default-application-runtime.ts",
+        "docs/development/code-review-persistence.md"
       ]
     },
     "core:application-documents": {
@@ -1211,6 +1235,34 @@
         "cdc214fcc06349dc9d315c2d17c866764e4557d5:runtime/src/db/message-authority-schema.ts",
         "runtime/src/db/migration-input-holds.ts",
         "docs/development/historical-account-schema-retirement.md"
+      ]
+    },
+    "archive:chat-cursor-state": {
+      "category": "migration-archive",
+      "initializer": "runtime/src/db/chat-cursor-storage.ts#initializeChatCursorStorage",
+      "writers": [
+        "runtime/src/db/chat-cursor-storage.ts (one owned historical upgrade only)"
+      ],
+      "sourceOfTruth": "Exact original legacy cursor table: rowids, polling position, queued bytes/provenance, preflight/inflight/failed-run and compaction fields. Native dispatch neither reads nor writes its execution markers. Explicit legacy capture may refuse unsettled evidence; it never grants execution.",
+      "replayRetention": "Preserve original rows, schema and migration receipts. No pruning, rollback, restore, live DDL or legacy replay is authorised by this read-only inventory. Fresh roots omit this archive. Historical binary rollback requires a separately owned offline procedure; never recreate execution markers from native task observations.",
+      "references": [
+        "runtime/src/db/chat-cursor-storage.ts",
+        "runtime/src/runtime/bootstrap.ts",
+        "runtime/test/fixtures/legacy-chat-cursors.sql"
+      ]
+    },
+    "archive:s01-harness-observations": {
+      "category": "migration-archive",
+      "initializer": "runtime/src/service-effects/current-piclaw/service-work-schema.ts#installServiceWorkSchema",
+      "writers": [
+        "runtime/src/service-effects/current-piclaw/service-work-schema.ts (one owned historical retirement only)"
+      ],
+      "sourceOfTruth": "Original lane/state/watch values keyed by original operation identity and full-width rowid, copied before retiring the exclusive columns. Host protocol/binding records remain active; this historical snapshot grants no execution, cancellation, maintenance or owner-generation authority.",
+      "replayRetention": "Preserve raw historical observations and migration receipts. No runtime reader/writer, pruning or restore API. This archive is not the complete recovery/rollback unit. Fresh roots create no archive.",
+      "references": [
+        "runtime/src/service-effects/current-piclaw/service-work-schema.ts",
+        "runtime/src/service-effects/current-piclaw/service-work-store.ts",
+        "runtime/durable-engine/src/host-runtime.ts"
       ]
     }
   },
@@ -2369,7 +2421,8 @@
     "table:chat_cursors": {
       "owner": "core:chat_cursors",
       "fingerprints": [
-        "3125449c9efbed908701f37c68fa6027df4529f20db9c5014be6f95b71516352"
+        "3125449c9efbed908701f37c68fa6027df4529f20db9c5014be6f95b71516352",
+        "e8c98fd6860a74cd86adc7b2d27c7d9aed81d77088c98a7225a87aa9af623af7"
       ],
       "requiredIn": [
         "core",
@@ -2765,7 +2818,8 @@
     "table:service_effect_s01_operations": {
       "owner": "core:service_effect_s01_operations",
       "fingerprints": [
-        "a8348c18a290f2a60b965c28fda0159cc3fa58527887b77d1625fdc5e93da9e1"
+        "a8348c18a290f2a60b965c28fda0159cc3fa58527887b77d1625fdc5e93da9e1",
+        "72020fd8c8eabb024a944c6a20973e210a23177a2f470792ca22551477648bc3"
       ],
       "requiredIn": [
         "core",
@@ -4642,9 +4696,61 @@
       ],
       "requiredIn": [],
       "table": "migration_input_holds"
+    },
+    "table:host_legacy_chat_cursor_state_v1": {
+      "owner": "archive:chat-cursor-state",
+      "fingerprints": [
+        "098605a4d9c7a5e6c3d2723e105479a228d8d903f9553e5175f3ee02354069aa",
+        "2f5802f93173d7ef3c394efe712d1fb70f5f72dc397d6bd532b3032ddaf10e5d",
+        "34d3d972d8f57ad76093da1cc3d1dd0df65d37fec73cc650de04336a2d1b00be",
+        "3f681c0df7051a291ef05527a1e20403479f89bf51387b3224695e6eda08ff58",
+        "461fe50ab11c41a802657b24eb6bb349dd2060351801a10ed2ce2e56a69972d6",
+        "50a3d59397908ff7f98024c17e61496c5fa7ab25e93018ab06f0fce1c1318259",
+        "71623c4c614e51d8ae5745d3a09188501845616289f39334c4b67e45969a6976",
+        "750aae040bb0757db3d0c0b6c844684ec7e128b8769504bfc1c7f260655ba060",
+        "83564151400193a416b80d62c32d557e395154fe44cb640d91296b74ee770ffd",
+        "970713dbc396a6b4a0bc1e7a189aec78ce317c035ffbb6e972ae6ce556aebabb",
+        "9c94464f16e2fc5e47e5114abbc86daf597b37740fa33e393d34feda779b5374",
+        "a599f8c2e7c2a670d4e074c5196e66d93278c34baa0caaafc37d0360b646b76b",
+        "b4945abd8cee9f692f680ef342915691e35b2ef4d067c02f5e2704abcdccaf07",
+        "be281afc6464d4f4f9b30815bf4a1836aac1390eff21adcadc7b1e791b82b63b",
+        "d5300ec7f030c41fb4326e78d0d446ff2f6bdf1ba8399ec87e21457252d82c90",
+        "dac993334c0130b5094b212c37c5a2f612d25cba18ac5ec40b73d795eec28513"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "41298dcc3a243b5aee011307b28bcc0e977ab27635f854e4f8f2f346722c9508"
+      ]
+    },
+    "table:service_effect_s01_legacy_harness_v1": {
+      "owner": "archive:s01-harness-observations",
+      "fingerprints": [
+        "0c5acf61ff1fa8d5e3a8ffa21ed37123590570fc969f26136b5fba37be706ab4"
+      ],
+      "requiredIn": [],
+      "requiredWhenOwnerPresent": true,
+      "derivedIndexes": [
+        "64159762982ce5663407e3a742fe21d3a9a5c9ccb7e3843ff75e4038016abd42",
+        "b5f577c2f6e5e9c25eb8d62245559171ccd5bdf44372fc80435d6e5b59287040"
+      ]
     }
   },
   "documents": [
+    {
+      "kind": "app.background-contexts",
+      "owner": "core:background-contexts",
+      "scope": "conversation",
+      "history": "latest",
+      "fork": "initial"
+    },
+    {
+      "kind": "app.background-policy",
+      "owner": "core:background-policy",
+      "scope": "conversation",
+      "history": "latest",
+      "fork": "initial"
+    },
     {
       "kind": "pi.agent",
       "owner": "sdk:storage",

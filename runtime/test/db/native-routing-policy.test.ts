@@ -11,6 +11,8 @@ import { ensureBudgetWork } from "../../src/db/budget-limits.js";
 import { reserveBudgetRequest, abandonBudgetRequest } from "../../src/db/budget-request-reservations.js";
 import { requireLegacyRoutingMutation, registerNativeBranchControlGuard } from "../../src/db/native-routing-policy.js";
 import { ChatAccessDenied } from "../../src/db/session-ownership.js";
+import { AgentPool } from "../../src/agent-pool.js";
+import { createAgentPoolModelOptions } from "../model-services-fixture.js";
 beforeEach(() => initDatabase()); afterEach(() => closeDatabase());
 const chat = "web:routing", at = "2026-10-25T00:00:00.000Z";
 function fixture(native = true, liveOwner = true) {
@@ -49,6 +51,34 @@ test("native routing policy: archive requires the live native control owner", ()
   restoreChatBranchIdentity({ chat_jid: chat }); second();
   expect(() => archiveChatBranch(chat)).toThrow("Native routing owner unavailable");
 });
+test("native root metadata requires a live owner and rolls back failed registration", async () => {
+  fixture(true, false);
+  const db = getDb(), pool = new AgentPool({ ...createAgentPoolModelOptions(), getDurableSession: () => undefined });
+  const snapshot = () => [db.query("SELECT * FROM chats").all(), db.query("SELECT * FROM chat_branches").all()];
+  const before = snapshot();
+  try {
+    await expect(pool.createRootChatSession("new-native")).rejects.toThrow("Native routing owner unavailable");
+    expect(snapshot()).toEqual(before);
+    const denied = registerNativeBranchControlGuard(db, chats => {
+      expect(db.inTransaction).toBe(true); expect(chats).toEqual([]); throw Error("Native owner revoked");
+    });
+    await expect(pool.createRootChatSession("new-native")).rejects.toThrow("Native owner revoked");
+    expect(snapshot()).toEqual(before); denied();
+    const release = registerNativeBranchControlGuard(db, () => undefined);
+    try {
+      db.exec("CREATE TRIGGER refuse_new_root BEFORE INSERT ON chat_branches WHEN new.chat_jid='web:new-native' BEGIN SELECT RAISE(ABORT,'root registration refused'); END");
+      await expect(pool.createRootChatSession("new-native")).rejects.toThrow("root registration refused");
+      expect(snapshot()).toEqual(before); db.exec("DROP TRIGGER refuse_new_root");
+      const created = await pool.createRootChatSession("new-native");
+      expect(created).toMatchObject({ chat_jid: "web:new-native", root_chat_jid: "web:new-native", parent_branch_id: null });
+      expect(db.query("SELECT count(*) AS n FROM conversations").get()).toEqual({ n: 2 });
+    } finally { release(); }
+    const after = snapshot();
+    await expect(pool.createRootChatSession("closed-owner-root")).rejects.toThrow("Native routing owner unavailable");
+    expect(snapshot()).toEqual(after);
+  } finally { await pool.shutdown(); }
+});
+
 test("native routing policy: metadata registration cannot undo archive", () => {
   const branch = fixture(); archiveChatBranch(chat);
   storeChatMetadata(chat, "2026-10-25T00:01:00.000Z");
@@ -138,7 +168,7 @@ test("native routing policy: legacy Dream cleanup cannot erase native metadata o
   const history = db.query("SELECT * FROM messages WHERE chat_jid=?").all(ghost);
   const dream = await import("../../src/dream.js"); let disposals = 0;
   await dream.runDreamAgentTurn({ chatJid: "web:default", mode: "manual", days: 1, agentPool: {
-    runAgent: async () => ({ status: "success", result: "fixture" }), disposeChatSession: async () => { disposals++; },
+    isDurableRuntime:()=>true,dispatchDreamOperation: async () => ({ status: "success", result: "fixture" }), disposeChatSession: async () => { disposals++; },
   } as any });
   expect(getChatBranchByChatJid(ghost)).toEqual(branch);
   expect(db.query("SELECT * FROM messages WHERE chat_jid=?").all(ghost)).toEqual(history);

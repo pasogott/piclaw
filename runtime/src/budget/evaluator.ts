@@ -102,6 +102,8 @@ function providerBlocker(cap: BudgetCap, evidence: BudgetProviderEvidence | unde
 
 export function evaluateBudget(input: {
   workId: string;
+  /** Effect-boundary checks must not materialise calendar-window records. */
+  readOnly?:boolean;
   now?: Date;
   providerEvidence?: BudgetProviderEvidence[];
   providerId?: string;
@@ -119,7 +121,7 @@ export function evaluateBudget(input: {
   // subtree, never a fresh per-child allowance or another scheduled run's spend.
   const scheduledRoot = ancestors.map(id => getBudgetWork(id, database)).find(ancestor => ancestor?.scheduled_task_id);
   return evaluateWork(input, { ...work, scheduled_task_id: scheduledRoot?.scheduled_task_id ?? work.scheduled_task_id,
-    scheduledBudgetWorkId: scheduledRoot?.id ?? work.id }, ancestors, descendants, database, false);
+    scheduledBudgetWorkId: scheduledRoot?.id ?? work.id }, ancestors, descendants, database, input.readOnly===true);
 }
 
 /** Advisory check for a fresh scheduled run; never creates work, windows or allowances. */

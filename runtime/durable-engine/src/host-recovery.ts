@@ -19,7 +19,7 @@ import type { createHostDurableBindings } from "./host-bindings.js";
 export async function reconstituteAcceptedWork(options: {
   incarnation: string;
   binding: Readonly<{ chatJid: string; branchId: string; conversationId: ConversationId }>;
-  runningBinding: Readonly<{ sessionId: string; lane: string; watchGeneration: number }>;
+  runningBinding: Readonly<{ sessionId: string }>;
   assertOwner(): void;
   work: Pick<CurrentPiclawServiceWorkStore, "listOpenOperations" | "getOperation" | "getSourceBySeq" | "getQueuedInputIntent">;
   bindings: Omit<ReturnType<typeof createHostDurableBindings>, "resolveConversation"> & Partial<Pick<ReturnType<typeof createHostDurableBindings>, "resolveConversation">>;
@@ -52,8 +52,7 @@ export async function reconstituteAcceptedWork(options: {
         (operation.cancellation && !operation.claimedSourceSeqs.includes(operation.cancellation.sourceSeq)) ||
         new Set(operation.claimedSourceSeqs).size !== operation.claimedSourceSeqs.length) return deny();
       const h = operation.harness;
-      if (h && (h.sessionId !== running.sessionId || h.lane !== running.lane ||
-        h.watchGeneration !== running.watchGeneration || !h.harnessOperationId)) return deny();
+      if (h && (h.sessionId !== running.sessionId || !h.harnessOperationId)) return deny();
       for (const seq of operation.claimedSourceSeqs) {
         const source = sourceFor(scope.chatJid, seq); assert();
         if (seq === operation.cancellation?.sourceSeq) {

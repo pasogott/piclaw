@@ -1,3 +1,5 @@
+import { admitSqliteWrite } from "../../../db/sqlite-async-admission.js";
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 /**
  * web/handlers/agent.ts – HTTP handlers for agent-related API endpoints.
  *
@@ -11,34 +13,18 @@
 import { acceptQueuedInputSource } from "../runtime/queued-followup-lifecycle-service.js";
 import { settledAbortStatus } from "../agent/agent-abort-status.js";
 import { getAddonLocalDispatchBlock } from "../../../addons/local-dispatch.js";
-import { withVerifiedAddonMessage } from "../../../addons/local-context.js";
+
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { isSingleUserAccess } from "../../../core/config-access.js";
-import { withExecutionIdentity, type ExecutionIdentity } from "../../../core/execution-context.js";
-import { withChatContext } from "../../../core/chat-context.js";
-import { ChatAccessDenied } from "../../../db/session-ownership.js";
+
 import {
   getIdentityConfig,
   getRoutingConfig,
 } from "../../../core/config.js";
-import { parseControlCommand, type AgentControlResult } from "../../../agent-control/index.js";
+import { parseControlCommand, isSlashCommandInvocation } from "../../../agent-control/agent-control-parser.js";
+import type { AgentControlResult } from "../../../agent-control/agent-control-types.js";
 import { publicContextUsage } from "../context-usage.js";
-import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
-import {
-  RECOVERY_CONTINUATION_PROMPT,
-  TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
-} from "../../../agent-pool/context-pressure-retry.js";
-import {
-  PROTECTED_RECOVERY_CONTROL_LABEL,
-  buildProtectedRecoveryControlIntentBlock,
-  resolveProtectedRecoveryControlIntent,
-} from "../../../agent-pool/protected-recovery-control-intent.js";
-import {
-  MAX_PROTECTED_RECOVERY_HANDOFF_DEPTH,
-  PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE,
-  isPostCompactionProtectedRecoveryHandoff,
-} from "../../../agent-pool/protected-recovery-handoff.js";
-import { getExtensionKvStore } from "../../../extension-kv-registry.js";
+
 import {
   normalizeAgentMessagePayload,
   parseAgentMessageRequest,
@@ -46,85 +32,22 @@ import {
 } from "../messaging/agent-message-service.js";
 import { handleUiThemeCommand } from "../theming/ui-theme-commands.js";
 import { handleUiMetersCommand } from "../ui-meters-commands.js";
-import { getServerUiMetersConfig, setServerUiMetersConfig, setServerUiThemeConfig } from "../ui-state.js";
-import {
-  getChatCursor,
-  getMessagesSince,
-  getFailedRun,
-  getInflightMessageId,
-  getMessageRowIdById,
-  getDb,
-  rollbackChatRunWithError,
-  rollbackInflightRun,
-  setChatCursor,
-} from "../../../db.js";
-import { detectChannel, formatMessages, formatOutbound } from "../../../router.js";
+import { getServerUiMetersConfig, admitServerUiMetersConfig, admitServerUiThemeConfig } from "../ui-state.js";
+import { getChatCursor, getMessageRowIdById, getDb, setChatCursor } from "../../../db.js";
+import { formatOutbound } from "../../../router.js";
 import { isSqliteContention } from '../../../db/sqlite-async-admission.js';
 import { bindInputRequestAuthority, readInputRequestAuthority, releaseInputRequestAuthority, captureInputTarget, type ValidateInputAuthority } from '../messaging/input-request-authority.js';
 import { createAgentProfileBuilder } from "../agent/agent-utils.js";
 import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./general-settings.js";
 import { resolveAvatarUrl } from "../media/avatar-service.js";
-import { broadcastInteractionUpdated } from "../cards/interaction-service.js";
-import { storeAgentTurn } from "../messaging/agent-message-store.js";
-import { finalizeSuccessfulProcessChatRun, persistIntermediateProcessChatTurn } from "../runtime/process-chat-finalization-runtime.js";
-import { createProcessChatStreamingRuntime } from "../runtime/process-chat-streaming-runtime.js";
-import { getMessageByRowId, promoteCompletedAgentReply } from "../../../db/messages.js";
-import { runProcessChatPreflight } from "../runtime/process-chat-preflight-runtime.js";
-import {
-  MODEL_COMMAND_TYPES,
-  executeDeferredControlCommand,
-  isDeferredControlCommand,
-  materializeDeferredFollowups,
-  resolveAndBroadcastModelStateForCommand,
-  resumeFailedRunAfterModelSwitch,
-  selectProcessChatMessage,
-} from "../runtime/process-chat-control-runtime.js";
-import { resolveThreadId, resolveThreadRootId } from "../runtime/threading.js";
-import { resolveToolStatusHints } from "../../../tool-status-hints.js";
-import "../../../extensions/local-core-tool-status-hints.js";
-import "../../../extensions/generic-tool-status-hints.js";
+
+import { MODEL_COMMAND_TYPES, executeDeferredControlCommand, isDeferredControlCommand, materializeDeferredFollowups, resolveAndBroadcastModelStateForCommand, selectProcessChatMessage } from "../runtime/process-chat-control-runtime.js";
+import { resolveThreadId } from "../runtime/threading.js";
+
 import { createUuid } from "../../../utils/ids.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
-import type { AttachmentInfo } from "../../../agent-pool/attachments.js";
-import type { AgentFailureCategory, TurnOutput } from "../../../agent-pool/contracts.js";
-import {
-  buildProtectedRecoveryHandoffMetadata,
-  formatProtectedRecoveryHandoff,
-  protectedRecoveryHandoffContentBlockFields,
-  type ProtectedRecoveryHandoffMetadata,
-} from "../../../agent-pool/protected-recovery-handoff-reason.js";
-import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
-import { cancelScheduledIdleAutoCompaction } from "../../../agent-pool/compaction.js";
-import { DEFAULT_BASE_RETRY_MS, getRetryAtIso } from "../../../queue/retry-policy.js";
-import { formatProviderError, sanitizeProviderErrorDetail } from "./provider-error-format.js";
-import { endTrackedPhase } from "../../../runtime/progress-watchdog.js";
 
 const log = createLogger("web.handlers.agent");
-const TOOL_BUDGET_CONTINUATION_EXTENSION_ID = "piclaw.tool-budget-continuation";
-
-function reserveContinuation(extensionId: string, chatJid: string, threadKey: string): boolean {
-  const kv = getExtensionKvStore();
-  const key = `continued:${threadKey}`;
-  if (kv.get(extensionId, key, "chat", chatJid)) return false;
-  kv.set(extensionId, key, {
-    count: 1,
-    createdAt: new Date().toISOString(),
-  }, "chat", chatJid);
-  return true;
-}
-
-function releaseContinuation(extensionId: string, chatJid: string, threadKey: string): void {
-  getExtensionKvStore().delete(extensionId, `continued:${threadKey}`, "chat", chatJid);
-}
-
-function reserveToolBudgetContinuation(chatJid: string, threadKey: string): boolean {
-  return reserveContinuation(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, chatJid, threadKey);
-}
-
-function releaseToolBudgetContinuation(chatJid: string, threadKey: string): void {
-  releaseContinuation(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, chatJid, threadKey);
-}
-
 export type BrowserObservabilityContext = {
   userId?: string;
   sessionId?: string;
@@ -155,346 +78,6 @@ function getBrowserObservabilityContext(req: Request): BrowserObservabilityConte
     ...(userId ? { userId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(clientId ? { clientId } : {}),
-  };
-}
-
-function enqueueProcessChatAfterCompaction(
-  channel: WebChannelLike,
-  chatJid: string,
-  agentId: string,
-  messageId: string,
-  threadRootId: number | undefined,
-  browserObservability: BrowserObservabilityContext | undefined,
-): void {
-  channel.queue.enqueue(async () => {
-    await processChat(channel, chatJid, agentId, threadRootId, browserObservability);
-  }, `compaction-resume:${chatJid}:${messageId}`, `chat:${chatJid}`);
-}
-
-function describeNetworkError(errorText: string): string {
-  if (/ENOTFOUND|getaddrinfo|dns/i.test(errorText)) {
-    const hostMatch = errorText.match(/ENOTFOUND\s+(\S+)|getaddrinfo.*?\s+(\S+?)(?:\s|$|:)/i);
-    const host = hostMatch?.[1] || hostMatch?.[2] || '';
-    return host ? `DNS lookup failed for ${host}` : 'DNS lookup failed — provider hostname not reachable';
-  }
-  if (/ECONNREFUSED|connection.*refused/i.test(errorText)) {
-    return 'Connection refused — provider API endpoint is down or blocked';
-  }
-  if (/ETIMEDOUT|timed? out|timeout/i.test(errorText)) {
-    return 'Connection timed out — provider API did not respond';
-  }
-  if (/ECONNRESET|connection.*(?:reset|ended|closed)|websocket.*(?:closed|ended|1006)|socket hang up/i.test(errorText)) {
-    return 'Connection closed — provider closed the connection unexpectedly';
-  }
-  if (/fetch failed/i.test(errorText)) {
-    return 'Network request failed — check provider URL and connectivity';
-  }
-  return 'Network error — check provider connectivity';
-}
-
-type TurnOutcomeSeverity = "warning" | "error" | "critical" | "info";
-
-function buildTurnOutcomeMarker(options: {
-  kind: string;
-  label: string;
-  title: string;
-  detail?: string;
-  severity?: TurnOutcomeSeverity;
-  draftRecovered?: boolean;
-  attemptsUsed?: number;
-  classifier?: string | null;
-  failureCategory?: AgentFailureCategory;
-  toolBudgetExceeded?: boolean;
-  toolStepsUsed?: number;
-  toolStepsBudget?: number;
-  nextAction?: string;
-  abortCause?: string;
-  abortOperation?: string;
-  protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
-}): Record<string, unknown> {
-  return {
-    type: "turn_outcome_marker",
-    kind: options.kind,
-    label: options.label,
-    title: options.title,
-    detail: options.detail,
-    severity: options.severity ?? "warning",
-    draft_recovered: Boolean(options.draftRecovered),
-    attempts_used: Number.isFinite(options.attemptsUsed) ? options.attemptsUsed : undefined,
-    classifier: options.classifier ?? null,
-    failure_category: options.failureCategory,
-    tool_budget_exceeded: options.toolBudgetExceeded ? true : undefined,
-    tool_steps_used: Number.isFinite(options.toolStepsUsed) ? options.toolStepsUsed : undefined,
-    tool_steps_budget: Number.isFinite(options.toolStepsBudget) ? options.toolStepsBudget : undefined,
-    next_action: readTrimmedString(options.nextAction) || undefined,
-    abort_cause: readTrimmedString(options.abortCause) || undefined,
-    abort_operation: readTrimmedString(options.abortOperation) || undefined,
-    ...(options.protectedRecoveryHandoff
-      ? protectedRecoveryHandoffContentBlockFields(options.protectedRecoveryHandoff)
-      : {}),
-  };
-}
-
-function buildErrorOutcomeMarker(
-  errorText: string,
-  options: {
-    failureCategory?: AgentFailureCategory;
-    draftRecovered?: boolean;
-    attemptsUsed?: number;
-    classifier?: string | null;
-    severity?: TurnOutcomeSeverity;
-    toolBudgetExceeded?: boolean;
-    toolStepsUsed?: number;
-    toolStepsBudget?: number;
-    nextAction?: string;
-    abortCause?: string;
-    abortOperation?: string;
-    protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
-  } = {},
-): Record<string, unknown> {
-  const category = options.failureCategory ?? "unknown";
-  const displayErrorText = sanitizeProviderErrorDetail(errorText) || "Agent error";
-  const detail = displayErrorText.slice(0, 500);
-  const providerError = formatProviderError(displayErrorText);
-  if (options.protectedRecoveryHandoff) {
-    const presentation = formatProtectedRecoveryHandoff(options.protectedRecoveryHandoff);
-    return buildTurnOutcomeMarker({
-      kind: "recovery",
-      label: presentation.label,
-      title: presentation.title,
-      detail: presentation.detail,
-      severity: options.severity ?? "warning",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
-      failureCategory: category,
-      nextAction: presentation.nextAction,
-      protectedRecoveryHandoff: options.protectedRecoveryHandoff,
-    });
-  }
-  const common = {
-    detail,
-    draftRecovered: options.draftRecovered,
-    attemptsUsed: options.attemptsUsed,
-    classifier: options.classifier,
-    failureCategory: category,
-  };
-
-  if (category === "tool_budget" || options.toolBudgetExceeded) {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "tool_budget",
-      label: "tool budget",
-      title: "Tool-use budget exceeded",
-      severity: "warning",
-      toolBudgetExceeded: true,
-      toolStepsUsed: options.toolStepsUsed,
-      toolStepsBudget: options.toolStepsBudget,
-      nextAction: options.nextAction || "Ask me to continue; I will resume from the latest known partial state instead of replaying the whole turn.",
-      abortCause: options.abortCause,
-      abortOperation: options.abortOperation,
-    });
-  }
-
-  if (category === "rate_limit") {
-    return buildTurnOutcomeMarker({ ...common, kind: "provider", label: "rate limit", title: "Provider retry budget exhausted", severity: "warning" });
-  }
-  if (category === "credential_storage") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "error",
-      label: "credentials",
-      title: "Credentials could not be read/resolved; local storage/configuration needs attention",
-      detail: "Credentials could not be read/resolved; local storage/configuration needs attention",
-      severity: options.severity ?? "error",
-    });
-  }
-  if (category === "auth_config") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "provider",
-      label: "provider",
-      title: "Provider authentication/configuration required",
-      detail: `${detail} — Sign in with /login or configure provider credentials, then retry.`,
-      severity: options.severity ?? "error",
-    });
-  }
-  if (category === "network") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "network",
-      label: providerError?.label ?? "network",
-      title: providerError?.title ?? describeNetworkError(displayErrorText),
-      detail: providerError?.detail ?? detail,
-      severity: options.severity ?? providerError?.severity ?? "error",
-    });
-  }
-  if (category === "aborted") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "abort",
-      label: "aborted",
-      title: "Turn aborted",
-      severity: options.severity ?? "warning",
-      abortCause: options.abortCause,
-      abortOperation: options.abortOperation,
-    });
-  }
-  if (category === "context_pressure") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "context",
-      label: "context",
-      title: "Context limit reached",
-      detail: options.abortCause === "context_pressure"
-        ? "Piclaw paused this turn at its context threshold. Automatic continuation did not complete; the session is preserved."
-        : detail,
-      severity: options.severity ?? "warning",
-      nextAction: options.nextAction || "Ask me to continue from the saved state; if context pressure persists, run /compact first.",
-      abortCause: options.abortCause,
-      abortOperation: options.abortOperation,
-    });
-  }
-  if (category === "session_corruption") {
-    return buildTurnOutcomeMarker({
-      ...common,
-      kind: "context",
-      label: providerError?.label ?? "context",
-      title: providerError?.title ?? "Session context needs repair",
-      detail: providerError?.detail ?? detail,
-      severity: providerError?.severity ?? options.severity ?? "error",
-    });
-  }
-  if (category === "timeout") {
-    return buildTurnOutcomeMarker({ ...common, kind: "timeout", label: "timeout", title: "Timed out", severity: options.severity ?? "warning" });
-  }
-  if (category === "output_limit") {
-    return buildTurnOutcomeMarker({ ...common, kind: "provider", label: "output limit", title: "Provider output limit reached", severity: options.severity ?? "warning" });
-  }
-  if (category === "no_terminal_output") {
-    return buildTurnOutcomeMarker({ ...common, kind: "blank_final", label: "no reply", title: "No final reply produced", severity: options.severity ?? "warning" });
-  }
-  if (category === "stalled_work") {
-    return buildTurnOutcomeMarker({ ...common, kind: "timeout", label: "stalled work", title: "Stalled work interrupted", severity: options.severity ?? "warning" });
-  }
-
-  // Provider-specific extraction is presentation-only: it may improve wording,
-  // but cannot alter persistence, retry, continuation, or success authority.
-  return buildTurnOutcomeMarker({
-    ...common,
-    kind: category === "provider" || category === "provider_unavailable" ? "provider" : "error",
-    label: providerError?.label ?? (category === "provider" ? "provider" : "error"),
-    title: providerError?.title ?? "Turn failed",
-    detail: providerError?.detail ?? detail,
-    severity: providerError?.severity ?? options.severity ?? "warning",
-  });
-}
-
-interface FailureActionSummary {
-  summary: string;
-  title?: string;
-  toolName?: string;
-  statusText?: string;
-}
-
-function readTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function summarizeFailureActionFromStatus(status: Record<string, unknown> | null | undefined): FailureActionSummary | null {
-  if (!status || typeof status !== "object") return null;
-
-  const type = readTrimmedString(status.type);
-  const title = readTrimmedString(status.title);
-  const detail = readTrimmedString(status.detail);
-  const toolName = readTrimmedString(status.tool_name ?? status.toolName);
-  const statusText = readTrimmedString(status.status ?? status.tool_status ?? status.toolStatus);
-
-  if (type === "thinking" && !toolName) return null;
-
-  let summary = "";
-  if ((type === "tool_call" || type === "tool_status") && (title || toolName)) {
-    const statusSuffix = statusText && !/^(working\.\.\.|done)$/i.test(statusText) ? statusText : "";
-    summary = [title || toolName, statusSuffix].filter(Boolean).join(" — ");
-  } else if (type === "intent") {
-    summary = [title, detail].filter(Boolean).join(" — ");
-  } else if (title) {
-    summary = [title, detail].filter(Boolean).join(" — ");
-  }
-
-  if (!summary) return null;
-  return {
-    summary,
-    title: title || undefined,
-    toolName: toolName || undefined,
-    statusText: statusText || undefined,
-  };
-}
-
-function withFailureActionMetadata(
-  marker: Record<string, unknown> | null,
-  action: FailureActionSummary | null,
-): Record<string, unknown> | null {
-  if (!marker || !action?.summary) return marker;
-  return {
-    ...marker,
-    tool_action_summary: action.summary,
-    tool_title: action.title,
-    tool_name: action.toolName,
-    tool_status: action.statusText,
-  };
-}
-
-function buildFailureVisibleText(options: {
-  draftText?: string;
-  title?: string;
-  detail?: string;
-  actionSummary?: string;
-  attemptsUsed?: number;
-  classifier?: string;
-  nextAction?: string;
-  inlineDiagnostic?: boolean;
-  showDiagnosticWithoutDraft?: boolean;
-}): string {
-  const draftText = readTrimmedString(options.draftText);
-  const title = readTrimmedString(options.title) || "Turn failed";
-  const detail = readTrimmedString(options.detail);
-  const actionSummary = readTrimmedString(options.actionSummary);
-  const nextAction = readTrimmedString(options.nextAction) || null;
-  const diagnostic = [
-    `⚠️ ${title}`,
-    actionSummary || null,
-    detail && !actionSummary.includes(detail) ? detail : null,
-    nextAction,
-  ].filter(Boolean).join("\n");
-  if (draftText && options.inlineDiagnostic) {
-    return diagnostic ? `${draftText}\n\n${diagnostic}` : draftText;
-  }
-  // Diagnostic info is usually carried in the outcome marker content block and
-  // rendered by the client as a collapsible pill. Keep ordinary recovered drafts
-  // concise, but make recovery-budget timeout failures readable without a draft.
-  if (draftText) return draftText;
-  return options.showDiagnosticWithoutDraft ? diagnostic : "";
-}
-
-function buildRetryStatusPayload(base: {
-  threadId: string | number | null;
-  agentId: string;
-  turnId: string;
-  title: string;
-  detail?: string;
-}): Record<string, unknown> {
-  const startedAt = new Date().toISOString();
-  return {
-    thread_id: base.threadId,
-    agent_id: base.agentId,
-    type: "intent",
-    title: base.title,
-    ...(base.detail ? { detail: base.detail } : {}),
-    turn_id: base.turnId,
-    started_at: startedAt,
-    retry_at: getRetryAtIso(1, DEFAULT_BASE_RETRY_MS, Date.parse(startedAt)),
-    retry_delay_ms: DEFAULT_BASE_RETRY_MS,
   };
 }
 
@@ -568,44 +151,11 @@ function withAgentStatusProgressMetadata(
   };
 }
 
-export function withResolvedToolStatusHints(chatJid: string, payload: Record<string, unknown>): Record<string, unknown> {
-  const isToolStatus = payload?.type === "tool_call" || payload?.type === "tool_status";
-  const toolName = typeof payload?.tool_name === "string" ? payload.tool_name.trim() : "";
-  if (!isToolStatus || !toolName) return payload;
-
-  const existingHints = Array.isArray(payload?.status_hints)
-    ? payload.status_hints
-    : (Array.isArray(payload?.statusHints) ? payload.statusHints : []);
-  if (existingHints.length > 0) return payload;
-
-  const statusHints = resolveToolStatusHints({
-    chatJid,
-    toolName,
-    args: payload?.tool_args,
-    payload,
-  });
-  if (statusHints.length === 0) return payload;
-  return { ...payload, status_hints: statusHints };
-}
-
 export function stripMarkdownCodeFenceMarkers(value: string): string {
   return value
     .replace(/^```[a-zA-Z0-9_-]*\s*\n?/, "")
     .replace(/\n?```\s*$/, "")
     .trim();
-}
-
-export function buildRecoveryMarkerBlocks(recovery: { attemptsUsed?: number; lastClassifier?: string | null } | null | undefined): Array<Record<string, unknown>> | undefined {
-  if (!recovery?.attemptsUsed) return undefined;
-  return [{
-    type: "recovery_marker",
-    recovered: true,
-    attempts_used: recovery.attemptsUsed,
-    classifier: recovery.lastClassifier ?? null,
-    label: recovery.attemptsUsed === 1
-      ? "Recovered automatically"
-      : `Recovered after ${recovery.attemptsUsed} attempts`,
-  }];
 }
 
 export function summarizeCommandStatusTitle(message: unknown, fallback = "Command failed"): string {
@@ -636,22 +186,8 @@ function fallbackAgentHandle(chatJid: string): string {
 // Only in-process forwarding can share the original guarded request authority.
 // No request body/header can supply or replace this capability.
 function captureInputAuthority(channel: WebChannelLike, req: Request): () => void {
-  const gateway = channel.authGateway;
-  const authEnabled = gateway?.isAuthEnabled?.() === true;
-  const principal = gateway?.getPrincipal?.(req, true) ?? null;
-  const key = (value: typeof principal) => JSON.stringify(value && [value.kind, value.userId, value.mode, value.role, value.authentication]);
-  const principalKey = key(principal);
-  const internal = !principal && gateway?.isInternalSecretEnabled?.() === true && gateway.verifyInternalSecret(req);
-  if (authEnabled && !principal && !internal) throw Error('Incoming request has no verified authority.');
-  return () => {
-    req.signal.throwIfAborted();
-    if (!isSingleUserAccess() || (gateway?.isAuthEnabled?.() === true) !== authEnabled) throw Error('Incoming request authority changed.');
-    if (internal) {
-      if (!gateway.isInternalSecretEnabled() || !gateway.verifyInternalSecret(req)) throw Error('Internal request authority changed.');
-    } else if (key(gateway?.getPrincipal?.(req, true) ?? null) !== principalKey) {
-      throw Error('Incoming request principal changed.');
-    }
-  };
+  const check = captureWebRequestAuthority(channel.authGateway, req);
+  return () => { if (!isSingleUserAccess()) throw Error("Incoming request authority changed."); check(); };
 }
 
 /**
@@ -822,7 +358,6 @@ async function handleAgentMessageInScope(
   let nativeSteering: ReturnType<NonNullable<WebChannelLike["getAcceptedQueuedSteering"]>>;
   try { nativeSteering = selectSteering?.(chatJid, revalidateInputAuthority); }
   catch { return channel.json({ error: "Native steering authority is unavailable." }, 503); }
-  cancelScheduledIdleAutoCompaction(chatJid);
   const isStreaming = Boolean(nativeSteering) || (typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false);
@@ -844,7 +379,11 @@ async function handleAgentMessageInScope(
     const targetName = mentionTarget.agent_name;
     const validateTarget = captureInputTarget(targetJid);
     const sourceContent = typeof normalized.content === 'string' ? normalized.content : content;
-    const sourceOptions = { contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint };
+    const sourceOptions = { contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
+      // The source is consumed by this forwarding handoff. Its cursor belongs
+      // to the same commit, before publication can cancel/revoke the request.
+      acceptSource: ({ message }: { message: { timestamp: string } }) => setChatCursor(chatJid, message.timestamp),
+    };
     let sourceInteraction: ReturnType<typeof storeAgentUserMessage>;
     try {
       // Mentions commit the source before forwarding, but creation and its
@@ -859,8 +398,9 @@ async function handleAgentMessageInScope(
     }
     if (!sourceInteraction) return channel.json({ error: "Failed to store message" }, 500);
 
+    // Synchronous legacy-only channels retain their old storage contract.
+    if (!channel.admitUserMessage) setChatCursor(chatJid, sourceInteraction.timestamp);
     channel.broadcastEvent("new_post", sourceInteraction);
-    setChatCursor(chatJid, sourceInteraction.timestamp);
 
     const sourceAgentName = typeof (channel.agentPool as { getAgentHandleForChat?: (chatJid: string) => string }).getAgentHandleForChat === "function"
       ? (channel.agentPool as { getAgentHandleForChat: (chatJid: string) => string }).getAgentHandleForChat(chatJid)
@@ -1018,7 +558,7 @@ async function handleAgentMessageInScope(
 
   if (themeCommand) {
     if (themeCommand.payload) {
-      const uiTheme = setServerUiThemeConfig({ theme: themeCommand.payload.theme, tint: themeCommand.payload.tint ?? null });
+      const uiTheme = await admitServerUiThemeConfig({ theme: themeCommand.payload.theme, tint: themeCommand.payload.tint ?? null }, revalidateInputAuthority, req.signal);
       channel.broadcastEvent("ui_theme", { ...uiTheme });
     }
 
@@ -1048,11 +588,11 @@ async function handleAgentMessageInScope(
   if (metersCommand) {
     if (metersCommand.payload) {
       const currentMeters = getServerUiMetersConfig();
-      const nextMeters = metersCommand.payload.mode === "toggle"
-        ? setServerUiMetersConfig({ enabled: !currentMeters.enabled })
+      const nextMeters = await (metersCommand.payload.mode === "toggle"
+        ? admitServerUiMetersConfig({ enabled: !currentMeters.enabled }, revalidateInputAuthority, req.signal)
         : metersCommand.payload.mode === "set"
-          ? setServerUiMetersConfig({ enabled: metersCommand.payload.enabled })
-          : setServerUiMetersConfig({ collapsed: metersCommand.payload.collapsed });
+          ? admitServerUiMetersConfig({ enabled: metersCommand.payload.enabled }, revalidateInputAuthority, req.signal)
+          : admitServerUiMetersConfig({ collapsed: metersCommand.payload.collapsed }, revalidateInputAuthority, req.signal));
       channel.broadcastEvent("ui_meters", { chat_jid: chatJid, mode: "set", ...nextMeters });
     }
 
@@ -1121,9 +661,6 @@ async function handleAgentMessageInScope(
     let modelState: { model: string | null; thinkingLevel: string | null; thinkingLevelLabel: string | null; supportsThinking: boolean | undefined } | null = null;
     if (result.status === "success") {
       modelState = await resolveAndBroadcastModelStateForCommand(channel, chatJid, result);
-      if (command.type === "model" || command.type === "thinking" || command.type === "cycle_model" || command.type === "cycle_thinking") {
-        resumeFailedRunAfterModelSwitch(channel, chatJid, command);
-      }
     }
 
     // Bare /model (list) or bare /thinking (query) — write output to the timeline
@@ -1536,12 +1073,6 @@ async function handleAgentMessageInScope(
       });
     }
 
-    if (result.status === "success" && (command.type === "model" || command.type === "cycle_model")) {
-      if (channel.retryFailedOnModelSwitch(chatJid)) {
-        channel.resumeChat(chatJid);
-      }
-    }
-
     emitCommandStatus({
       thread_id: interaction.timestamp,
       agent_id: agentId,
@@ -1662,17 +1193,6 @@ export async function processChat(
   threadRootId?: number,
   browserObservability?: BrowserObservabilityContext,
 ): Promise<void> {
-  return processAuthorisedChat(channel, chatJid, agentId, threadRootId, browserObservability);
-}
-
-async function processAuthorisedChat(
-  channel: WebChannelLike,
-  chatJid: string,
-  agentId: string,
-  threadRootId?: number,
-  browserObservability?: BrowserObservabilityContext,
-  identity?: ExecutionIdentity,
-): Promise<void> {
   const prevCursor = getChatCursor(chatJid);
   const selection = selectProcessChatMessage({
     chatJid,
@@ -1692,28 +1212,6 @@ async function processAuthorisedChat(
       chatJid,
       agentId,
     });
-    return;
-  }
-
-  if (selection.kind === "stale_failed_run_cleared") {
-    log.info("processChat clearing stale failed-run marker without replay", {
-      operation: "process_chat.clear_failed_run_without_replay",
-      chatJid,
-      cursor: prevCursor,
-      failedPrevTs: selection.failedRun.prevTs,
-      failedTs: selection.failedRun.failedTs,
-      failedMessageId: selection.failedRun.messageId,
-      pendingMessageCount: selection.pendingMessages.length,
-    });
-    if (selection.shouldResume) {
-      channel.resumeChat(chatJid);
-    } else {
-      await materializeDeferredFollowups({
-        channel,
-        chatJid,
-        agentId,
-      });
-    }
     return;
   }
 
@@ -1737,39 +1235,94 @@ async function processAuthorisedChat(
   });
 
   const coordinator = channel.dispatchAcceptedInput;
+  if (coordinator !== undefined && typeof coordinator !== "function") {
+    throw new Error("Accepted dispatch coordinator must be callable");
+  }
   const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
     rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
-  const waitForPending = coordinator?.waitForPending.bind(coordinator);
-  let acceptedDispatch: (() => Promise<"settled" | "pending">) | undefined;
+  const waitForPendingRaw = coordinator?.waitForPending;
+  if (waitForPendingRaw !== undefined && typeof waitForPendingRaw !== "function") {
+    throw new Error("Accepted pending observer must be callable");
+  }
+  const waitForPending = typeof waitForPendingRaw === "function"
+    ? waitForPendingRaw.bind(coordinator)
+    : undefined;
+  let acceptedDispatchRaw: unknown;
   try {
-    acceptedDispatch = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
+    acceptedDispatchRaw = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
   } catch {
     // A fenced or unreadable persisted selection is not evidence of legacy ownership.
-    acceptedDispatch = async () => "pending";
+    acceptedDispatchRaw = async () => "pending";
   }
+  if (acceptedDispatchRaw !== undefined && typeof acceptedDispatchRaw !== "function") {
+    throw new Error("Accepted dispatch must be callable");
+  }
+  const acceptedDispatch = acceptedDispatchRaw as (() => Promise<"settled" | "pending">) | undefined;
   if (acceptedDispatch) {
     const { setChatCursor } = await import("../../../db/chat-cursors.js");
+    if (channel.updateAgentStatus !== undefined && typeof channel.updateAgentStatus !== "function") {
+      throw new Error("Native status updater must be callable");
+    }
+    if (typeof channel.broadcastEvent !== "function") {
+      throw new Error("Native status broadcaster must be callable");
+    }
+    if (typeof channel.resumeChat !== "function") {
+      throw new Error("Native resume hook must be callable");
+    }
     const startedAt = new Date().toISOString();
     const nativeStatus = (type: "intent" | "done") => {
       const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,
         type: type === "intent" ? "thinking" : type, kind: "info", source: "durable_runtime", intent_key: "native_task", blocking: false,
         title: type === "done" ? "Idle" : "Thinking...", started_at: startedAt };
-      channel.updateAgentStatus?.(chatJid, payload);
-      channel.broadcastEvent("agent_status", payload);
+      try {
+        channel.updateAgentStatus?.(chatJid, payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status updater failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_updater_failed",
+          chatJid,
+          type,
+        });
+      }
+      try {
+        channel.broadcastEvent("agent_status", payload);
+      } catch (error) {
+        debugSuppressedError(log, "Native status broadcaster failed after accepted dispatch admission.", error, {
+          operation: "process_chat.native_status_broadcast_failed",
+          chatJid,
+          type,
+        });
+      }
     };
     // Native operations/submissions own recovery. A legacy inflight marker
     // would falsely advertise every live SDK turn as interrupted after reload.
     nativeStatus("intent");
-    let result = await acceptedDispatch().catch(() => "pending" as const);
+    let result = await Promise.resolve()
+      .then(() => acceptedDispatch())
+      .catch(() => "pending" as const);
+    if (result !== "settled" && result !== "pending") {
+      throw new Error("Accepted dispatch returned invalid status");
+    }
     if (result === "pending") {
       // The captured host port owns observation only. Shutdown must retain the recovery marker.
       if (!waitForPending) throw new Error("Accepted dispatch requires host pending observation");
-      result = await waitForPending(pendingIdentity);
+      result = await Promise.resolve()
+        .then(() => waitForPending(pendingIdentity))
+        .catch(() => "pending" as const);
+      if (result !== "settled" && result !== "pending") {
+        throw new Error("Accepted pending observer returned invalid status");
+      }
       if (result === "pending") return;
     }
-    setChatCursor(chatJid, currentMessage.timestamp);
+    await admitSqliteWrite(getDb(), () => setChatCursor(chatJid, currentMessage.timestamp));
     nativeStatus("done");
-    channel.resumeChat(chatJid);
+    try {
+      channel.resumeChat(chatJid);
+    } catch (error) {
+      debugSuppressedError(log, "Native resume hook failed after accepted dispatch settlement.", error, {
+        operation: "process_chat.native_resume_failed",
+        chatJid,
+      });
+    }
     return;
   }
 
@@ -1799,931 +1352,6 @@ async function processAuthorisedChat(
     return;
   }
 
-  // A native dispatcher owns this chat even when this particular message has no
-  // accepted source. Never manufacture a legacy AgentSession as a fallback.
   if (coordinator) throw new Error("Native input has no admitted source");
-
-  const channelName = detectChannel(chatJid);
-  const protectedRecoveryIntent = resolveProtectedRecoveryControlIntent(currentMessage);
-  const protectedRecoveryPrompt = protectedRecoveryIntent
-    ? TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT
-    : null;
-  const protectedRecoveryHandoffContext: ProtectedRecoveryHandoffMetadata | undefined =
-    protectedRecoveryIntent?.reason
-      && protectedRecoveryIntent.compaction
-      && typeof protectedRecoveryIntent.tools_required === "boolean"
-      && typeof protectedRecoveryIntent.retryable === "boolean"
-      && Number.isInteger(protectedRecoveryIntent.recovery_attempts)
-      ? {
-          reason: protectedRecoveryIntent.reason,
-          compaction: protectedRecoveryIntent.compaction,
-          toolsRequired: protectedRecoveryIntent.tools_required,
-          retryable: protectedRecoveryIntent.retryable,
-          recoveryAttempts: Number(protectedRecoveryIntent.recovery_attempts),
-          ...(protectedRecoveryIntent.primary_failure_category === "timeout"
-            ? {
-                primaryFailure: {
-                  category: "timeout" as const,
-                  detail: String(protectedRecoveryIntent.primary_failure_detail),
-                  elapsedMs: Number(protectedRecoveryIntent.primary_failure_elapsed_ms),
-                  executionToolsEnabled: protectedRecoveryIntent.primary_failure_execution_tools === true,
-                  hadPartialOutput: protectedRecoveryIntent.primary_failure_had_partial_output === true,
-                  hadToolActivity: protectedRecoveryIntent.primary_failure_had_tool_activity === true,
-                  toolExecutionCount: Number(protectedRecoveryIntent.primary_failure_tool_executions),
-                },
-              }
-            : {}),
-          ...(protectedRecoveryIntent.recovery_source_id
-            ? { recoverySourceId: protectedRecoveryIntent.recovery_source_id }
-            : {}),
-          ...(Number.isInteger(protectedRecoveryIntent.recovery_generation)
-            ? { recoveryGeneration: protectedRecoveryIntent.recovery_generation }
-            : {}),
-        }
-      : undefined;
-  const promptMessage = protectedRecoveryPrompt
-    ? { ...currentMessage, content: protectedRecoveryPrompt }
-    : currentMessage;
-  const prompt = formatMessages([identity ? { ...promptMessage, sender_name: identity.displayName, sender: identity.provenance.actorUserId } : promptMessage], channelName, chatJid);
-  const lastMessage = currentMessage;
-  const runStartedAt = new Date().toISOString();
-  const threadId = lastMessage.timestamp;
-
-  const turnId = createUuid("turn");
-  const streamRuntime = await createProcessChatStreamingRuntime({
-    channel, chatJid, agentId, threadId, turnId, runStartedAt, sourceMessageId: lastMessage.id ?? null,
-    withResolvedToolStatusHints, withAgentStatusProgressMetadata,
-  });
-  const { emitter, trackedEmitter, streamingHandler: trackedStreamingHandler, timeoutMs } = streamRuntime;
-  const streamState = streamRuntime.state;
-  let turnCount = 0;
-  let hadIntermediateOutput = false;
-  let persistedIntermediateOutput = false;
-  let intermediatePersistFailed = false;
-  const resolvedThreadRootId = resolveThreadRootId(channel, chatJid, currentMessage.id ?? "", effectiveThreadRootId);
-
-  let startupFailure: string | undefined;
-  let preflight: "continue" | "deferred" = "continue";
-  try { preflight = await runProcessChatPreflight({
-    channel, chatJid, agentId, message: { id: lastMessage.id, timestamp: lastMessage.timestamp }, prevCursor, effectiveThreadRootId: effectiveThreadRootId ?? null, turnId, runStartedAt, browserObservability,
-    streamingHandler: trackedStreamingHandler, compactionState: streamState,
-    skipPrePromptCompaction: Boolean(identity) || protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution",
-    enqueueResume: (root) => enqueueProcessChatAfterCompaction(channel, chatJid, agentId, lastMessage.id, root, browserObservability),
-  }); } catch (error) {
-    startupFailure = error instanceof Error ? error.message : "Runtime startup failed.";
-  }
-  if (preflight === "deferred") return;
-
-  let shouldRemoveStaleProtectedContinuation = false;
-  const persistTerminalOutcome = (
-    text: string,
-    marker: Record<string, unknown> | null,
-    options: { critical?: boolean; additionalBlocks?: Array<Record<string, unknown>>; usage?: unknown } = {},
-  ) => {
-    // Capture thinking BEFORE broadcast via onMessageStored callback so a
-    // fast client receiving the SSE agent_response event can immediately
-    // fetch /agent/thinking?message_id=N without racing the INSERT.
-    return storeAgentTurn(channel, emitter, {
-      chatJid,
-      text,
-      attachments: [],
-      channelName,
-      threadId: resolvedThreadRootId,
-      skipPlaceholder: shouldRemoveStaleProtectedContinuation || turnCount === 0,
-      isTerminalAgentReply: true,
-      removeProtectedContinuationForSourceMessageId: shouldRemoveStaleProtectedContinuation
-        ? String(lastMessage.id || "").trim() || null
-        : null,
-      extraContentBlocks: [
-        streamRuntime.buildAgentTimingBlock(options.usage),
-        ...(marker ? [marker] : []),
-        ...(Array.isArray(options.additionalBlocks) ? options.additionalBlocks : []),
-        ...streamRuntime.buildThinkingRefBlocks(),
-      ],
-      onMessageStored: (rowId, interaction) => streamRuntime.consumePersistedPreviewsForRow(
-        rowId,
-        interaction.data?.thread_id ?? resolvedThreadRootId,
-      ),
-    });
-  };
-  const persistVisibleFailureOutcome = (
-    markerBase: Record<string, unknown>,
-    detail?: string,
-    options: { requireDraft?: boolean; suppressDraft?: boolean } = {},
-  ) => {
-    const draft = channel.getBuffer(turnId, "draft");
-    const draftText = typeof draft?.text === "string" ? draft.text.trim() : "";
-    if (options.requireDraft && !draftText) return false;
-
-    const lastAction = summarizeFailureActionFromStatus(channel.getAgentStatus(chatJid));
-    const marker = withFailureActionMetadata(markerBase, lastAction);
-    const title = readTrimmedString(marker?.title) || "Turn failed";
-    const markerDetail = readTrimmedString(marker?.detail);
-    const markerType = readTrimmedString(marker?.type);
-    const markerKind = readTrimmedString(marker?.kind);
-    const markerClassifier = readTrimmedString(marker?.classifier);
-    const markerSeverity = readTrimmedString(marker?.severity);
-    const inlineDiagnostic = markerKind === "tool_budget"
-      || markerClassifier === "tool_history_pressure"
-      || markerClassifier === "budget_exhausted";
-    const showDiagnosticWithoutDraft = (markerType === "timeout_marker"
-      && markerClassifier === "budget_exhausted")
-      || markerKind === "context"
-      || (markerKind === "recovery" && markerSeverity !== "info");
-    const text = buildFailureVisibleText({
-      draftText: options.suppressDraft ? '' : draftText,
-      title,
-      detail: detail || markerDetail,
-      actionSummary: lastAction?.summary,
-      attemptsUsed: Number.isFinite(marker?.attempts_used) ? (marker?.attempts_used as number) : undefined,
-      classifier: markerClassifier,
-      nextAction: readTrimmedString(marker?.next_action),
-      inlineDiagnostic,
-      showDiagnosticWithoutDraft,
-    });
-
-    return persistTerminalOutcome(text, marker);
-  };
-
-  const publishDraftFallback = (
-    reason?: "timeout" | "error" | "empty-final" | "rate-limit",
-    detail?: string,
-    options: {
-      requireDraft?: boolean;
-      markerOptions?: {
-        failureCategory?: AgentFailureCategory;
-        toolBudgetExceeded?: boolean;
-        toolStepsUsed?: number;
-        toolStepsBudget?: number;
-        nextAction?: string;
-        protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
-      };
-    } = {},
-  ) => {
-    // Draft fallback should publish the currently visible draft for whichever
-    // turn failed to finalize, even if earlier turns in the same session were
-    // already flushed via onTurnComplete(). For the very first turn we must
-    // still skip placeholder consumption so an already-queued follow-up is not
-    // accidentally stolen by the original response.
-    const draft = channel.getBuffer(turnId, "draft");
-    const draftText = typeof draft?.text === "string" ? draft.text.trim() : "";
-
-    const markerBase = options.markerOptions?.protectedRecoveryHandoff
-      ? buildErrorOutcomeMarker(detail || "Automatic recovery paused", {
-          draftRecovered: Boolean(draftText),
-          attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-          classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-          ...options.markerOptions,
-        })
-      : reason === "timeout"
-      ? {
-          type: "timeout_marker",
-          timed_out: true,
-          title: "Timed out",
-          draft_recovered: Boolean(draftText),
-          attempts_used: streamState.lastRecoveryMeta?.attemptsUsed,
-          classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-        }
-      : reason === "rate-limit"
-        ? buildErrorOutcomeMarker(detail || "rate limit", {
-            draftRecovered: Boolean(draftText),
-            attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-            classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-            ...options.markerOptions,
-          })
-        : reason === "empty-final"
-          ? buildTurnOutcomeMarker({
-              kind: "blank_final",
-              label: "no reply",
-              title: "No final reply produced",
-              detail: streamState.lastRecoveryMeta?.lastClassifier ? `Last recovery classifier: ${streamState.lastRecoveryMeta.lastClassifier}.` : undefined,
-              severity: "warning",
-              draftRecovered: Boolean(draftText),
-              attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-              classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-            })
-          : buildErrorOutcomeMarker(detail || "Response ended with an error before finalization", {
-              draftRecovered: Boolean(draftText),
-              attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-              classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-              ...options.markerOptions,
-            });
-
-    const visibleDetail = reason === "timeout" && !options.markerOptions?.protectedRecoveryHandoff
-      ? detail
-      : undefined;
-    return persistVisibleFailureOutcome(markerBase, visibleDetail, options);
-  };
-
-  let completedReplyRowId: number | null = null;
-  const finalizeSuccessfulRun = async () => finalizeSuccessfulProcessChatRun({
-    channel,
-    emitter: trackedEmitter,
-    chatJid,
-    agentId,
-    turnId,
-    threadId,
-    prevCursor,
-    recovery: streamState.lastRecoveryMeta,
-  });
-
-  const output = startupFailure ? {status: "error" as const, result: null, error: startupFailure, failureCategory: classifyOpaqueAgentFailure(startupFailure)} : await withVerifiedAddonMessage(chatJid, currentMessage, () => channel.agentPool.runAgent(prompt, chatJid, {
-    ...(identity ? {
-      executionProvenance: identity.provenance,
-      // Execution-identity runs use an explicit tool ceiling.
-      } : {}),
-    timeoutMs,
-    turnId,
-    ...(browserObservability?.userId ? { userId: browserObservability.userId } : {}),
-    ...(browserObservability?.sessionId ? { sessionId: browserObservability.sessionId } : {}),
-    ...(browserObservability?.clientId ? { clientId: browserObservability.clientId } : {}),
-    skipPrePromptCompaction: true,
-    scheduleIdleAutoCompaction: !identity,
-    deferToolEnabledContinuation: !identity,
-    protectedRecoveryContinuation: Boolean(protectedRecoveryIntent),
-    protectedRecoveryContinuationDepth: protectedRecoveryIntent?.handoff_depth,
-    protectedRecoveryHandoffContext,
-    recoverySourceId: protectedRecoveryHandoffContext?.recoverySourceId
-      ?? protectedRecoveryIntent?.source_message_id
-      ?? lastMessage.id
-      ?? turnId,
-    recoveryGeneration: protectedRecoveryHandoffContext?.recoveryGeneration ?? 0,
-    onEvent: trackedStreamingHandler,
-    onTurnComplete: (turn: TurnOutput) => {
-      // Turn boundary: the first turn (index 0) is the original prompt's
-      // response — skip placeholder consumption so it doesn't steal a
-      // placeholder that belongs to a queued follow-up.
-      // Subsequent turns (index 1+) are follow-up responses and should
-      // consume their corresponding placeholder.
-      const isFirstTurn = turnCount === 0;
-      turnCount++;
-      completedReplyRowId = null;
-      if (turn.text || turn.attachments.length > 0) {
-        hadIntermediateOutput = true;
-        const stored = persistIntermediateProcessChatTurn({
-          channel,
-          emitter,
-          chatJid,
-          text: turn.text,
-          attachments: turn.attachments as AttachmentInfo[],
-          channelName,
-          threadId: resolvedThreadRootId,
-          skipPlaceholder: isFirstTurn,
-          timingBlock: streamRuntime.buildAgentTimingBlock(turn.usage),
-          turnKind: turn.turnKind,
-          cause: turn.cause,
-          followedByToolUse: turn.followedByToolUse,
-          terminal: turn.terminal,
-          textPhase: turn.textPhase,
-          buildThinkingRefBlocks: streamRuntime.buildThinkingRefBlocks,
-          consumePersistedPreviewsForRow: streamRuntime.consumePersistedPreviewsForRow,
-        });
-        if (!stored) {
-          intermediatePersistFailed = true;
-          log.warn("Failed to persist intermediate agent turn", {
-            operation: "process_chat.persist_intermediate_turn",
-            chatJid,
-            turnCount,
-            textLength: turn.text.length,
-            attachmentCount: turn.attachments.length,
-          });
-        } else {
-          persistedIntermediateOutput = true;
-          if (turn.terminal === true && turn.cause === "completed_boundary" && !turn.followedByToolUse) {
-            completedReplyRowId = stored;
-          }
-        }
-      }
-    },
-  }));
-
-  streamState.lastRecoveryMeta = output.recovery || null;
-
-  // A prior process may have persisted protected handoff intent before
-  // crashing. Successful replay removes that source-tagged intent in the same
-  // SQLite UPDATE that clears inflight state (see finalizeSuccessfulRun), so
-  // neither delete-before-commit nor commit-before-delete can lose or duplicate
-  // the continuation.
-  const removeStaleProtectedContinuation = !output.requiresToolEnabledContinuation;
-  shouldRemoveStaleProtectedContinuation = removeStaleProtectedContinuation;
-
-  if (output.status === "tool_complete") {
-    // Provider stopped cleanly after tool use with no closing text reply.
-    // This is not an error — emit a muted "done" pill and finalise normally.
-    // If there is a draft buffer (partial streamed text), surface it so the user
-    // sees the work that was done even though the model didn't emit a final reply.
-    const toolCompleteDraft = channel.getBuffer(turnId, "draft");
-    const toolCompleteDraftText = typeof toolCompleteDraft?.text === "string" ? toolCompleteDraft.text.trim() : "";
-    const marker = buildTurnOutcomeMarker({
-      kind: "tool_complete",
-      label: "done",
-      title: "Completed via tools",
-      detail: toolCompleteDraftText
-        ? "Turn finished after tool use — showing recovered draft."
-        : "Turn finished after tool use — no closing reply was emitted.",
-      severity: "info",
-      draftRecovered: Boolean(toolCompleteDraftText),
-    });
-    const persisted = toolCompleteDraftText
-      ? persistTerminalOutcome(toolCompleteDraftText, marker, { usage: output.usage })
-      : persistVisibleFailureOutcome(marker);
-    if (persisted) {
-      await finalizeSuccessfulRun();
-    } else {
-      rollbackChatRunWithError(chatJid, {
-        prevTs: prevCursor,
-        failedTs: lastMessage.timestamp,
-        messageId: lastMessage.id,
-        threadRootId: resolvedThreadRootId ?? null,
-        createdAt: new Date().toISOString(),
-      });
-    }
-    return;
-  }
-
-  if (output.status === "error") {
-    // Compatibility boundary for injected/legacy AgentPool implementations.
-    // Normal runtime outputs already carry this enum from attempt finalization.
-    output.failureCategory ??= classifyOpaqueAgentFailure(output.error);
-    if (output.toolBudgetExceeded) output.failureCategory = "tool_budget";
-    if (output.failureCategory === "already_processing") {
-      // A concurrent run is already handling this chat. Roll back the cursor
-      // we advanced so this message stays pending, then throw so the queue
-      // retries after backoff.
-      rollbackInflightRun(chatJid, prevCursor);
-      trackedEmitter.status(buildRetryStatusPayload({
-        threadId,
-        agentId,
-        turnId,
-        title: "Queued — waiting for current response",
-      }));
-      throw new Error(output.error || "Agent run is already processing");
-    }
-
-    if (output.failureCategory === "provider_unavailable" && !output.protectedRecoveryHandoff) {
-      // Extension/provider registration races can happen right after restart.
-      // Keep the message pending and let the queue retry automatically.
-      rollbackInflightRun(chatJid, prevCursor);
-      trackedEmitter.status(buildRetryStatusPayload({
-        threadId,
-        agentId,
-        turnId,
-        title: "Model provider is initializing — retrying shortly",
-        detail: output.error,
-      }));
-      throw new Error(output.error || "No API provider is registered");
-    }
-
-    const errorText = output.error || "Agent error";
-    const displayErrorText = sanitizeProviderErrorDetail(errorText) || "Agent error";
-    const providerError = formatProviderError(displayErrorText);
-    const rateLimited = output.failureCategory === "rate_limit";
-    const networkFailed = output.failureCategory === "network";
-    const networkDetail = networkFailed ? describeNetworkError(displayErrorText) : null;
-    const markerOptions = {
-      failureCategory: output.failureCategory,
-      toolBudgetExceeded: output.toolBudgetExceeded,
-      toolStepsUsed: output.toolStepsUsed,
-      toolStepsBudget: output.toolStepsBudget,
-      nextAction: output.nextAction,
-      protectedRecoveryHandoff: output.protectedRecoveryHandoff,
-      abortCause: output.abortCause,
-      abortOperation: output.abortOperation,
-    };
-    const resolveContinuationThreadId = (): number | null => resolvedThreadRootId
-      ?? getMessageRowIdById(chatJid, lastMessage.id ?? "");
-    const queueToolBudgetContinuation = (): void => {
-      if (identity || !output.toolBudgetExceeded || output.recovery?.exhausted) return;
-      const continuationThreadId = resolveContinuationThreadId();
-      if (!continuationThreadId) {
-        log.warn("Could not resolve thread lineage for bounded tool-budget continuation", {
-          operation: "process_chat.tool_budget_auto_continue_missing_lineage",
-          chatJid,
-          messageId: lastMessage.id ?? null,
-        });
-        return;
-      }
-      const continuationThreadKey = String(continuationThreadId);
-      if (!reserveToolBudgetContinuation(chatJid, continuationThreadKey)) return;
-
-      try {
-        const queuedAt = new Date().toISOString();
-        const queuedRowId = channel.enqueueQueuedFollowupItem(
-          chatJid,
-          0,
-          RECOVERY_CONTINUATION_PROMPT,
-          continuationThreadId,
-          queuedAt,
-          { source: "auto-tool-budget-continuation" },
-        );
-        channel.broadcastEvent("agent_followup_queued", {
-          chat_jid: chatJid,
-          thread_id: continuationThreadId,
-          row_id: queuedRowId,
-          content: RECOVERY_CONTINUATION_PROMPT,
-          timestamp: queuedAt,
-          source: "auto-tool-budget-continuation",
-        });
-        log.info("Queued one bounded continuation after a healthy tool-budget stop", {
-          operation: "process_chat.tool_budget_auto_continue",
-          chatJid,
-          threadKey: continuationThreadKey,
-          queuedRowId,
-        });
-      } catch (error) {
-        releaseToolBudgetContinuation(chatJid, continuationThreadKey);
-        log.warn("Failed to queue bounded continuation after tool-budget stop", {
-          operation: "process_chat.tool_budget_auto_continue_failed",
-          chatJid,
-          threadKey: continuationThreadKey,
-          err: error,
-        });
-      }
-    };
-    const queueProtectedRecoveryContinuation = (): {
-      required: boolean;
-      rowId: number | null;
-      failed: boolean;
-      created: boolean;
-      terminalReason?: "limit" | "unprepared";
-    } => {
-      if (identity || !output.requiresToolEnabledContinuation) return { required: false, rowId: null, failed: false, created: false };
-      if (output.protectedRecoveryHandoff?.reason === "unresolved_tool_execution") {
-        return { required: false, rowId: null, failed: false, created: false, terminalReason: "unprepared" };
-      }
-      const currentHandoffDepth = protectedRecoveryIntent?.handoff_depth ?? 0;
-      if (protectedRecoveryIntent) {
-        if (currentHandoffDepth >= MAX_PROTECTED_RECOVERY_HANDOFF_DEPTH) {
-          return { required: false, rowId: null, failed: false, created: false, terminalReason: "limit" };
-        }
-        // Repeated generic protected retries remain unsafe to chain. Only a
-        // completed compact_then_retry phase establishes useful new state for
-        // one final ordinary tool-enabled continuation.
-        if (!isPostCompactionProtectedRecoveryHandoff(output)) {
-          return { required: false, rowId: null, failed: false, created: false, terminalReason: "unprepared" };
-        }
-      }
-      const continuationThreadId = resolveContinuationThreadId();
-      if (!continuationThreadId) {
-        log.warn("Could not resolve thread lineage for protected-recovery continuation", {
-          operation: "process_chat.protected_recovery_auto_continue_missing_lineage",
-          chatJid,
-          messageId: lastMessage.id ?? null,
-        });
-        return { required: true, rowId: null, failed: true, created: false };
-      }
-      const sourceMessageId = String(lastMessage.id || "").trim();
-      const sourceRowId = getMessageRowIdById(chatJid, sourceMessageId) ?? continuationThreadId;
-      const existing = channel.getQueuedFollowupItems(chatJid).find((item) => (
-        item.source === "auto-protected-recovery-continuation"
-        && item.queuedBy?.sourceMessageId === sourceMessageId
-      ));
-      if (existing) return { required: true, rowId: existing.rowId, failed: false, created: false };
-      try {
-        const queuedAt = new Date().toISOString();
-        const controlIntent = buildProtectedRecoveryControlIntentBlock({
-          sourceMessageId,
-          sourceRowId,
-          threadId: continuationThreadId,
-          handoffDepth: currentHandoffDepth + 1,
-          handoff: output.protectedRecoveryHandoff,
-        });
-        const queuedRowId = channel.enqueueQueuedFollowupItem(
-          chatJid,
-          0,
-          PROTECTED_RECOVERY_CONTROL_LABEL,
-          continuationThreadId,
-          queuedAt,
-          {
-            contentBlocks: [controlIntent],
-            source: "auto-protected-recovery-continuation",
-            queuedBy: { source: "runtime", sourceMessageId },
-          },
-        );
-        channel.broadcastEvent("agent_followup_queued", {
-          chat_jid: chatJid,
-          thread_id: continuationThreadId,
-          row_id: queuedRowId,
-          content: PROTECTED_RECOVERY_CONTROL_LABEL,
-          content_blocks: [controlIntent],
-          timestamp: queuedAt,
-          source: "auto-protected-recovery-continuation",
-        });
-        log.info("Queued one ordinary continuation after protected recovery", {
-          operation: "process_chat.protected_recovery_auto_continue",
-          chatJid,
-          sourceMessageId,
-          sourceRowId,
-          threadId: continuationThreadId,
-          handoffDepth: controlIntent.handoff_depth,
-          queuedRowId,
-        });
-        return { required: true, rowId: queuedRowId, failed: false, created: true };
-      } catch (error) {
-        log.warn("Failed to queue ordinary continuation after protected recovery", {
-          operation: "process_chat.protected_recovery_auto_continue_failed",
-          chatJid,
-          sourceMessageId,
-          sourceRowId,
-          threadId: continuationThreadId,
-          err: error,
-        });
-        return { required: true, rowId: null, failed: true, created: false };
-      }
-    };
-    // Persist the handoff intent before terminal/cursor finalization. A crash
-    // after this point leaves a durable, source-tagged item that replay detects
-    // instead of losing or duplicating the ordinary continuation.
-    const protectedContinuation = queueProtectedRecoveryContinuation();
-    if (protectedContinuation.failed) {
-      rollbackInflightRun(chatJid, prevCursor);
-      trackedEmitter.status(buildRetryStatusPayload({
-        threadId,
-        agentId,
-        turnId,
-        title: "Could not persist tool-enabled continuation — retrying",
-        detail: "The protected recovery handoff was not committed; the source turn remains pending.",
-      }));
-      throw new Error("Protected recovery handoff persistence failed; retry the source turn.");
-    }
-    if (protectedContinuation.terminalReason) {
-      // The runtime deliberately refuses an unbounded recovery chain. Unlike a
-      // normal marker-only blank final, this terminal state must remain readable
-      // even when the client cannot render structured outcome blocks.
-      shouldRemoveStaleProtectedContinuation = true;
-      const terminalReason = output.protectedRecoveryHandoff?.reason
-        ?? (isPostCompactionProtectedRecoveryHandoff(output)
-          ? "post_compaction_tools_required"
-          : "continuation_generation_exhausted");
-      const terminalHandoff = buildProtectedRecoveryHandoffMetadata(terminalReason, {
-        recoveryAttempts: output.protectedRecoveryHandoff?.recoveryAttempts
-          ?? output.recovery?.attemptsUsed
-          ?? 0,
-        compaction: output.protectedRecoveryHandoff?.compaction,
-        toolsRequired: output.protectedRecoveryHandoff?.toolsRequired ?? true,
-        retryable: output.protectedRecoveryHandoff?.retryable ?? true,
-        primaryFailure: output.protectedRecoveryHandoff?.primaryFailure,
-        recoverySourceId: output.protectedRecoveryHandoff?.recoverySourceId,
-        recoveryGeneration: output.protectedRecoveryHandoff?.recoveryGeneration,
-      });
-      const presentation = terminalHandoff ? formatProtectedRecoveryHandoff(terminalHandoff) : null;
-      const detail = presentation?.detail ?? (protectedContinuation.terminalReason === "limit"
-        ? PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE
-        : "Automatic recovery could not safely start another tool-enabled continuation. The session is preserved; send “continue” to resume the unfinished work.");
-      const marker = buildTurnOutcomeMarker({
-        kind: "recovery",
-        label: presentation?.label ?? "recovery paused",
-        title: presentation?.title ?? "Automatic recovery paused",
-        detail,
-        severity: "warning",
-        attemptsUsed: output.recovery?.attemptsUsed,
-        classifier: output.recovery?.lastClassifier ?? null,
-        failureCategory: output.failureCategory,
-        nextAction: presentation?.nextAction ?? "Send “continue” to resume from the preserved session state.",
-        protectedRecoveryHandoff: terminalHandoff,
-      });
-      const terminalText = presentation
-        ? `⚠️ ${presentation.title}\n${presentation.detail} ${presentation.nextAction}`
-        : `⚠️ Automatic recovery paused\n${detail}`;
-      const persisted = persistTerminalOutcome(terminalText, marker);
-      if (persisted) {
-        await finalizeSuccessfulRun();
-      } else {
-        rollbackChatRunWithError(chatJid, {
-          prevTs: prevCursor,
-          failedTs: lastMessage.timestamp,
-          messageId: lastMessage.id,
-          threadRootId: resolvedThreadRootId ?? null,
-          createdAt: new Date().toISOString(),
-        });
-      }
-      return;
-    }
-    if (protectedContinuation.required) {
-      // A protected attempt intentionally has no execution tools. Its streamed
-      // draft is not a terminal answer and may falsely claim tools are missing.
-      // Replace that transient prose with a deterministic recovery marker while
-      // the durable typed continuation resumes the work with tools restored.
-      const handoffPresentation = output.protectedRecoveryHandoff
-        ? formatProtectedRecoveryHandoff(output.protectedRecoveryHandoff)
-        : null;
-      const marker = buildTurnOutcomeMarker({
-        kind: "recovery",
-        label: handoffPresentation?.label ?? "recovery",
-        title: output.protectedRecoveryHandoff?.primaryFailure
-          ? handoffPresentation?.title ?? PROTECTED_RECOVERY_CONTROL_LABEL
-          : PROTECTED_RECOVERY_CONTROL_LABEL,
-        detail: handoffPresentation?.detail ?? (protectedRecoveryIntent
-          ? "Compaction completed; continuing once more with execution tools restored."
-          : "Continuing in an ordinary turn with execution tools restored."),
-        severity: "info",
-        attemptsUsed: output.recovery?.attemptsUsed,
-        classifier: output.recovery?.lastClassifier ?? null,
-        failureCategory: output.failureCategory,
-        protectedRecoveryHandoff: output.protectedRecoveryHandoff,
-      });
-      const persisted = persistVisibleFailureOutcome(marker, undefined, { suppressDraft: true });
-      if (persisted) {
-        await finalizeSuccessfulRun();
-      } else {
-        rollbackChatRunWithError(chatJid, {
-          prevTs: prevCursor,
-          failedTs: lastMessage.timestamp,
-          messageId: lastMessage.id,
-          threadRootId: resolvedThreadRootId ?? null,
-          createdAt: new Date().toISOString(),
-        });
-      }
-      return;
-    }
-    const fallbackPublished = output.failureCategory === "timeout" || output.failureCategory === "stalled_work"
-      ? publishDraftFallback("timeout", errorText, { markerOptions })
-      : rateLimited
-        ? publishDraftFallback("rate-limit", errorText, { markerOptions })
-        : publishDraftFallback("error", errorText, { markerOptions });
-
-    if (fallbackPublished) {
-      // Tool-budget reservations remain after terminal persistence. Protected
-      // handoff intent was already persisted above for crash safety.
-      queueToolBudgetContinuation();
-      await finalizeSuccessfulRun();
-      return;
-    }
-
-    const marker = buildErrorOutcomeMarker(errorText, {
-      attemptsUsed: output.recovery?.attemptsUsed,
-      classifier: output.recovery?.lastClassifier ?? null,
-      severity: rateLimited ? "warning" : "error",
-      ...markerOptions,
-    });
-    const persisted = persistVisibleFailureOutcome(marker);
-    if (persisted) {
-      queueToolBudgetContinuation();
-      await finalizeSuccessfulRun();
-    } else {
-      // Retain the durable handoff intent on terminal persistence failure.
-      // rollbackChatRunWithError makes the source retryable; replay dedupes by
-      // sourceMessageId and normal successful terminal persistence removes the
-      // stale intent atomically with the terminal row insert.
-      rollbackChatRunWithError(chatJid, {
-        prevTs: prevCursor,
-        failedTs: lastMessage.timestamp,
-        messageId: lastMessage.id,
-        threadRootId: resolvedThreadRootId ?? null,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    trackedEmitter.status({
-      thread_id: threadId,
-      agent_id: agentId,
-      type: "error",
-      state: output.failureCategory === "auth_config" ? "blocked_auth" : "failed",
-      classifier: output.recovery?.lastClassifier ?? output.failureCategory ?? "unknown",
-      failure_category: output.failureCategory ?? "unknown",
-      title: providerError?.title || (rateLimited ? "AI provider rate limit" : networkFailed ? networkDetail! : displayErrorText),
-      detail: providerError?.detail || (rateLimited || networkFailed ? displayErrorText : undefined),
-      turn_id: turnId,
-    });
-    return;
-  }
-
-  // Store the final turn's output. The same first-turn placeholder rule used
-  // during onTurnComplete() also applies here: the original response must not
-  // consume a queued follow-up placeholder, but later turns are allowed to.
-  //
-  // Exactly-once rule: never clear inflight state unless a terminal reply was
-  // actually persisted (either the final output itself or a draft fallback).
-  const finalAttachments = output.attachments ?? [];
-  const hasOutput = !!(output.result || finalAttachments.length > 0);
-  const finalDraft = channel.getBuffer(turnId, "draft");
-  const hasDraftFallback = typeof finalDraft?.text === "string" && finalDraft.text.trim().length > 0;
-  const promotedCompletedReply = !hasOutput && completedReplyRowId !== null
-    && promoteCompletedAgentReply(chatJid, completedReplyRowId);
-  if (promotedCompletedReply && completedReplyRowId !== null) {
-    const updated = getMessageByRowId(chatJid, completedReplyRowId);
-    if (updated) channel.interactionBroadcaster.broadcastInteractionUpdated(updated);
-  }
-  const finalized = hasOutput
-    ? storeAgentTurn(channel, emitter, {
-        chatJid,
-        text: output.result || "",
-        attachments: finalAttachments as AttachmentInfo[],
-        channelName,
-        threadId: resolvedThreadRootId,
-        skipPlaceholder: shouldRemoveStaleProtectedContinuation || turnCount === 0,
-        isTerminalAgentReply: true,
-        removeProtectedContinuationForSourceMessageId: shouldRemoveStaleProtectedContinuation
-          ? String(lastMessage.id || "").trim() || null
-          : null,
-        extraContentBlocks: [
-          streamRuntime.buildAgentTimingBlock(output.usage),
-          ...(buildRecoveryMarkerBlocks(output.recovery) ?? []),
-          ...streamRuntime.buildThinkingRefBlocks(),
-        ],
-        onMessageStored: (rowId, interaction) => streamRuntime.consumePersistedPreviewsForRow(
-          rowId,
-          interaction.data?.thread_id ?? resolvedThreadRootId,
-        ),
-      })
-    : promotedCompletedReply
-      ? true
-      : hasDraftFallback
-      ? publishDraftFallback("empty-final")
-      : persistedIntermediateOutput
-        ? true
-        : publishDraftFallback("empty-final");
-
-  if (!finalized && hasOutput) {
-    // The agent produced output but terminal persistence failed.
-    // Hold the user turn for an explicit retry/skip decision.
-    const errorText = "Agent completed but terminal response could not be persisted.";
-    rollbackChatRunWithError(chatJid, {
-      prevTs: prevCursor,
-      failedTs: lastMessage.timestamp,
-      messageId: lastMessage.id,
-      threadRootId: resolvedThreadRootId ?? null,
-      createdAt: new Date().toISOString(),
-    });
-    trackedEmitter.status({
-      thread_id: threadId,
-      agent_id: agentId,
-      type: "error",
-      title: errorText,
-      turn_id: turnId,
-    });
-    return;
-  }
-
-  if (!finalized && !hasOutput) {
-    if (persistedIntermediateOutput) {
-      // A prior turn in the same run was already persisted (e.g. auto-
-      // compaction produced a trailing empty turn). Treat this as success and
-      // do not emit the no-response warning.
-      await finalizeSuccessfulRun();
-      return;
-    }
-
-    if (hadIntermediateOutput && intermediatePersistFailed) {
-      const errorText = "Agent produced intermediate output but it could not be persisted.";
-      rollbackChatRunWithError(chatJid, {
-        prevTs: prevCursor,
-        failedTs: lastMessage.timestamp,
-        messageId: lastMessage.id,
-        threadRootId: resolvedThreadRootId ?? null,
-        createdAt: new Date().toISOString(),
-      });
-      trackedEmitter.status({
-        thread_id: threadId,
-        agent_id: agentId,
-        type: "error",
-        title: errorText,
-        turn_id: turnId,
-      });
-      return;
-    }
-
-    // Check if a draft buffer existed — if so, the agent DID produce content
-    // but persistence failed, which is a real error worth recording.
-    const draft = channel.getBuffer(turnId, "draft");
-    const hadDraft = !!(typeof draft?.text === "string" && draft.text.trim());
-    if (hadDraft) {
-      const errorText = "Agent completed but draft response could not be persisted.";
-      rollbackChatRunWithError(chatJid, {
-        prevTs: prevCursor,
-        failedTs: lastMessage.timestamp,
-        messageId: lastMessage.id,
-        threadRootId: resolvedThreadRootId ?? null,
-        createdAt: new Date().toISOString(),
-      });
-      trackedEmitter.status({
-        thread_id: threadId,
-        agent_id: agentId,
-        type: "error",
-        title: errorText,
-        turn_id: turnId,
-      });
-      return;
-    }
-
-    const originalContent = currentMessage.content || "";
-    const preview = originalContent.length > 120
-      ? originalContent.slice(0, 120) + "…"
-      : originalContent;
-    const recoveryIntent = streamRuntime.getActiveRecoveryIntent();
-    const recoveryLooksStalled = Boolean(streamState.lastRecoveryMeta?.exhausted)
-      || streamState.lastRecoveryOutcome === "exhausted"
-      || streamState.sawCompactionEvent
-      || streamState.sawRecoveryEvent
-      || recoveryIntent !== null
-      || !!streamState.lastCompactionErrorMessage;
-
-    if (recoveryLooksStalled) {
-      const title = streamState.lastRecoveryMeta?.exhausted || streamState.lastRecoveryOutcome === "exhausted"
-        ? "Automatic recovery exhausted"
-        : streamState.lastCompactionErrorMessage
-          ? "Context compaction failed"
-          : recoveryIntent === "compaction"
-            ? "Context compaction did not complete"
-            : "Context recovery did not complete";
-      const detail = streamState.lastCompactionErrorMessage
-        ? streamState.lastCompactionErrorMessage
-        : streamState.lastRecoveryMeta?.lastClassifier
-          ? `Last recovery classifier: ${streamState.lastRecoveryMeta.lastClassifier}.`
-          : "The turn ended without a persisted reply while compaction or automatic recovery was in flight.";
-
-      log.warn("Agent completed without output after compaction/recovery activity", {
-        operation: "process_chat.no_output_recovery_stalled",
-        chatJid,
-        title,
-        sawCompactionEvent: streamState.sawCompactionEvent,
-        sawRecoveryEvent: streamState.sawRecoveryEvent,
-        recoveryIntent,
-        lastCompactionErrorMessage: streamState.lastCompactionErrorMessage,
-        recovery: streamState.lastRecoveryMeta,
-      });
-
-      const marker = buildTurnOutcomeMarker({
-        kind: streamState.lastCompactionErrorMessage ? "context" : "recovery",
-        label: streamState.lastCompactionErrorMessage ? "context" : "recovery",
-        title,
-        detail,
-        severity: "warning",
-        attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-        classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-      });
-      const persisted = persistVisibleFailureOutcome(marker);
-      if (persisted) {
-        await finalizeSuccessfulRun();
-      } else {
-        rollbackChatRunWithError(chatJid, {
-          prevTs: prevCursor,
-          failedTs: lastMessage.timestamp,
-          messageId: lastMessage.id,
-          threadRootId: resolvedThreadRootId ?? null,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      trackedEmitter.status({
-        thread_id: threadId,
-        agent_id: agentId,
-        type: "error",
-        title,
-        detail,
-        turn_id: turnId,
-      });
-      return;
-    }
-
-    // Missing terminal output is a real failure. Consume the user turn with a
-    // compact bubble instead of replaying it through hidden failed-run state.
-    const title = "Agent produced no response";
-    const detail =
-      "The model returned an empty reply before finalization.";
-
-    log.warn("Agent completed without output; marking run as failed", {
-      operation: "process_chat.no_output_blank_failed",
-      chatJid,
-      hadIntermediateOutput,
-      persistedIntermediateOutput,
-      hadDraft,
-      recovery: streamState.lastRecoveryMeta,
-    });
-
-    const marker = buildTurnOutcomeMarker({
-      kind: "blank_final",
-      label: "no reply",
-      title,
-      detail: preview ? `${detail} Prompt: ${preview}` : detail,
-      severity: "warning",
-      attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
-      classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
-    });
-    const persisted = persistVisibleFailureOutcome(marker);
-    if (persisted) {
-      await finalizeSuccessfulRun();
-    } else {
-      rollbackChatRunWithError(chatJid, {
-        prevTs: prevCursor,
-        failedTs: lastMessage.timestamp,
-        messageId: lastMessage.id,
-        threadRootId: resolvedThreadRootId ?? null,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    trackedEmitter.status({
-      thread_id: threadId,
-      agent_id: agentId,
-      type: "error",
-      title,
-      detail,
-      turn_id: turnId,
-    });
-    return;
-  }
-
-  await finalizeSuccessfulRun();
-  endTrackedPhase(chatJid);
+  throw new Error("Native input dispatch is unavailable");
 }

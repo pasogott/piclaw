@@ -174,22 +174,17 @@ test("web processChat stores attachment content blocks", async () => {
 
   const webMod = await import("../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
+    // Publisher double only; native source identity/settlement is separately qualified.
+    dispatchAcceptedInput: (chatJid:string,messageId:string,rowId:number)=>async()=>{
+      expect(db.getMessageRowIdById(chatJid,messageId)).toBe(rowId);
+      const {storeAgentTurn}=await import("../../src/channels/web/messaging/agent-message-store.js");
+      const stored=storeAgentTurn(web,{response:()=>{}} as any,{chatJid,text:"Here is the report.",channelName:"web",threadId:rowId,
+        attachments:[{id:mediaId,name:"report.txt",contentType:"text/plain",size:6,kind:"file",sourcePath:"/tmp/report.txt"}],
+        isTerminalAgentReply:true,dispatchWebPushNotification:async()=>{}});
+      expect(stored).toBeGreaterThan(0);return "settled" as const;
+    },
     queue: { enqueue: () => {} },
     agentPool: {
-      runAgent: async () => ({
-        status: "success",
-        result: "Here is the report.",
-        attachments: [
-          {
-            id: mediaId,
-            name: "report.txt",
-            contentType: "text/plain",
-            size: 6,
-            kind: "file",
-            sourcePath: "/tmp/report.txt",
-          },
-        ],
-      }),
       getContextUsageForChat: async () => null,
     },
   });

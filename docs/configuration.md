@@ -386,8 +386,6 @@ For the packaged Azure managed-identity/static-key path and its additional token
 | `PICLAW_USER_NAME` | _(empty)_ | Display name for the human user in the web UI |
 | `PICLAW_USER_AVATAR` | _(empty)_ | Avatar URL for the human user |
 | `PICLAW_USER_AVATAR_BACKGROUND` | _(empty)_ | CSS background colour for the user avatar circle |
-| `PICLAW_SESSION_MAX_SIZE_MB` | `32` | Session file size threshold (MB) for auto-rotation warnings and pre-prompt rotation |
-| `PICLAW_SESSION_AUTO_ROTATE` | `1` | Automatically rotate oversized session files before the next prompt |
 | `PICLAW_TURN_MAX_TOOL_EXECUTIONS` | `64` | Authoritative per-turn completed tool-execution budget. Settings persists `domains.agent.toolUseMessageBudget`; values are clamped to `8..512`. Legacy `PICLAW_TURN_MAX_TOOL_USE_MESSAGES` and `PICLAW_MID_TURN_TOOL_EXECUTION_HARD_CEILING` are lower-priority compatibility aliases. |
 | `PICLAW_WHATSAPP_PHONE` | _(empty)_ | Alias for `WHATSAPP_PHONE` |
 | `PICLAW_TOOL_OUTPUT_RETENTION_MS` | `2592000000` (30 days) | Milliseconds to retain stored tool outputs (preferred; overrides `_DAYS`; values are capped at 30 days) |
@@ -404,8 +402,6 @@ For the packaged Azure managed-identity/static-key path and its additional token
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_MAX_INPUT_CHARS` | `12000` | Max sampled tool-output characters sent to semantic summarizer |
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_MAX_TOKENS` | `320` | Max generated semantic summary tokens |
 | `PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_TIMEOUT_MS` | `12000` | Timeout for semantic summary generation before preview fallback |
-| `PICLAW_SESSION_IDLE_MAX_WAIT_MS` | `10000` | Max ms to wait for session idle before sending a turn response |
-| `PICLAW_SESSION_IDLE_COMPACTION_MAX_WAIT_MS` | `300000` | Max ms to wait for idle when a compaction is in progress |
 | `PICLAW_MAIN_SESSION_IDLE_TTL_MS` | `180000` (3 min) | Idle TTL for the main interactive session; `PICLAW_SESSION_IDLE_TTL_MS` overrides the fallback when set |
 | `PICLAW_SIDE_SESSION_IDLE_TTL_MS` | `60000` (1 min) | Idle TTL for side/background sessions; `PICLAW_SESSION_IDLE_TTL_MS` overrides the fallback when set |
 | `PICLAW_SESSION_IDLE_TTL_MS` | _(empty)_ | Shared idle TTL override for main and side sessions when their specific variables are unset |
@@ -420,10 +416,9 @@ Notes:
 - Tool output retention defaults to **30 days** and is capped at 30 days. `PICLAW_TOOL_OUTPUT_RETENTION_MS` overrides the legacy `PICLAW_TOOL_OUTPUT_RETENTION_DAYS`.
 - Tool-result compaction supports both a global gate (`PICLAW_TOOL_RESULT_COMPACTION_ENABLED`) and per-tool allowlisting (`PICLAW_TOOL_RESULT_COMPACTION_TOOLS`).
 - Semantic summaries are enabled by default for compacted tool results; if generation fails or times out (`PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_TIMEOUT_MS`), Piclaw falls back to preview-based summaries.
-- Session idle timeouts are configurable: `PICLAW_SESSION_IDLE_MAX_WAIT_MS` controls interactive turn flushing; `PICLAW_SESSION_IDLE_COMPACTION_MAX_WAIT_MS` (default 5 min) allows extra wait time during compaction so the agent does not cut off mid-summarisation.
 - Background and scheduled turns use `PICLAW_BACKGROUND_AGENT_TIMEOUT` when set; otherwise they fall back to `PICLAW_AGENT_TIMEOUT`.
 - On `systemd --user` installs, keep `PICLAW_WORKSPACE`, `PICLAW_STORE`, and `PICLAW_DATA` stable across restarts. Startup recovery relies on the persisted SQLite state plus writable IPC files under `PICLAW_DATA/ipc/tasks`.
-- Session auto-rotation defaults to `32 MB`. Persisted sessions can hydrate to much larger in-memory footprints than their on-disk JSONL size suggests.
+- Native sessions use SQLite context maintenance. Legacy JSONL rotation and session idle-wait settings have no native execution effect; retained historical file settings do not enable rotation.
 - Warm-session pressure mode defaults to **384 MB RSS** before clamping the main-session cache. Set `PICLAW_MAIN_SESSION_PRESSURE_RSS_BYTES` to override the threshold.
 - In pressure mode, the main-session pool clamps to `PICLAW_MAIN_SESSION_PRESSURE_POOL_MAX_SIZE` (default `1`) and uses the shorter `PICLAW_MAIN_SESSION_PRESSURE_IDLE_TTL_MS` (default `60000`).
 - Oversized persisted `toolResult` payloads are sanitized before session resume and at append-time so inline image/blob payloads do not keep re-accumulating inside session files.
@@ -930,3 +925,9 @@ Notes:
 ## Remote Peer add-on
 
 Cross-instance identity, pairing, messaging, and mediated work are configured by the installable [Remote Peer add-on](https://rcarmo.github.io/piclaw-addons/addons/remote-peer/). Core has no peer-specific settings or peer-owned state.
+
+### Retired Core execution settings
+
+Native SDK task/submission maintenance owns compaction and recovery. The former Core automatic-recovery attempt/budget/loop-guard controls, session JSONL rotation limits, and foreground/idle/scoped trigger thresholds are no longer active settings. Sessions panes retain the independent tool-use budget and session-isolation controls. Native auto-compaction remains on the Compaction pane; accepted maintenance is not cancelled or replayed by a policy edit.
+
+Old JSON configuration and historical receipts remain untouched. Declared retired domain keys are preserved but never resolved or accepted in a new patch; unrelated unknown keys still fail validation. Stale general-setting saves containing retired execution fields reject before any change. Root SDK summary/model/watchdog utilities with real consumers retain their own settings; they do not enable a second native recovery loop. See [prompt-owner retirement](development/native-prompt-retirement.md).

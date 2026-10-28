@@ -1,3 +1,4 @@
+import { admitSqliteWrite, isSqliteContention as isBusy } from '../../db/sqlite-async-admission.js';
 import { getQueuedInputIntent } from "./queued-input-intent.js";
 import { assertProcessAdmission } from "../../runtime/process-admission.js";
 import {
@@ -123,10 +124,7 @@ interface OperationRow {
   cancellation_cause: string | null;
   cancellation_requested_at: string | null;
   harness_session_id: string | null;
-  harness_lane: string | null;
   harness_operation_id: string | null;
-  harness_state: HarnessCorrelation["state"] | null;
-  harness_watch_generation: number | null;
   terminal_disposition: string | null;
   terminal_message_row_id: number | null;
   terminal_error_code: string | null;
@@ -351,9 +349,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         || operation.phase !== "executing" || operation.cancellation_source_seq !== null) throw new EffectAdmissionError("owner_conflict");
       if (operation.version !== request.expectedVersion) throw new EffectAdmissionError("version_mismatch");
       const harness = request.expectedHarness;
-      if (operation.harness_session_id !== harness.sessionId || operation.harness_lane !== harness.lane
-        || operation.harness_operation_id !== harness.harnessOperationId || operation.harness_state !== harness.state
-        || operation.harness_watch_generation !== harness.watchGeneration) throw new EffectAdmissionError("owner_conflict");
+      if (operation.harness_session_id !== harness.sessionId || operation.harness_operation_id !== harness.harnessOperationId) throw new EffectAdmissionError("owner_conflict");
       const source = this.sourceRow(request.chatJid, request.effect.sourceSeq);
       if (!source || source.source_id !== request.sourceId || source.source_hash !== request.sourceHash
         || source.kind !== "message" || source.payload_ref !== request.payloadRef || request.payloadRef !== `queued-source:${request.sourceId}`
@@ -419,9 +415,9 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     );
   }
 
-  /** Host-only lifecycle CAS, not candidate execution authority. The current owner must
+  /** Host-only settlement CAS, not candidate execution authority. The current owner must
    * first verify committed outcomes for EVERY claimed input; this store cannot read
-   * candidate storage. Version + exact running correlation fence late completions.
+   * candidate storage. Version + immutable execution binding fence late completions.
    * Cancellation may finish only once the candidate has actually stopped. */
   finishHarness(input: FinishHarnessRequest): Promise<ResultValue<OperationSnapshot, ServiceWorkError>> {
     return this.mutate("finishHarness", input, request => this.applyHarnessFinish(request as FinishHarnessRequest));
@@ -827,10 +823,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     if (row.harness_session_id !== null) {
       const equal =
         row.harness_session_id === request.sessionId &&
-        row.harness_lane === request.lane &&
-        row.harness_operation_id === request.harnessOperationId &&
-        row.harness_state === request.state &&
-        row.harness_watch_generation === request.watchGeneration;
+        row.harness_operation_id === request.harnessOperationId;
       return equal
         ? this.applied(this.requireOperationSnapshot(row.operation_id), true)
         : this.rejected("owner_conflict", {
@@ -845,18 +838,14 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       .query(
         `
       UPDATE service_effect_s01_operations
-      SET harness_session_id = ?, harness_lane = ?, harness_operation_id = ?, harness_state = ?,
-          harness_watch_generation = ?, phase = ?, version = version + 1
+      SET harness_session_id = ?, harness_operation_id = ?,
+          phase = CASE WHEN cancellation_source_seq IS NULL THEN 'executing' ELSE 'cancelling' END, version = version + 1
       WHERE operation_id = ? AND version = ? AND phase <> 'terminal' AND harness_session_id IS NULL
     `,
       )
       .run(
         request.sessionId,
-        request.lane,
         request.harnessOperationId,
-        request.state,
-        request.watchGeneration,
-        phaseForHarness(request.state),
         row.operation_id,
         request.expectedVersion,
       );
@@ -874,13 +863,12 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       return this.rejected("version_mismatch", { observedVersion: row.version });
     const h = request.expectedHarness;
     if (this.chatRow(row.chat_jid).activeOperationId !== row.operation_id ||
-      !["executing", "cancelling"].includes(row.phase) || row.harness_state !== "running" ||
-      row.harness_session_id !== h.sessionId || row.harness_lane !== h.lane ||
-      row.harness_operation_id !== h.harnessOperationId || row.harness_watch_generation !== h.watchGeneration)
+      !["executing", "cancelling"].includes(row.phase) ||
+      row.harness_session_id !== h.sessionId || row.harness_operation_id !== h.harnessOperationId)
       return this.rejected("owner_conflict", { conflictingOperationId: row.operation_id });
     const update = this.database.query(`UPDATE service_effect_s01_operations
-      SET harness_state = 'finished', phase = 'settling', version = version + 1
-      WHERE operation_id = ? AND version = ? AND harness_state = 'running' AND phase IN ('executing', 'cancelling')`)
+      SET phase = 'settling', version = version + 1
+      WHERE operation_id = ? AND version = ? AND phase IN ('executing', 'cancelling')`)
       .run(row.operation_id, request.expectedVersion);
     if (update.changes !== 1) return this.rejected("version_mismatch");
     return this.applied(this.requireOperationSnapshot(row.operation_id), false);
@@ -1053,9 +1041,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       );
 
     try {
-      const outcome = this.database
-        .transaction(() => this.applyMutationWithinTransaction(method, request, apply))
-        .immediate();
+      const outcome = await admitSqliteWrite(this.database, () => this.applyMutationWithinTransaction(method, request, apply));
       if (!outcome.ok) return this.fail(method, effect, outcome.error);
 
       const acknowledgementFault = this.fault(
@@ -1537,15 +1523,7 @@ function operationRow(raw: Record<string, unknown>): OperationRow {
         ? null
         : requiredInstant(raw.cancellation_requested_at),
     harness_session_id: harnessSessionId,
-    harness_lane:
-      harnessSessionId === null ? null : requiredText(raw.harness_lane),
     harness_operation_id: nullableText(raw.harness_operation_id),
-    harness_state:
-      harnessSessionId === null ? null : harnessState(raw.harness_state),
-    harness_watch_generation:
-      harnessSessionId === null
-        ? null
-        : requiredInteger(raw.harness_watch_generation, 0),
     terminal_disposition: terminalDisposition,
     terminal_message_row_id: nullableInteger(raw.terminal_message_row_id, 1),
     terminal_error_code: nullableText(raw.terminal_error_code),
@@ -1592,10 +1570,7 @@ function operationSnapshot(
       ? null
       : Object.freeze({
           sessionId: row.harness_session_id,
-          lane: row.harness_lane!,
           harnessOperationId: row.harness_operation_id,
-          state: row.harness_state!,
-          watchGeneration: row.harness_watch_generation!,
         });
   const terminal =
     row.terminal_disposition === null
@@ -1746,27 +1721,13 @@ function normaliseCancellation(
   });
 }
 
-function normaliseHarness(
-  input: unknown,
-): NonNullable<OperationSnapshot["harness"]> {
-  if (
-    !plainRecord(input) ||
-    !exactKeys(input, [
-      "sessionId",
-      "lane",
-      "harnessOperationId",
-      "state",
-      "watchGeneration",
-    ])
-  )
-    throw new CorruptStateError();
-  return Object.freeze({
-    sessionId: requiredText(input.sessionId),
-    lane: requiredText(input.lane),
-    harnessOperationId: nullableText(input.harnessOperationId),
-    state: harnessState(input.state),
-    watchGeneration: requiredInteger(input.watchGeneration, 0),
-  });
+/** Historical decision JSON is evidence, never a new mutation or SDK observation. */
+function normaliseHarness(input: unknown): NonNullable<OperationSnapshot["harness"]> {
+  if (!plainRecord(input)) throw new CorruptStateError();
+  if (exactKeys(input,["sessionId","lane","harnessOperationId","state","watchGeneration"])) {
+    requiredText(input.lane); requiredInteger(input.watchGeneration,0); legacyHarnessState(input.state);
+  } else if (!exactKeys(input,["sessionId","harnessOperationId"])) throw new CorruptStateError();
+  return Object.freeze({sessionId:requiredText(input.sessionId),harnessOperationId:nullableText(input.harnessOperationId)});
 }
 
 function serviceError(
@@ -1790,20 +1751,6 @@ function serviceError(
       ? { conflictingOperationId: details.conflictingOperationId }
       : {}),
   });
-}
-
-function isBusy(cause: unknown): boolean {
-  if (cause === null || typeof cause !== "object") return false;
-  try {
-    const code = Object.getOwnPropertyDescriptor(cause, "code")?.value;
-    const errno = Object.getOwnPropertyDescriptor(cause, "errno")?.value;
-    return (
-      code === "SQLITE_BUSY" || code === "SQLITE_BUSY_SNAPSHOT" || errno === 5
-    );
-  } catch (caught) {
-    void caught;
-    return false;
-  }
 }
 function requiredText(value: unknown): string {
   if (
@@ -1882,7 +1829,7 @@ function operationPhase(value: unknown): OperationSnapshot["phase"] {
     throw new CorruptStateError();
   return value as OperationSnapshot["phase"];
 }
-function harnessState(value: unknown): HarnessCorrelation["state"] {
+function legacyHarnessState(value: unknown): void {
   if (
     typeof value !== "string" ||
     !["not_started", "running", "suspended", "aborting", "finished"].includes(
@@ -1890,7 +1837,7 @@ function harnessState(value: unknown): HarnessCorrelation["state"] {
     )
   )
     throw new CorruptStateError();
-  return value as HarnessCorrelation["state"];
+
 }
 function queueState(value: unknown): QueuedInputState {
   if (
@@ -1907,19 +1854,6 @@ function queueKind(value: unknown): RecordQueuedInputRequest["queueKind"] {
   )
     throw new CorruptStateError();
   return value as RecordQueuedInputRequest["queueKind"];
-}
-function phaseForHarness(
-  state: HarnessCorrelation["state"],
-): OperationSnapshot["phase"] {
-  return state === "not_started"
-    ? "starting_harness"
-    : state === "running"
-      ? "executing"
-      : state === "suspended"
-        ? "suspended"
-        : state === "aborting"
-          ? "cancelling"
-          : "settling";
 }
 function queueTransition(
   from: QueuedInputState,

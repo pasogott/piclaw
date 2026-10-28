@@ -13,7 +13,7 @@ function deferred<T>() {
 type Result = { status: string; message: string; contextUsage?: { tokens: number | null; contextWindow: number | null; percent: number | null; sessionGeneration?: string; tokensAreAuthoritative?: true }; sessionGenerationChanged?: boolean; sessionGeneration?: string };
 
 function fixture(terminalTtlMs = 15_000) {
-  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) }, { getInflightRuns: () => [] }, terminalTtlMs);
+  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) }, terminalTtlMs);
   const stats = deferred<Result>();
   const compact = deferred<Result>();
   const statsStarted = deferred<void>();

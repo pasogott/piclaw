@@ -1,3 +1,5 @@
+import { admitSqliteWrite } from "../../../db/sqlite-async-admission.js";
+import { captureWebRequestAuthority } from "../auth/auth-gateway.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { parseBudgetDecimalMicros } from "../../../budget/amount.js";
 import { getBudgetSettingsState } from "../../../budget/settings.js";
@@ -100,6 +102,8 @@ export async function handleBudgetSettingsAction(
   options: { accessMode?: ReturnType<typeof readAccessConfig>["mode"] } = {},
 ): Promise<Response> {
   if ((options.accessMode ?? readAccessConfig().mode) !== "single-user") return fail(channel, "Budget mutations are disabled until owner-bound controls are available.", 403);
+  const requestAuthority = captureWebRequestAuthority(channel.authGateway, req);
+  const authorise = () => { requestAuthority(); if ((options.accessMode ?? readAccessConfig().mode) !== "single-user") throw Error("Budget authority changed"); };
   let body: Record<string, unknown>;
   try { body = objectBody(await req.json()); }
   catch (error) { return fail(channel, error instanceof Error ? error.message : "Invalid budget request."); }
@@ -107,10 +111,19 @@ export async function handleBudgetSettingsAction(
   const allowed = ALLOWED_KEYS.get(action);
   if (!allowed) return fail(channel, "Unsupported budget action.");
   if (Object.keys(body).some((key) => !allowed.has(key))) return fail(channel, "Budget request contains unsupported fields.");
-  const now = new Date();
   const chatJid = new URL(req.url).searchParams.get("chat_jid")?.trim() || "web:default";
 
   try {
+    let accountRef: string | null | undefined;
+    if (action === "save_cap" && body.scope === "provider_window") {
+      const provider = text(body.provider_id, "provider_id")!;
+      const resolver = channel.agentPool.resolveBudgetProviderAccountRef;
+      if (typeof resolver !== "function") throw Error("Provider credential binding is unavailable.");
+      accountRef = await resolver.call(channel.agentPool, provider);
+      if (!accountRef) throw Error("No active provider credential is available for this guard.");
+    }
+    const receipt = await admitSqliteWrite(getDb(), () => {
+    const now = new Date();
     if (action === "save_cap") {
       const id = text(body.id, "id", true);
       const scope = text(body.scope, "scope") as BudgetCapScope;
@@ -134,16 +147,13 @@ export async function handleBudgetSettingsAction(
       if (scope === "provider_window") {
         input.providerId = text(body.provider_id, "provider_id")!;
         input.quotaDimension = text(body.quota_dimension, "quota_dimension")!;
-        const resolver = channel.agentPool.resolveBudgetProviderAccountRef;
-        if (typeof resolver !== "function") throw new Error("Provider credential binding is unavailable.");
-        input.accountRef = await resolver.call(channel.agentPool, input.providerId);
-        if (!input.accountRef) throw new Error("No active provider credential is available for this guard.");
+        input.accountRef = accountRef;
       }
       saveBudgetCap(input);
     } else if (action === "set_cap_enabled") {
       const id = text(body.id, "id")!;
       const existing = getBudgetCap(id);
-      if (!existing) return fail(channel, `Unknown budget cap: ${id}`, 404);
+      if (!existing) throw Error(`Unknown budget cap: ${id}`);
       if (revision(body.confirm_revision) !== existing.revision) throw new Error("Cap revision changed; reload before confirming this update.");
       if (typeof body.enabled !== "boolean") throw new Error("enabled must be a boolean.");
       setBudgetCapEnabled(id, body.enabled);
@@ -177,12 +187,14 @@ export async function handleBudgetSettingsAction(
       }
       setBudgetWorkStatus(work.id, "cancelled");
     }
-    return json(channel, {
+    return {
       ok: true,
       action,
       continuation_required: action === "grant_allowance" || action === "warnings_only" || action === "resume_work",
       ...getBudgetSettingsState(chatJid),
-    });
+    };
+    }, authorise, req.signal);
+    return json(channel, receipt);
   } catch (error) {
     const normalized = error instanceof Error ? error : new Error(String(error));
     return fail(channel, normalized.message, mutationStatus(normalized));

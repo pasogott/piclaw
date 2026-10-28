@@ -28,7 +28,7 @@ Drain preflights its selected rows and rejects protected accepted input before d
 
 `enqueueAgentMessage` captures and calls the real web input handler. A missing handler rejects before storage, queueing or publication. The handler-less SDK/storage fallback is retired.
 
-Native facade queue control commands return an explicit input-admission error before session lookup, revocation or command protection. The separate public session-level handlers in `agent-control/handlers/queue.ts` remain for legacy/non-web control dispatch. They are outside the native queue interface; the broader composition/legacy-stack cleanup is tracked by #1672/#1673.
+Facade queue control commands return an explicit input-admission error before session lookup, revocation or command protection in every profile. The legacy session-level queue handlers and control dispatcher are deleted; no direct SDK prompt/steer fallback remains. Broader resource/composition cleanup is tracked by #1672/#1673.
 
 The old SDK replay audit and wrapper have no supported current caller. Their original bytes are retained as [non-executable historical text](../archive/legacy-queue-audit/README.md). Historical reports are preserved.
 

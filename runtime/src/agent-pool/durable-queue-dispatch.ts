@@ -51,10 +51,7 @@ export function createDurableQueueDispatch(options: {
     const content = message.content, requestId = `message:${rowId}:${source.sourceId}`;
     const requestHash = hashCanonicalRequest({ type: "input", requestId, content });
     return async () => {
-      // Host and SDK use separate connections to the same WAL database. Yield on
-      // transient writer contention and rejoin the same accepted request ID.
-      const retryDeadline = Date.now() + 10_000;
-      for (;;) {
+      // SQL admission owns contention retries. Never replay an entered dispatch.
       try {
         assert();
         const frontier = await frontierFor(chatJid); assert();
@@ -83,10 +80,10 @@ export function createDurableQueueDispatch(options: {
         const id = await submit(accepted); assert();
         if (correlation && !operation.harness) {
           const harness = structuredClone(correlation(id));
-          if (harness.state !== 'running' || harness.harnessOperationId !== String(id)) return 'pending';
+          if (harness.harnessOperationId !== String(id)) return 'pending';
           const request = { effect: { idempotencyKey: `running:${operationId}:${id}`, requestHash: '', operationId,
             sourceSeq: source.sourceSeq, provenanceRef: source.provenanceRef, redactionClass: 'private' as const },
-            expectedVersion: operation.version, ...harness };
+            expectedVersion: operation.version, ...harness, harnessOperationId: String(id) };
           request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
           const bound = await bind(request); assert();
           if (!bound.ok) return 'pending';
@@ -104,15 +101,9 @@ export function createDurableQueueDispatch(options: {
         }
         return "pending";
       } catch (error) {
-        if (!shutdown.aborted && (error as { code?: string })?.code === "SQLITE_BUSY" && Date.now() < retryDeadline) {
-          await new Promise(resolve => setTimeout(resolve, 25));
-          assert();
-          continue;
-        }
         // Lost acknowledgements and failed waits are uncertain, never permission for legacy replay.
         log.warn("Accepted input dispatch remains pending", { operation: "durable_queue.dispatch_pending", err: error });
         return "pending";
-      }
       }
     };
   };

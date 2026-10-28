@@ -133,7 +133,6 @@ export function createWebChannelEndpointContexts(
           json: (payload, status = 200) => channel.json(payload, status),
           getAgentStatus: (chatJid) => channel.getAgentStatus(chatJid),
           getExtensionWorkingState: (chatJid) => channel.getExtensionWorkingState?.(chatJid) ?? null,
-          recoverStaleInflightRun: (chatJid, recoveryOptions) => channel.recoverStaleInflightRun(chatJid, recoveryOptions),
           getBuffer: (turnId, panel) => channel.getBuffer(turnId, panel),
           getContextUsageForChat: async (chatJid) => {
             // A rejected native read may mean ownership/binding loss. Do not

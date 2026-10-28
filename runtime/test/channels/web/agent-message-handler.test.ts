@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import "../../helpers.ts";
-import { beginChatRun, getChatCursor, getInflightMessageId, initDatabase } from "../../../src/db.js";
+import { setChatCursor, getChatCursor, getDb, initDatabase } from "../../../src/db.js";
 import { getIdentityConfig, setAssistantAvatar } from '../../../src/core/config.js';
 import { handleAgentMessage } from "../../../src/channels/web/handlers/agent.ts";
 import { AgentStatusStore } from "../../../src/channels/web/agent/agent-status-store.ts";
@@ -12,7 +12,7 @@ function deferred<T>() {
 }
 
 function modelLookupFixture(getCurrentModelLabel: () => Promise<string | null>) {
-  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) }, { getInflightRuns: () => [] });
+  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
   type Result = { status: string; message: string };
   const compact = deferred<Result>();
   const stats = deferred<Result>();
@@ -694,11 +694,7 @@ describe("web agent message handler", () => {
 
     const chatJid = "web:default";
     const inflightTimestamp = "2026-03-14T21:00:00.000Z";
-    beginChatRun(chatJid, inflightTimestamp, {
-      prevTs: "2026-03-14T20:59:00.000Z",
-      messageId: "active-message-id",
-      startedAt: "2026-03-14T21:00:00.100Z",
-    });
+    setChatCursor(chatJid, inflightTimestamp);
 
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const sentMessages: Array<{ chatJid: string; content: string; options: unknown }> = [];
@@ -753,7 +749,7 @@ describe("web agent message handler", () => {
     expect(sentMessages[0]?.content).toBe("tree output");
     expect(broadcasts.some((entry) => entry.event === "new_post")).toBe(true);
     expect(getChatCursor(chatJid)).toBe(inflightTimestamp);
-    expect(getInflightMessageId(chatJid)).toBe("active-message-id");
+    expect(getDb().query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chatJid)).toEqual({chat_jid:chatJid,cursor_ts:inflightTimestamp,queued_followups_json:null});
   });
 
   test("runs extension-style slash commands immediately while the current session is active", async () => {

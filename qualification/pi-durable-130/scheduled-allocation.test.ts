@@ -18,7 +18,7 @@ import type { ScheduledRunLease, ScheduledRunStore } from "../../runtime/src/ser
 import { context, openFixture, barrier } from "./src/fixture.js";
 import { value } from "./src/host-handoff.js";
 
-for (const model of [undefined, "qualification/synthetic"]) test(`allocation-only helper (fake runAgent): source-bound lease, rollback, public fork, forged route denied; model=${model}`, async () => {
+for (const model of [undefined, "qualification/synthetic"]) test(`allocation-only helper (synthetic native dispatch): source-bound lease, rollback, public fork, forged route denied; model=${model}`, async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
   mkdirSync(join(process.env.PICLAW_WORKSPACE!, ".piclaw"), { recursive: true });
   initDatabase();
@@ -47,7 +47,7 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
   const chat = model ? "web:allocation-override" : "web:allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: main.id }];
   const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "session"]]), offlineInitialize: true,
-    runtime: { incarnation: "allocation", sessionId: "allocation", lane: "main", generation: 1, now: () => new Date().toISOString(),
+    runtime: { incarnation: "allocation", sessionId: "allocation", now: () => new Date().toISOString(),
       harnessOptions: { models: fixture.models, registry: fixture.registry, settings: { retry: { enabled: false } } } },
     answers: { resolver: { resolve: () => null }, put() {} },
   }, context);
@@ -61,7 +61,7 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
   let failure: unknown;
   const deps: SchedulerDeps = { queue, sendMessage: async () => {}, agentPool: {
     saveSessionPosition: async () => "main", restoreSessionPosition: async () => {}, getCurrentModelLabel: async () => null,
-    runAgent: async () => {
+    dispatchScheduledAgent: async () => {
       try {
         const input = await bundle.allocateScheduledConversation(lease);
         expect(input.conversationId).not.toBe(main.id);
@@ -136,7 +136,7 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   let acceptMainDuringPayload = false;
   const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "original"], [emptyChat, "empty-original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
-    runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
+    runtime: { incarnation: "side-allocation", sessionId: "side-allocation",
       now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry,
         settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
     answers: { resolver: { resolve(ref) {

@@ -48,13 +48,13 @@ const root = process.env.DURABLE_ADDONS_ROOT;
 if (!root) throw new Error("Plan qualification requires DURABLE_ADDONS_ROOT (piclaw-addons de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3)");
 const addonDir = resolve(root, "addons/plan-sidebar");
 for (const [file, digest] of Object.entries({
-  "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+  "index.ts": "303b6a270cdb0dfbdf0ffbce5ac02ee16574ea0da7e43d503f116137a1ee6579",
   "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
-  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+  "compat/extension-kv.ts": "02ae106a2d7ceee64286cac755943d53ed2fe725ef666640a889b6d63315324c",
 })) {
   expect(createHash("sha256").update(new Uint8Array(await Bun.file(resolve(addonDir, file)).arrayBuffer())).digest("hex")).toBe(digest);
 }
-expect((await Bun.file(resolve(addonDir, "package.json")).json()).version).toBe("0.1.25");
+expect((await Bun.file(resolve(addonDir, "package.json")).json()).version).toBe("0.1.27");
 
 type Definition = ToolDefinition<TSchema, JsonValue>;
 type HiddenMessage = { customType: string; content: { type: "text"; text: string }[]; display: boolean };
@@ -66,7 +66,7 @@ type Capture = {
   registerTool(definition: Definition): void;
 };
 
-planTest("actual Plan 0.1.25 factory: existing-chat KV, prepared tool, per-request context projection (not full SDK run equivalence), scope and effect fences; hidden-entry gap explicit", async () => {
+planTest("actual Plan 0.1.27 factory: existing-chat KV, prepared tool, per-request context projection (not full SDK run equivalence), scope and effect fences; hidden-entry gap explicit", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;
   const keys = ["__piclawRuntimeInterop", "__piclaw_planSidebarApi", "__piclaw_registerAddonConfigApi", "__PICLAW_BROADCAST_EVENT__"];
   const saved = keys.map(key => Object.getOwnPropertyDescriptor(globals, key));

@@ -47,7 +47,8 @@ async function sourceRoot(body: (f: any) => Promise<void>, native = false) {
  async function accept(){
  source=value(await work.acceptSource(sealed({effect:effect('image-source'),chatJid:'web:images',sourceId:'image-source',kind:'message',payloadRef:native ? 'message-row:1' : 'input:image',targetOperationId:null,parentSourceSeq:null,acceptedAt:at,createWakeIntent:false})));
  const claimed=value(await work.claimNext(sealed({effect:effect('image-claim'),chatJid:source.chatJid,expectedFrontier:0,newOperationId:'host-images',claimedAt:at})))!;
- const bound=native ? claimed.operation : value(await work.bindHarness(sealed({effect:effect('image-bind',claimed.operation.operationId,source.sourceSeq),expectedVersion:claimed.operation.version,sessionId:'image-session',lane:'main',harnessOperationId:'1',state:'finished',watchGeneration:1})));
+ let bound=native ? claimed.operation : value(await work.bindHarness(sealed({ effect:effect('image-bind',claimed.operation.operationId,source.sourceSeq), expectedVersion:claimed.operation.version, sessionId:'image-session', harnessOperationId:'1' })));
+ if(!native){const finish={effect:{...effect('image-settle',bound.operationId,source.sourceSeq),operationId:bound.operationId},expectedVersion:bound.version,expectedHarness:bound.harness!};finish.effect.requestHash=hashCanonicalRequest({method:'finishHarness.v1',...finish} as any);bound=value(await work.finishHarness(finish));}
  operation=Object.freeze({...bound,claimedSourceSeqs:Object.freeze([...bound.claimedSourceSeqs]),harness:bound.harness ? Object.freeze({...bound.harness}) : null});
  }
  if(!native)await accept();
@@ -128,3 +129,48 @@ test('native application bootstrap forwards Codex projection before EF-S02; publ
   expect(assistants[0]!.content).toEqual([{type:'text',text:canonical}]);
  }finally{await harness.close(context);}
 },true));
+
+import { admitSqliteWrite } from '../../runtime/src/db/sqlite-async-admission.js';
+
+for (const outcome of ['commit', 'revoke', 'entered-error'] as const) test(`artifact publication awaits owned WAL admission: ${outcome}`, async () => {
+ const cwd=await mkdtemp(join(tmpdir(),'codex-admission-'));
+ const root=new Database(join(cwd,'root.sqlite'));
+ let writer:Database|undefined, pending:Promise<void>|undefined;
+ try {
+  root.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=619;
+   CREATE TABLE extension_kv(extension_id TEXT,scope TEXT,scope_key TEXT,key TEXT,value TEXT,updated_at TEXT,PRIMARY KEY(extension_id,scope,scope_key,key))`);
+  const path='.pi/openai-codex-images/call.png';
+  await mkdir(join(cwd,'.pi/openai-codex-images'),{recursive:true});await writeFile(join(cwd,path),'image');
+  let current=true,entries=0,settled=false;
+  const assertCurrent=()=>{if(!current)throw Error('revoked');};
+  const operation=Object.freeze({id:'codex',sessionId:'session',cwd,model:{provider:'openai-codex',id:'test',api:'openai-codex-responses'},signal:new AbortController().signal,assertCurrent});
+  let reached!:()=>void;const writing=new Promise<void>(resolve=>{reached=resolve;});
+  const failure=Object.assign(Error('entered contention'),{code:'SQLITE_BUSY'});
+  const store=createHostCodexArtifactStore(root,operation,{hostOperationId:'host',chatJid:'chat',assertCurrent,write<T>(body:()=>T):Promise<T>{
+   reached();
+   return admitSqliteWrite(root,()=>{
+    entries++;const result=body();
+    if(outcome==='entered-error')throw failure;
+    return result;
+   },assertCurrent,operation.signal,undefined,assertCurrent);
+  }});
+  writer=new Database(join(cwd,'root.sqlite'));writer.exec('BEGIN IMMEDIATE');
+  pending=store.publish(operation,{kind:'image',savedImage:{absolutePath:join(cwd,path),relativePath:path,callId:'call',outputFormat:'png'}});
+  void pending.then(()=>{settled=true;},()=>{settled=true;});
+  await writing;await Bun.sleep(40);
+  expect(settled).toBe(false);expect(entries).toBe(0);
+  expect(root.query('PRAGMA busy_timeout').get()).toEqual({timeout:619});
+  if(outcome==='revoke')current=false;
+  writer.exec('ROLLBACK');
+  if(outcome==='revoke')await expect(pending).rejects.toThrow('revoked');
+  else if(outcome==='entered-error')await expect(pending).rejects.toBe(failure);
+  else {await pending;expect(store.refs()).toHaveLength(1);}
+  expect(entries).toBe(outcome==='revoke'?0:1);
+  expect(root.query('SELECT * FROM extension_kv').all()).toHaveLength(outcome==='commit'?1:0);
+  expect(root.inTransaction).toBe(false);
+  expect(root.query('PRAGMA busy_timeout').get()).toEqual({timeout:619});
+ }finally{
+  if(writer?.inTransaction)writer.exec('ROLLBACK');
+  await pending?.catch(()=>{});writer?.close();root.close();await rm(cwd,{recursive:true,force:true});
+ }
+});

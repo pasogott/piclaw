@@ -103,12 +103,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
       resumeChat: (chatJid: string, threadRootId?: number | null) => {
         calls.push(`resume:${chatJid}:${threadRootId ?? "null"}`);
       },
-      skipFailedOnModelSwitch: (chatJid: string) => {
-        calls.push(`skip-failed:${chatJid}`);
-      },
-      recoverInflightRuns: () => {
-        calls.push("recover");
-      },
       resumePendingChats: (chatJid?: string) => {
         calls.push(`resume-pending:${chatJid ?? ""}`);
       },
@@ -162,8 +156,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
     expect(service.replaceQueuedFollowupPlaceholder("web:test", 12, "updated", [1, 2], [{ type: "text" }], 6, true)).toBe(replaced);
     expect(service.getThreadRootId("web:test", "m-1")).toBe(55);
     service.resumeChat("web:test", 12);
-    service.skipFailedOnModelSwitch("web:test");
-    service.recoverInflightRuns();
     service.resumePendingChats("web:test");
     service.loadState();
     service.saveState();
@@ -203,8 +195,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
       "replace:web:test:12:updated:1,2:6:1",
       "thread-root:web:test:m-1",
       "resume:web:test:12",
-      "skip-failed:web:test",
-      "recover",
       "resume-pending:web:test",
       "load",
       "save",

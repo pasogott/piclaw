@@ -1,3 +1,4 @@
+import { hasUnsettledLegacyCursorEvidence } from "../db/chat-cursor-storage.js";
 import type { NativeTurnViewChannel } from "../channels/web/agent/native-turn-view.js";
 /**
  * runtime/bootstrap.ts – Runtime bootstrap orchestration and default dependency wiring.
@@ -13,7 +14,7 @@ import type { WebChannelOpts } from "../channels/web.js";
 export interface RuntimeBackend {
   /** Resolves only after a failed public SDK session has closed its storage. */
   readonly storageFailure?: Promise<unknown>;
-  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand">>;
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand" | "prepareAddonOperation" | "dispatchAddonOperation" | "reconcileAddonOperation" | "dispatchDreamOperation">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
   attachChannel?(channel: NativeTurnViewChannel & { resumePendingChats?(chatJid?: string): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
@@ -90,6 +91,25 @@ export async function createRecoverableRuntimeBackend(prepare: () => Promise<Run
   };
   const sessionOptions: RuntimeBackend["sessionOptions"] = Object.freeze({
     getDurableSession,
+    dispatchDreamOperation:current.sessionOptions.dispatchDreamOperation?async(...args)=>{
+      await ready();if(!current.sessionOptions.dispatchDreamOperation)throw Error('Native Dream dispatcher unavailable');
+      return current.sessionOptions.dispatchDreamOperation(...args); // Never replay an uncertain invocation.
+    }:undefined,
+    prepareAddonOperation: current.sessionOptions.prepareAddonOperation ? async (...args) => {
+      await ready();
+      if(!current.sessionOptions.prepareAddonOperation)throw Error("Native add-on admission unavailable");
+      return current.sessionOptions.prepareAddonOperation(...args); // No automatic replay after uncertain admission.
+    } : undefined,
+    dispatchAddonOperation: current.sessionOptions.dispatchAddonOperation ? async (...args) => {
+      await ready();
+      if(!current.sessionOptions.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
+      return current.sessionOptions.dispatchAddonOperation(...args); // Same accepted ID; no automatic retry after uncertainty.
+    } : undefined,
+    reconcileAddonOperation: current.sessionOptions.reconcileAddonOperation ? async (...args) => {
+      await ready();
+      if(!current.sessionOptions.reconcileAddonOperation)throw Error('Native add-on recovery unavailable');
+      return current.sessionOptions.reconcileAddonOperation(...args); // Observation only; no replay on failure.
+    } : undefined,
     dispatchScheduledAgent: current.sessionOptions.dispatchScheduledAgent ? async (...args) => {
       await ready();
       if (!current.sessionOptions.dispatchScheduledAgent) throw Error("Native scheduled dispatch unavailable");
@@ -207,12 +227,10 @@ import {
 const log = createLogger("runtime.bootstrap");
 
 export type RuntimeBootstrapQueue =
-  & StartRuntimeLoopDeps["queue"]
   & SchedulerDeps["queue"]
   & ShutdownDeps["queue"];
 
 export type RuntimeBootstrapAgentPool =
-  & StartRuntimeLoopDeps["agentPool"]
   & SchedulerDeps["agentPool"]
   & RuntimeModelResolver
   & ShutdownDeps["agentPool"];
@@ -243,7 +261,7 @@ export interface RuntimeBootstrapDeps {
   initializeRuntimeEnvironment(state: RuntimeBootstrapState): { effectiveMode: "single-user" } | void;
   hydrateMcpCredentials(): Promise<HydratedMcpCredential[]>;
   clearMcpCredentials(entries: HydratedMcpCredential[]): void;
-  createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"]): Promise<RuntimeBootstrapAgentPool>;
+  createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"], legacyCapture?: true): Promise<RuntimeBootstrapAgentPool>;
   startWebChannel(queue: RuntimeBootstrapQueue, agentPool: RuntimeBootstrapAgentPool, bind?: RuntimeBackend["bind"]): Promise<RuntimeBootstrapWeb>;
   startBackgroundModelRefresh(agentPool: RuntimeBootstrapAgentPool): void;
   startOptionalPushoverChannel(): Promise<RuntimeBootstrapPushover | null>;
@@ -322,7 +340,7 @@ export function createDefaultRuntimeBootstrapDeps(
     initializeRuntimeEnvironment: () => initializeRuntimeEnvironment(base.state),
     hydrateMcpCredentials: () => hydrateMcpKeychainCredentials(WORKSPACE_DIR),
     clearMcpCredentials: clearHydratedMcpCredentials,
-    createAgentPool: async (sessionOptions) => {
+    createAgentPool: async (sessionOptions, legacyCapture) => {
       const modelServices = await models();
       installRuntimeModelExecutor(modelServices.modelRuntime);
       registerGitHubCopilotDynamicModels(modelServices.modelRuntime);
@@ -331,6 +349,7 @@ export function createDefaultRuntimeBootstrapDeps(
         modelRuntime: modelServices.modelRuntime,
         modelRegistry: modelServices.modelRegistry,
         ...sessionOptions,
+        ...(legacyCapture ? {legacyCapture:true} : {}),
       });
       refreshCoordinator = new ModelRefreshCoordinator({
         modelRuntime: modelServices.modelRuntime,
@@ -392,7 +411,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       runtimeOwner.assertCurrentOwner();
       backend = await prepareApplicationBackend(runtimeOwner);
     }
-    const agentPool = partialPool = await deps.createAgentPool(backend?.sessionOptions);
+    const agentPool = partialPool = await deps.createAgentPool(backend?.sessionOptions, deps.migrationInspection ? true : undefined);
     deps.log("=== Piclaw - Pi Coding Agent Assistant ===");
 
     const web = partialWeb = await deps.startWebChannel(queue, agentPool, backend?.bind);
@@ -437,11 +456,8 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       return;
     }
     messageLoop = deps.startRuntimeLoop({
-      queue,
       state,
-      agentPool,
       assistantName: deps.assistantName,
-      triggerPattern: deps.triggerPattern,
       pollIntervalMs: deps.pollIntervalMs,
       signal: messageLoopController.signal,
     });
@@ -483,7 +499,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
             assert(!root.inTransaction, "Root DB transaction active");
             assert(!root.query("SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed') LIMIT 1").get(), "Pending S01 sources");
             assert(!root.query("SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal' LIMIT 1").get(), "Nonterminal S01 operations");
-            assert(!root.query("SELECT 1 FROM chat_cursors WHERE preflight_message_id IS NOT NULL OR inflight_message_id IS NOT NULL OR (queued_followups_json IS NOT NULL AND queued_followups_json <> '[]') LIMIT 1").get(), "Unsettled legacy chat cursors");
+            assert(!hasUnsettledLegacyCursorEvidence(root) && !root.query("SELECT 1 FROM main.chat_cursors WHERE queued_followups_json IS NOT NULL AND queued_followups_json <> '[]' LIMIT 1").get(), "Unsettled legacy chat cursors");
             const jids = (root.query("SELECT jid FROM chats UNION SELECT chat_jid AS jid FROM messages").all() as { jid: string }[]).map(row => row.jid);
             assert(getNewMessages(jids, state.lastTimestamp, deps.assistantName).messages.length === 0, "Unread accepted legacy messages");
             installedPool.assertLegacyCaptureIdle();

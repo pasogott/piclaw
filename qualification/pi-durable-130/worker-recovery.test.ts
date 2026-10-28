@@ -9,7 +9,7 @@ import { at, value } from './src/host-handoff.js';
 import { SqliteStorage } from '../../runtime/durable-engine/qualification/sqlite.ts';
 import { createHostController } from '../../runtime/durable-engine/src/host-controller.js';
 import { closeDatabase, initDatabase, getDb } from '../../runtime/src/db/connection.js';
-import { beginChatRun, getInflightRuns, rollbackInflightRun, getDeferredQueuedFollowups } from '../../runtime/src/db/chat-cursors.js';
+import { getChatCursor, setChatCursor, getDeferredQueuedFollowups } from '../../runtime/src/db/chat-cursors.js';
 import { createDurableConversationAdapter } from '../../runtime/src/agent-pool/durable-runtime-adapter.js';
 import { createDurableQueueDispatch } from '../../runtime/src/agent-pool/durable-queue-dispatch.js';
 import { createDurableRecoveryDispatch } from '../../runtime/src/agent-pool/durable-recovery-dispatch.js';
@@ -27,7 +27,8 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
   try {
     const { primary } = await f.prepare();
     const row = f.db.query('SELECT rowid AS rowId, id FROM messages WHERE id=?').get(primary.sourceId) as { rowId: number; id: string };
-    beginChatRun(f.chatJid, at, { prevTs: '', messageId: row.id, startedAt: at });
+    // Accepted SDK work survives while the host delivery cursor remains unacknowledged.
+    setChatCursor(f.chatJid, '');
     const before = f.snapshot(), committedId = f.committedIntentId!, bootEntries = f.providerEntries;
     // Public candidate request lookup proves the commit survived the lost host ACK.
     const requestId = `queued-steer:${f.intentSourceId}`;
@@ -81,7 +82,8 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     expect(f.snapshot()).toEqual(before);
     expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe('paused');
     expect(controller.recovered.map(x => x.input.sourceId)).toEqual([primary.sourceId, f.intentSourceId]);
-    expect(getInflightRuns().find(x => x.chatJid === f.chatJid)?.messageId).toBe(row.id);
+    expect(getChatCursor(f.chatJid)).toBe('');
+    expect((f.db.query('PRAGMA main.table_info(chat_cursors)').all() as {name:string}[]).map(row=>row.name)).toEqual(['chat_jid','cursor_ts','queued_followups_json']);
     const entries = f.providerEntries;
     expect(entries).toBe(bootEntries);
     const intent = controller.recovered[1]!.input;
@@ -98,8 +100,8 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     const channel = new WebChannel({ queue, agentPool: { setSessionBinder() {}, runAgent() { legacy++; throw Error('Legacy forbidden'); } } as any });
     channel.dispatchAcceptedInput = dispatch;
     channel.resumeChat = () => { releases++; };
-    // Existing cursor recovery API makes the persisted inflight primary visible again.
-    rollbackInflightRun(f.chatJid, '');
+    // No marker rollback or legacy recovery grant is needed to join accepted SDK work.
+    expect(getChatCursor(f.chatJid)).toBe('');
     const lane = `chat:${f.chatJid}`;
     const finished = barrier();
     const entered = barrier(); f.entryObserved = entered;
@@ -111,7 +113,7 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     const pending = dispatch.waitForPending({ chatJid: f.chatJid, messageId: row.id, rowId: row.rowId });
     await observing.promise;
     expect(queue.isLaneBusy(lane)).toBe(true); expect(next).toBe(0); expect(releases).toBe(0);
-    expect(getInflightRuns().find(x => x.chatJid === f.chatJid)).toBeUndefined();
+    expect(getChatCursor(f.chatJid)).toBe('');
     expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(0);
     await entered.promise; // The worker's explicit wait grants progress; observe its entry before repair.
     const workerEntries = f.providerEntries;
@@ -129,7 +131,8 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     expect(await pending).toBe('settled');
     for (let n = 0; n < 100 && !next; n++) await Bun.sleep(1);
     expect(next).toBe(1); expect(releases).toBe(1); expect(legacy).toBe(0);
-    expect(getInflightRuns().filter(x => x.chatJid === f.chatJid)).toEqual([]);
+    expect(getChatCursor(f.chatJid)).toBe(at);
+    expect((f.db.query('PRAGMA main.table_info(chat_cursors)').all() as {name:string}[]).map(row=>row.name)).toEqual(['chat_jid','cursor_ts','queued_followups_json']);
     expect(getDeferredQueuedFollowups(f.chatJid)).toEqual([]);
     expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1 AND chat_jid=?').all(f.chatJid)).toHaveLength(1);
     expect(f.db.query('SELECT state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq').all(f.chatJid)).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);

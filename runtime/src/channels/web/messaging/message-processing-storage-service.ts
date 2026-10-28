@@ -7,12 +7,13 @@
  */
 
 import type { InteractionRow } from "../../../db.js";
-import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
+import { isSlashCommandInvocation } from "../../../agent-control/agent-control-parser.js";
 import { processChat as processAgentChat } from "../handlers/agent.js";
 import type { LinkPreviewChannel } from "../media/link-previews.js";
 import {
   storeWebMessage as persistWebMessage,
   admitWebUserMessage,
+  admitWebMessage,
   type StoreWebMessageOptions,
   type WebUserMessageStoreOptions,
   type StoreWebMessageParams,
@@ -115,6 +116,15 @@ export class WebMessageProcessingStorageService {
     );
     recordTimelineInteraction(interaction);
     return interaction;
+  }
+
+  async admitMessage(chatJid: string, content: string, isBot: boolean, mediaIds: number[], contentBlocks: unknown[] | undefined,
+    authorise: () => void, signal?: AbortSignal): Promise<InteractionRow | null> {
+    const interaction = await admitWebMessage(this.channel, {
+      chatJid, content, isBot, mediaIds, agentId: this.options.defaultAgentId,
+      agentName: this.options.getAssistantName(), userName: this.options.getUserName?.() ?? null,
+    }, { contentBlocks }, authorise, signal);
+    recordTimelineInteraction(interaction); return interaction;
   }
 
   async admitUserMessage(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,

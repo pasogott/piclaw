@@ -53,9 +53,6 @@ export interface RuntimeMemorySnapshot {
   queued_prewarms: number;
   prewarm_queue_length: number;
   prewarm_cooldowns: number;
-  recovery_attempts_total: number;
-  recovery_recovered_runs: number;
-  recovery_exhausted_runs: number;
 }
 
 export interface SystemMetricsSnapshot {
@@ -291,7 +288,8 @@ function readCgroupMemoryCurrent(): number | null {
 }
 
 function normalizeRuntimeMemorySnapshot(snapshot: AgentPoolMemoryInstrumentationSnapshot | null | undefined): RuntimeMemorySnapshot | null {
-  if (!snapshot) return null;
+  // These are legacy session-pool counters, not native SDK runtime metrics.
+  if (!snapshot?.sessionManager) return null;
   return {
     cached_main_sessions: snapshot.cachedMainSessions,
     cached_side_sessions: snapshot.cachedSideSessions,
@@ -310,9 +308,6 @@ function normalizeRuntimeMemorySnapshot(snapshot: AgentPoolMemoryInstrumentation
     queued_prewarms: snapshot.sessionManager.queuedPrewarms,
     prewarm_queue_length: snapshot.sessionManager.prewarmQueueLength,
     prewarm_cooldowns: snapshot.sessionManager.prewarmCooldowns,
-    recovery_attempts_total: snapshot.recovery.attemptsTotal,
-    recovery_recovered_runs: snapshot.recovery.recoveredRuns,
-    recovery_exhausted_runs: snapshot.recovery.exhaustedRuns,
   };
 }
 

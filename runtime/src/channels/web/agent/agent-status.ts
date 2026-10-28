@@ -48,7 +48,6 @@ export interface AgentStatusContext {
   json(payload: unknown, status?: number): Response;
   getAgentStatus(chatJid: string): Record<string, unknown> | null;
   getExtensionWorkingState(chatJid: string): Record<string, unknown> | null;
-  recoverStaleInflightRun(chatJid: string, options?: { hasActiveStatus?: boolean; minAgeMs?: number }): boolean;
   getBuffer(turnId: string, panel: "thought" | "draft"): WebAgentBufferEntry | undefined;
   getContextUsageForChat(
     chatJid: string
@@ -175,7 +174,6 @@ function deriveAgentState(status: Record<string, unknown>): string {
 export interface AgentStatusSnapshotOptions {
   includeDiagnostics?: boolean;
   includeExtensionWorking?: boolean;
-  recoverStaleInflight?: boolean;
 }
 
 /** Build the shared status payload independently of HTTP routing authority. */
@@ -195,9 +193,6 @@ export function buildAgentStatusSnapshot(
   const extensionWorking = includeExtensionWorking ? ctx.getExtensionWorkingState(chatJid) : null;
   const status = ctx.getAgentStatus(chatJid);
   if (!status) {
-    if (options.recoverStaleInflight !== false) {
-      ctx.recoverStaleInflightRun(chatJid, { hasActiveStatus: false });
-    }
     return {
       status: "idle",
       state: "idle",

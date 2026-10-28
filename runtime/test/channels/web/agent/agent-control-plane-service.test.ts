@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { withTempWorkspaceEnv } from "../../../helpers.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beginChatRun, closeDatabase, getDb, getDeferredQueuedFollowups, setDeferredQueuedFollowups, getMessageByRowId, storeMessage, storeChatMetadata, getInflightRuns, initDatabase } from "../../../../src/db.js";
+import { setChatCursor, closeDatabase, getDb, getDeferredQueuedFollowups, setDeferredQueuedFollowups, getMessageByRowId, storeMessage, storeChatMetadata, getChatCursor, initDatabase } from "../../../../src/db.js";
 import {
   buildStalledWorkDiagnostic,
   WebAgentControlPlaneService,
@@ -81,7 +81,7 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
   const queueLifecycle: QueueLifecycleStub = {
     getQueuedFollowupCount: () => 0,
     listQueuedStateItems: () => [],
-    reorderQueuedFollowupItems: () => false,
+    reorderQueuedFollowupItems: async () => false,
     removeQueuedFollowupForAction: async () => ({ removed: null, source: null }),
   };
 
@@ -239,7 +239,7 @@ describe("WebAgentControlPlaneService", () => {
     const queueLifecycle: QueueLifecycleStub = {
       getQueuedFollowupCount: (chatJid: string) => (chatJid === "web:branch" ? 1 : 0),
       listQueuedStateItems: () => [{ row_id: 7, content: "queued followup", timestamp: "2024-01-01T00:00:00.000Z", thread_id: 11 }],
-      reorderQueuedFollowupItems: () => false,
+      reorderQueuedFollowupItems: async () => false,
       removeQueuedFollowupForAction: async () => ({
         removed: {
           rowId: 7,
@@ -335,8 +335,7 @@ describe("WebAgentControlPlaneService", () => {
           newOperationId: "running-operation", claimedAt: "2026-08-14T09:00:00.000Z" }));
         expect(claim.ok && claim.value?.source.sourceId).toBe(primary.source_id);
         expect((await f.work.bindHarness(seal({ effect: { ...f.effect("bind"), operationId: "running-operation", sourceSeq: 1 },
-          expectedVersion: 1, sessionId: "owned-session", lane: "main", harnessOperationId: "native-operation",
-          state: "running", watchGeneration: 1 }))).ok).toBe(true);
+          expectedVersion: 1, sessionId: "owned-session", harnessOperationId: "native-operation" }))).ok).toBe(true);
         const rowId = await f.enqueue(chat, "  accepted input stays exact  ");
         const siblingRowId = await f.enqueue(chat, "sibling");
         const [queued, sibling] = getDeferredQueuedFollowups(chat);
@@ -355,7 +354,7 @@ describe("WebAgentControlPlaneService", () => {
             } },
         });
         const coordinator = createDurableQueuedSteering({ work: f.work, adapter, chatJid: chat, branchId: "main",
-          runningBinding: { sessionId: "owned-session", lane: "main", watchGeneration: 1 },
+          runningBinding: { sessionId: "owned-session" },
           assertCurrentWriter() { if (failure === "fenced") throw Error("PRIVATE_FENCED_ENGINE"); },
           readQueued: id => getDeferredQueuedFollowups(chat).find(item => item.rowId === id),
           validatePayload: ({ item }) => expect(f.work.getAcceptedSource(chat, item.source_id)?.provenanceRef).toBe(f.digest(item)),
@@ -443,7 +442,7 @@ describe("WebAgentControlPlaneService", () => {
           getQueuedFollowupCount: jid => f.lifecycle.getQueuedFollowupCount(jid),
           // Public state has no source_accepted; order both local rows ahead of it.
           listQueuedStateItems: () => [manual, placeholder, accepted].map(row_id => ({ row_id, content: "public", timestamp: "now", thread_id: null })),
-          removeQueuedFollowupForAction: forbidden, reorderQueuedFollowupItems: () => false,
+          removeQueuedFollowupForAction: forbidden, reorderQueuedFollowupItems: async () => false,
         }, getQueuedInputSourceWithdrawal: forbidden, broadcastEvent: forbidden,
       });
       const response = await service.handleAgentRunDrainQueue(abortRequest({ chat_jid: chat }));
@@ -455,23 +454,19 @@ describe("WebAgentControlPlaneService", () => {
     });
   });
 
-  test("lists active runs and supports targeted abort, stale marker clear, and queue drain", async () => {
+  test("lists native runs and supports abort, terminal-display clearing and queue drain without mutating polling cursors", async () => {
     initDatabase();
     const events: Array<{ type: string; data: unknown }> = [];
     const controlCalls: Array<{ chatJid: string; command: unknown }> = [];
     const removedRows: number[] = [];
-    beginChatRun("web:hung", "2024-01-01T00:00:02.000Z", {
-      prevTs: "2024-01-01T00:00:01.000Z",
-      messageId: "msg-hung",
-      startedAt: "2024-01-01T00:00:03.000Z",
-    });
+    setChatCursor("web:hung", "2024-01-01T00:00:02.000Z");
     const queueLifecycle: QueueLifecycleStub = {
       getQueuedFollowupCount: () => 2,
       listQueuedStateItems: () => [
         { rowId: 41, content: "first" },
         { row_id: 42, content: "second" },
       ],
-      reorderQueuedFollowupItems: () => false,
+      reorderQueuedFollowupItems: async () => false,
       removeQueuedFollowupForAction: async (_chatJid, rowId) => {
         removedRows.push(rowId);
         return {
@@ -485,10 +480,12 @@ describe("WebAgentControlPlaneService", () => {
         };
       },
     };
+    let currentStatus: Record<string, unknown> = { type: "thinking", turn_id: "turn-hung" };
     const service = createService({
       broadcastEvent: (type, data) => events.push({ type, data }),
       queuedFollowupLifecycle: queueLifecycle,
-      getAgentStatus: (chatJid) => chatJid === "web:hung" ? { type: "thinking", turn_id: "turn-hung" } : null,
+      getAgentStatus: (chatJid) => chatJid === "web:hung" ? currentStatus : null,
+      updateAgentStatus: (_chatJid, status) => { currentStatus = status; },
       agentPool: {
         setSessionBinder: () => {},
         listActiveChats: () => [{ chat_jid: "web:hung", agent_name: "hung", is_active: true }],
@@ -506,7 +503,8 @@ describe("WebAgentControlPlaneService", () => {
         chat_jid: "web:hung",
         is_active: true,
         queue_count: 2,
-        inflight: expect.objectContaining({ messageId: "msg-hung" }),
+        inflight: null,
+        preflight: null,
         status: expect.objectContaining({ turn_id: "turn-hung" }),
       })],
     }));
@@ -539,11 +537,12 @@ describe("WebAgentControlPlaneService", () => {
       status: "ok",
       chat_jid: "web:hung",
       cleared: true,
-      had_inflight: true,
+      had_inflight: false,
       had_preflight: false,
       had_status: true,
     });
-    expect(getInflightRuns().some((run) => run.chatJid === "web:hung")).toBe(false);
+    expect(getChatCursor("web:hung")).toBe("2024-01-01T00:00:02.000Z");
+    expect(getDb().query("SELECT * FROM chat_cursors WHERE chat_jid='web:hung'").get()).toEqual({chat_jid:"web:hung",cursor_ts:"2024-01-01T00:00:02.000Z",queued_followups_json:null});
     expect(events).toEqual(expect.arrayContaining([
       { type: "agent_followup_drained", data: { chat_jid: "web:hung", removed_count: 2 } },
     ]));
