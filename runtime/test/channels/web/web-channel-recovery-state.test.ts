@@ -44,7 +44,7 @@ async function initWebChannelFixture(chatJids: string[] = ["web:default"]) {
   return { db, webMod };
 }
 
-test("web channel loadState clears stale persisted statuses when there is no inflight durable state", async () => {
+test("a fresh web channel cannot restore historical tool or compaction observations", async () => {
   const { db, webMod } = await initWebChannelFixture(["web:default", "web:compact"]);
 
   db.setRouterState("last_agent_timestamp_web", JSON.stringify({
@@ -72,7 +72,7 @@ test("web channel loadState clears stale persisted statuses when there is no inf
     queue: { enqueue: () => {} },
     agentPool: { runAgent: async () => ({ status: "success", result: "ok" }), getContextUsageForChat: async () => null },
   });
-  second.loadState();
+  expect(second).not.toHaveProperty('loadState');
 
   expect(second.getAgentStatus("web:default")).toBeNull();
   expect(second.getAgentStatus("web:compact")).toBeNull();
@@ -116,7 +116,7 @@ test("web channel ignores old inflight cursors as display authority while preser
     queue: { enqueue: () => {} },
     agentPool: { runAgent: async () => ({ status: "success", result: "ok" }), getContextUsageForChat: async () => null },
   });
-  second.loadState();
+  expect(second).not.toHaveProperty('loadState');
 
   expect(second.getAgentStatus("web:compact")).toBeNull();
   expect(db.getDb().query('SELECT rowid,* FROM '+legacyCursorArchive).all()).toEqual(archived);
@@ -130,7 +130,7 @@ test("native startup and live draft buffers preserve historical payloads without
   const web = new (webMod.WebChannel as any)({ queue: { enqueue() { throw Error("No legacy replay"); } },
     agentPool: { getContextUsageForChat: async () => null } });
   const before = db.getDb().serialize();
-  web.loadState();
+  expect(web).not.toHaveProperty('loadState');
   web.updateAgentStatus("web:historical", { type: "thinking", turn_id: "new-turn" });
   web.updateDraftBuffer("new-turn", "Current transient draft", 1);
   const { runWebStartupRecoveryBootstrap } = await import("../../../src/runtime/startup.js");

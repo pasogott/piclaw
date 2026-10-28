@@ -10,7 +10,7 @@ export function manualCompactionBackend() {
   let active = false;
   let aborts = 0;
   let messageId = 456;
-  const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
+  const store = new AgentStatusStore();
   const channel: any = {
     agentPool: {
       isStreaming: () => false, isActive: () => active,
@@ -48,6 +48,6 @@ export function manualCompactionBackend() {
       if (path === '/status') return handleAgentStatusRequest(request, context);
       return null;
     },
-    cleanup() { store.clearPersistedStatuses(); },
+    cleanup() { store.dispose(); },
   };
 }

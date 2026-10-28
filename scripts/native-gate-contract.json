@@ -112,6 +112,7 @@
     "native-delegate-progress.test.ts",
     "native-model-choice.test.ts",
     "native-process-exit.test.ts",
+    "native-ui-projection.test.ts",
     "newcodex-default-factory.test.ts",
     "newregrets-enabled-default-factory.test.ts",
     "offline-maintenance-default-factory.test.ts",

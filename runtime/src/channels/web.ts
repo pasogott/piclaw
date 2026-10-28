@@ -61,7 +61,6 @@ import { initializeWebChannelConstructor } from "./web/core/web-channel-construc
 
 const DEFAULT_CHAT_JID = "web:default";
 const DEFAULT_AGENT_ID = "default";
-const STATE_KEY = "last_agent_timestamp_web";
 
 /** Construction options for WebChannel: queue and agentPool references. */
 export interface WebChannelOpts {
@@ -133,7 +132,6 @@ export class WebChannel implements WebChannelLike {
     initializeWebChannelConstructor(this, opts, {
       defaultChatJid: DEFAULT_CHAT_JID,
       defaultAgentId: DEFAULT_AGENT_ID,
-      stateKey: STATE_KEY,
     });
     this.httpSurfaceService = createWebChannelHttpSurfaceService(this as unknown as WebChannelHttpSurfaceChannel);
     this.runtimePublicSurfaceService = createWebChannelRuntimePublicSurfaceService(

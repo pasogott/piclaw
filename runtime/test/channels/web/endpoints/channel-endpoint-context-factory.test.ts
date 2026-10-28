@@ -93,7 +93,7 @@ describe("web channel endpoint context factory", () => {
     expect((await status.getContextUsageForChat("web:default"))?.tokens).toBe(10);
   });
 
-  test("falls back to persisted context usage after an awaited pool miss", async () => {
+  test("does not revive a persisted estimate after an awaited SDK miss", async () => {
     const calls: string[] = [];
     const channel = {
       json: (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status }),
@@ -120,16 +120,11 @@ describe("web channel endpoint context factory", () => {
       },
     );
 
-    await expect(contexts.agentStatus().getContextUsageForChat("web:compacted")).resolves.toEqual({
-      tokens: 21703,
-      contextWindow: 200000,
-      percent: 10.8515,
-      sessionGeneration: "session-current",
-    });
-    expect(calls).toEqual(["pool:web:compacted", "stored:web:compacted"]);
+    await expect(contexts.agentStatus().getContextUsageForChat("web:compacted")).resolves.toBeNull();
+    expect(calls).toEqual(["pool:web:compacted"]);
   });
 
-  test("falls back to persisted context usage when the pool returns null tokens for the same generation", async () => {
+  test("same-generation unknown SDK tokens cannot be filled from persisted estimates", async () => {
     const channel = {
       json: (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status }),
       getContextUsage: () => ({ tokens: 21703, contextWindow: 200000, percent: 10.8515, sessionGeneration: "session-current" }),
@@ -150,9 +145,9 @@ describe("web channel endpoint context factory", () => {
     );
 
     await expect(contexts.agentStatus().getContextUsageForChat("web:compacted")).resolves.toEqual({
-      tokens: 21703,
+      tokens: null,
       contextWindow: 200000,
-      percent: 10.8515,
+      percent: null,
       sessionGeneration: "session-current",
     });
   });

@@ -1,10 +1,9 @@
 /**
- * channels/web/runtime-state-service.ts – WebChannel recovery/resume wiring and runtime state delegation.
+ * channels/web/runtime-state-service.ts – WebChannel pending-input resume and local UI observations.
  *
- * Owns the narrow seam around restart recovery, resume context construction,
- * persisted agent-status state, pending steering, and streamed thought/draft
- * buffer delegation so `channels/web.ts` can stay focused on request/runtime
- * orchestration without changing the public WebChannel API.
+ * Accepted input/queue stores own resume work. Native watches rebuild bounded
+ * process-local status and streamed model buffers; these observations are never
+ * persisted as execution or recovery authority.
  */
 
 import type { WebAgentBufferEntry } from "../agent/agent-buffers.js";
@@ -13,7 +12,6 @@ const RECOVERY_REPLAY_DELAY_MS = 2000;
 import { registerPreShutdownHook } from "../../../runtime/shutdown-registry.js";
 import { AgentBuffers } from "../agent/agent-buffers.js";
 import { AgentStatusStore } from "../agent/agent-status-store.js";
-import { WebChannelState } from "./channel-state.js";
 import { getThreadRootId as getThreadRootIdForChat, resumeChat as resumeWebChat, type ChatRunControlStore, type ResumeChatContext } from "./chat-run-control.js";
 import { PendingSteeringStore } from "./pending-steering.js";
 import { resumePendingChats as resumeWebPendingChats, type WebPendingResumeContext, type WebPendingResumeStore } from "./recovery.js";
@@ -32,16 +30,6 @@ export interface WebChannelRuntimeStateCallbacks {
 /** Fixed options for a WebChannel runtime-state service instance. */
 export interface WebChannelRuntimeStateOptions {
   defaultAgentId: string;
-  stateKey: string;
-}
-
-interface WebChannelStateStoreLike {
-  load(): void;
-  save(): void;
-  setAgentStatus(chatJid: string, status: Record<string, unknown> | null): void;
-  getAgentStatuses(): Record<string, Record<string, unknown>>;
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void;
-  getContextUsage(chatJid: string): Record<string, unknown> | null;
 }
 
 interface PendingSteeringStoreLike {
@@ -50,10 +38,9 @@ interface PendingSteeringStoreLike {
 }
 
 interface AgentStatusStoreLike {
-  load(): void;
   update(chatJid: string, status: Record<string, unknown>): void;
   get(chatJid: string): Record<string, unknown> | null;
-  clearPersistedStatuses(): void;
+  dispose(): void;
 }
 
 interface AgentBuffersLike {
@@ -65,19 +52,13 @@ interface AgentBuffersLike {
 
 /** Optional injected stores for seam-level tests. */
 export interface WebChannelRuntimeStateServiceDeps {
-  state?: WebChannelStateStoreLike;
   pendingSteeringStore?: PendingSteeringStoreLike;
   agentStatusStore?: AgentStatusStoreLike;
   agentBuffers?: AgentBuffersLike;
 }
 
-/**
- * Dedicated seam for WebChannel recovery/resume wiring and runtime state.
- *
- * WebChannel keeps the same public methods; they now forward into this service.
- */
+/** Surviving WebChannel methods delegate pending-input resume and local UI observations here. */
 export class WebChannelRuntimeStateService {
-  private readonly state: WebChannelStateStoreLike;
   private readonly pendingSteeringStore: PendingSteeringStoreLike;
   private readonly agentStatusStore: AgentStatusStoreLike;
   private readonly agentBuffers: AgentBuffersLike;
@@ -87,12 +68,11 @@ export class WebChannelRuntimeStateService {
     private readonly options: WebChannelRuntimeStateOptions,
     deps: WebChannelRuntimeStateServiceDeps = {}
   ) {
-    this.state = deps.state ?? new WebChannelState(options.stateKey);
     this.pendingSteeringStore = deps.pendingSteeringStore ?? new PendingSteeringStore();
-    this.agentStatusStore = deps.agentStatusStore ?? new AgentStatusStore(this.state);
+    this.agentStatusStore = deps.agentStatusStore ?? new AgentStatusStore();
     this.agentBuffers = deps.agentBuffers ?? new AgentBuffers();
     registerPreShutdownHook(() => {
-      this.agentStatusStore.clearPersistedStatuses();
+      this.agentStatusStore.dispose();
     });
   }
 
@@ -128,14 +108,6 @@ export class WebChannelRuntimeStateService {
     resumeWebPendingChats(this.getPendingResumeContext(), chatJid, store);
   }
 
-  loadState(): void {
-    this.agentStatusStore.load();
-  }
-
-  saveState(): void {
-    this.state.save();
-  }
-
   queuePendingSteering(chatJid: string, timestamp: string | undefined): void {
     this.pendingSteeringStore.queue(chatJid, timestamp);
   }
@@ -157,21 +129,13 @@ export class WebChannelRuntimeStateService {
     // not an active durable model turn and must not resurrect Stop/Working.
     const nativeTaskRunning = laneBusy && saved?.type === "intent" && ["native_task", "compaction", "session_rotation"].includes(String(saved.intent_key));
     if (operation || queued || nativeTaskRunning) {
-      const active = saved && saved.type !== "done" && saved.type !== "error" ? saved : {};
+      const active = saved && saved.type !== "done" && saved.type !== "error"
+        && (nativeTaskRunning || (operation && saved.operation_id === operation.operation_id)) ? saved : {};
       return { ...active, chat_jid: chatJid, type: active.type ?? "thinking", state: "active", source: "durable_runtime",
         title: active.title ?? (operation ? "Working" : laneBusy ? "Running queued work" : "Queued"),
         operation_id: operation?.operation_id ?? null, operation_phase: operation?.phase ?? null, queued_count: queued };
     }
     return saved && saved.type !== "done" && saved.type !== "error" ? { ...saved, type: "done", state: "idle", title: "Idle", queued_count: 0 } : saved;
-  }
-
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void {
-    this.state.setContextUsage(chatJid, usage);
-    this.state.save();
-  }
-
-  getContextUsage(chatJid: string): Record<string, unknown> | null {
-    return this.state.getContextUsage(chatJid);
   }
 
   setPanelExpanded(turnId: string, panel: "thought" | "draft", expanded: boolean): void {

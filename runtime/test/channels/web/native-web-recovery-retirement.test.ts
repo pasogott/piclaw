@@ -72,7 +72,7 @@ test("historical inflight markers cannot manufacture an active restart status", 
   storeChatMetadata(chat,"2026-01-01T00:00:00.000Z","Web");
   getDb().query(`INSERT INTO ${legacyCursorArchive}(chat_jid,cursor_ts,inflight_prev_ts,inflight_message_id,inflight_started_at) VALUES(?,'','','old-input','2026-01-01T00:00:00.000Z')`).run(chat);
   const before=getDb().serialize();
-  const store=new AgentStatusStore({load(){},save(){},setAgentStatus(){},getAgentStatuses:()=>({})});
+  const store=new AgentStatusStore();
   expect(store.get(chat)).toBeNull();
   expect(getDb().serialize()).toEqual(before);
 });
@@ -104,7 +104,7 @@ test("live draft buffers never persist a second restart-recovery payload", () =>
   const state={load(){},save(){writes++;},getAgentStatuses:()=>({}),setAgentStatus(){},setContextUsage(){},getContextUsage:()=>null,
     setDraftRecovery(){writes++;},getDraftRecovery(){throw Error("Legacy draft read");}};
   const service=new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){}},
-    {defaultAgentId:"default",stateKey:"draft-no-recovery"},{state,agentStatusStore:{load(){},update(){},get:()=>null,clearPersistedStatuses(){}},
+    {defaultAgentId:"default",stateKey:"draft-no-recovery"},{state,agentStatusStore:{load(){},update(){},get:()=>null,dispose(){}},
       agentBuffers:{setPanelExpanded(){},isPanelExpanded:()=>false,updateBuffer:(id,panel,text,totalLines)=>buffers.set(id+panel,{text,totalLines}),
         getBuffer:(id,panel)=>buffers.get(id+panel)}});
   service.updateAgentStatus("web:chat",{type:"thinking",turn_id:"turn"});

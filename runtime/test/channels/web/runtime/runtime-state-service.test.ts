@@ -24,7 +24,6 @@ describe("web runtime state service", () => {
 
     const service = new WebChannelRuntimeStateService(callbacks, {
       defaultAgentId: "default",
-      stateKey: "state-key",
     });
 
     service.resumeChat("web:1", 77);
@@ -48,7 +47,6 @@ describe("web runtime state service", () => {
     const enqueued: Array<{ key: string; laneKey?: string; task: () => Promise<void> }> = [];
     const processed: Array<{ chatJid: string; agentId: string; threadRootId?: number | null }> = [];
     const messageChecks: Array<{ chatJid: string; since: string; assistantName: string }> = [];
-    const draftRecoveryMap = new Map<string, { turnId?: string; text: string; totalLines: number; updatedAt: number }>();
     let assistantName = "Pi stable";
 
     const callbacks: WebChannelRuntimeStateCallbacks = {
@@ -72,28 +70,9 @@ describe("web runtime state service", () => {
       },
     };
 
-    const state = {
-      load: () => {},
-      save: () => {},
-      setAgentStatus: () => {},
-      getAgentStatuses: () => ({}),
-      setContextUsage: () => {},
-      getContextUsage: () => null,
-      setDraftRecovery: (chatJid: string, entry: { turnId?: string; text: string; totalLines: number; updatedAt: number } | null) => {
-        if (!entry) {
-          draftRecoveryMap.delete(chatJid);
-          return;
-        }
-        draftRecoveryMap.set(chatJid, entry);
-      },
-      getDraftRecovery: (chatJid: string) => draftRecoveryMap.get(chatJid) ?? null,
-    };
 
     const service = new WebChannelRuntimeStateService(callbacks, {
       defaultAgentId: "default",
-      stateKey: "state-key",
-    }, {
-      state,
     });
     assistantName = "Pi live";
     service.resumePendingChats(undefined, store);
@@ -119,39 +98,14 @@ describe("web runtime state service", () => {
     const expandedMap = new Map<string, { thought?: boolean; draft?: boolean }>();
     const bufferMap = new Map<string, { thought?: { text: string; totalLines: number }; draft?: { text: string; totalLines: number } }>();
 
-    const draftRecoveryMap = new Map<string, { turnId?: string; text: string; totalLines: number; updatedAt: number }>();
-    const state = {
-      load: () => {
-        calls.push("state.load");
-      },
-      save: () => {
-        calls.push("state.save");
-      },
-      setAgentStatus: () => {},
-      getAgentStatuses: () => ({}),
-      setContextUsage: () => {},
-      getContextUsage: () => null,
-      setDraftRecovery: (chatJid: string, entry: { turnId?: string; text: string; totalLines: number; updatedAt: number } | null) => {
-        calls.push(`draft.set:${chatJid}:${entry?.turnId ?? ""}`);
-        if (!entry) {
-          draftRecoveryMap.delete(chatJid);
-          return;
-        }
-        draftRecoveryMap.set(chatJid, entry);
-      },
-      getDraftRecovery: (chatJid: string) => draftRecoveryMap.get(chatJid) ?? null,
-    };
     const agentStatusStore = {
-      load: () => {
-        calls.push("status.load");
-      },
       update: (chatJid: string, status: Record<string, unknown>) => {
         calls.push(`status.update:${chatJid}`);
         statusMap.set(chatJid, status);
       },
       get: (chatJid: string) => statusMap.get(chatJid) ?? null,
-      clearPersistedStatuses: () => {
-        calls.push("status.clearPersisted");
+      dispose: () => {
+        calls.push("status.dispose");
         statusMap.clear();
       },
     };
@@ -189,18 +143,15 @@ describe("web runtime state service", () => {
       },
       {
         defaultAgentId: "default",
-        stateKey: "state-key",
       },
       {
-        state,
         agentStatusStore,
         pendingSteeringStore,
         agentBuffers,
       }
     );
 
-    service.loadState();
-    service.saveState();
+    for(const name of ['loadState','saveState','getContextUsage','setContextUsage'])expect(service).not.toHaveProperty(name);
     service.updateAgentStatus("web:1", { type: "intent", title: "Thinking", turn_id: "turn-1" });
     service.queuePendingSteering("web:1", "2026-03-27T20:05:00.000Z");
     service.setPanelExpanded("turn-1", "thought", true);
@@ -212,10 +163,7 @@ describe("web runtime state service", () => {
     expect(service.isPanelExpanded("turn-1", "thought")).toBe(true);
     expect(service.getBuffer("turn-1", "thought")).toEqual({ text: "line one", totalLines: 1 });
     expect(service.getBuffer("turn-1", "draft")).toEqual({ text: "draft one", totalLines: 2 });
-    expect(state.getDraftRecovery("web:1")).toBeNull();
     expect(calls).toEqual([
-      "status.load",
-      "state.save",
       "status.update:web:1",
       "pending.queue:web:1:2026-03-27T20:05:00.000Z",
       "panel.set:turn-1:thought:true",
@@ -230,7 +178,7 @@ describe("web runtime state service", () => {
 test("native terminal status stays idle during worker cleanup; accepted work remains active", () => {
   let operation: {operation_id:string;phase:string}|null = null, queued = 0;
   const statuses = new Map<string,any>([["chat",{type:"done",title:"Idle",turn_id:"durable:1"}]]);
-  const service = new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){},isNativeRuntime:()=>true,isChatLaneBusy:()=>true,readNativeTurnState:()=>({operation,queued})},{defaultAgentId:"default",stateKey:"native-status-test"},{agentStatusStore:{get:(chat:string)=>statuses.get(chat),update:(chat:string,value:any)=>statuses.set(chat,value),clearPersistedStatuses(){}} as any});
+  const service = new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){},isNativeRuntime:()=>true,isChatLaneBusy:()=>true,readNativeTurnState:()=>({operation,queued})},{defaultAgentId:"default"},{agentStatusStore:{get:(chat:string)=>statuses.get(chat),update:(chat:string,value:any)=>statuses.set(chat,value),dispose(){}} as any});
   expect(service.getAgentStatus("chat")?.type).toBe("done");
   queued=1;expect(service.getAgentStatus("chat")?.state).toBe("active");
   queued=0;operation={operation_id:"op",phase:"executing"};expect(service.getAgentStatus("chat")?.operation_id).toBe("op");

@@ -13,7 +13,7 @@ function deferred<T>() {
 type Result = { status: string; message: string; contextUsage?: { tokens: number | null; contextWindow: number | null; percent: number | null; sessionGeneration?: string; tokensAreAuthoritative?: true }; sessionGenerationChanged?: boolean; sessionGeneration?: string };
 
 function fixture(terminalTtlMs = 15_000) {
-  const statuses = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) }, terminalTtlMs);
+  const statuses = new AgentStatusStore(terminalTtlMs);
   const stats = deferred<Result>();
   const compact = deferred<Result>();
   const statsStarted = deferred<void>();
@@ -85,7 +85,8 @@ describe("manual command status ownership in the production handler", () => {
       expect((await newer).status).toBe(201);
       expect(f.statuses.get("web:test")?.type).toBe("done");
       expect(f.statuses.get("web:test")?.turn_id).toBe(owner.turn_id);
-      expect(f.usages).toHaveLength(1);
+      expect(f.usages).toEqual([]);
+      expect(f.events.filter(e=>e.payload.type==='context_usage')).toHaveLength(1);
       expect(f.events.some(e => e.payload.type === "context_usage")).toBe(true);
     });
   }
@@ -106,7 +107,7 @@ describe("manual command status ownership in the production handler", () => {
     const f = fixture();
     const pending = f.send("/stats");
     await f.statsStarted.promise;
-    f.statuses.clearPersistedStatuses();
+    f.statuses.dispose();
     f.stats.resolve(success);
     await pending;
     expect(f.statuses.get("web:test")).toBeNull();
@@ -175,7 +176,7 @@ describe("manual command status ownership in the production handler", () => {
     f.compact.resolve({ ...success, contextUsage: { tokens: 20, contextWindow: 100, percent: 20 } });
     await pending;
     expect(f.statuses.get("web:test")).toEqual(owner);
-    expect(f.usages).toHaveLength(1);
+    expect(f.usages).toEqual([]);
     expect(f.events.slice(eventCount).filter(e => e.event === "agent_status")).toEqual([]);
   });
 
@@ -189,7 +190,8 @@ describe("manual command status ownership in the production handler", () => {
         contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: 'generation-2', tokensAreAuthoritative: true } });
       const response = await pending;
       expect(response.status).toBe(201);
-      expect(f.usages).toEqual([{ tokens: null, contextWindow: null, percent: null, sessionGeneration: 'generation-2', contextUpdate: 'replace' }]);
+      expect(f.usages).toEqual([]);
+      expect(f.events.filter(e=>e.payload.type==='context_usage').map(e=>e.payload.context_usage)).toEqual([expect.objectContaining({tokens:null,contextWindow:null,percent:null,sessionGeneration:'generation-2',contextUpdate:'replace'})]);
       expect(f.usageStatusSnapshots).toEqual([owner]);
       expect(f.statuses.get('web:test')?.type).toBe('done');
       const body = await response.json();
@@ -217,7 +219,8 @@ describe("manual command status ownership in the production handler", () => {
     const owner = f.statuses.get("web:test");
     f.compact.resolve({ ...success, sessionGenerationChanged: true, sessionGeneration: "generation-2" });
     await pending;
-    expect(f.usages).toEqual([{ tokens: null, contextWindow: null, percent: null, sessionGeneration: "generation-2", contextUpdate: "replace", reset: true }]);
+    expect(f.usages).toEqual([]);
+    expect(f.events.filter(e=>e.payload.type==='context_usage').map(e=>e.payload.context_usage)).toEqual([{tokens:null,contextWindow:null,percent:null,sessionGeneration:'generation-2',contextUpdate:'replace'}]);
     expect(f.events.some(e => e.payload.type === "context_usage" && e.payload.context_reset)).toBe(true);
     expect(f.statuses.get("web:test")?.turn_id).toBe(owner?.turn_id);
     expect(f.statuses.get("web:test")?.type).toBe("done");

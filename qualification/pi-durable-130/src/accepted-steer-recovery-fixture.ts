@@ -68,7 +68,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     let runtime: HostConversationRuntime | undefined;
     let candidateStorage: SqliteStorage;
     let providerEntries = 0, toolEntries = 0;
-    void base.host.toolEntered.promise.then(() => { toolEntries++; });
+    base.host.onToolEnter = () => { toolEntries++; };
     let entryObserved: ReturnType<typeof barrier> | undefined;
     base.host.onModelEnter = () => { providerEntries++; entryObserved?.release(); };
     let ackLost = false;
@@ -126,7 +126,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     }
     const snapshot = () => ["messages", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits", "recovery_fixture_identity"].map(t => db.query(`SELECT * FROM ${t}`).all());
 
-async function prepare() {
+async function prepare(intentContent = "accepted B") {
       storeChatMetadata(chatJid, at);
       const source = value(await ports.work.acceptSource(sealed({ effect: effect(`${incarnation}:A`), chatJid, sourceId: `${incarnation}:A`, kind: "message" as const,
         payloadRef: queuePrimary ? `message-row:${primaryRow}` : `${incarnation}:A`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
@@ -143,7 +143,7 @@ async function prepare() {
       value(await ports.work.bindHarness(sealed({ effect: effect(`${incarnation}:running`, incarnation, source.sourceSeq), expectedVersion: operation.version, sessionId: incarnation, harnessOperationId: String(primaryId) })));
       const b = value(await ports.work.acceptSource(sealed({ effect: effect(`${incarnation}:B`), chatJid, sourceId: intentSourceId, kind: "message" as const,
         payloadRef: `queued-source:${intentSourceId}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
-      setDeferredQueuedFollowups(chatJid, [{ rowId: 1650, threadId: null, source_id: b.sourceId, source_accepted: true, queuedContent: "accepted B", queuedAt: at }]);
+      setDeferredQueuedFollowups(chatJid, [{ rowId: 1650, threadId: null, source_id: b.sourceId, source_accepted: true, queuedContent: intentContent, queuedAt: at }]);
       const coordinator = createDurableQueuedSteering({ work: ports.work, chatJid, branchId: "main", assertCurrentWriter: assert,
         runningBinding: { sessionId: incarnation },
         adapter: { ...adapter, validateIntent(input) {
@@ -157,7 +157,7 @@ async function prepare() {
           throw Error(`ACK lost after ${committedIntentId}`);
         } },
         readQueued: id => getDeferredQueuedFollowups(chatJid).find(x => x.rowId === id),
-        validatePayload({ item }) { check.equal(item.source_id, b.sourceId); check.equal(item.queuedContent, "accepted B"); },
+        validatePayload({ item }) { check.equal(item.source_id, b.sourceId); check.equal(item.queuedContent, intentContent); },
         materialize: (item, accept) => storeWebMessage({ broadcastEvent() {}, pendingLinkPreviews: new Set<number>() } as Parameters<typeof storeWebMessage>[0],
           { chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Fixture" },
           { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true }) });

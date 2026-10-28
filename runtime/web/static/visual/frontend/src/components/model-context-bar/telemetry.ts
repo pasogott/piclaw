@@ -40,6 +40,7 @@ export function mergeVisualLiveContext(
     percent?: number | null;
     cacheUsage?: AgentContext["cacheUsage"];
     sessionGeneration?: string | null;
+    contextUpdate?: string;
   },
   options: { authoritative?: boolean } = {},
 ): AgentContext {
@@ -49,11 +50,12 @@ export function mergeVisualLiveContext(
       percent: live.percent ?? null, cacheUsage: live.cacheUsage ?? previous?.cacheUsage ?? null,
       sessionGeneration: live.sessionGeneration };
   }
+  const replace=live.contextUpdate === "replace";
   return {
     ...(previous?.sessionGeneration ? { sessionGeneration: previous.sessionGeneration } : {}),
-    tokens: live.tokens ?? previous?.tokens ?? null,
-    contextWindow: live.contextWindow ?? previous?.contextWindow ?? 0,
-    percent: live.percent ?? previous?.percent ?? null,
+    tokens: replace ? live.tokens ?? null : live.tokens ?? previous?.tokens ?? null,
+    contextWindow: replace ? live.contextWindow ?? 0 : live.contextWindow ?? previous?.contextWindow ?? 0,
+    percent: replace ? live.percent ?? null : live.percent ?? previous?.percent ?? null,
     cacheUsage: live.cacheUsage ?? previous?.cacheUsage ?? null,
   };
 }

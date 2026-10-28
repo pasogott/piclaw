@@ -2,6 +2,7 @@ import { render } from "preact";
 import { useState } from "preact/hooks";
 import { ModelContextBar } from "../../../web/static/visual/frontend/src/components/ModelContextBar";
 import { useStatusPolling } from "../../../web/static/visual/frontend/src/components/model-context-bar/useStatusPolling";
+import { ChatPanel } from "../../../web/static/visual/frontend/src/panels/ChatPanel";
 
 import {
   getAgentStatus,
@@ -10,7 +11,7 @@ import {
 } from "../../../web/src/api";
 
 const calls: Array<{ path: string; jid: string | null; aborted: boolean }> = [];
-let blocked = false;
+let blocked = new URLSearchParams(location.search).has('projection');
 let statusCode = 200;
 let model = "fixture/model";
 let pending: Array<() => void> = [];
@@ -22,6 +23,7 @@ window.fetch = (async (input, init) => {
     jid: url.searchParams.get("chat_jid"),
     aborted: false,
   };
+  if (url.pathname !== '/agent/status') return Response.json({commands:[],models:[],items:[]});
   calls.push(record);
   init?.signal?.addEventListener("abort", () => {
     record.aborted = true;
@@ -69,8 +71,11 @@ function Owner({ mobile }: { mobile: boolean }) {
           thinking: polling.currentThinkingLevel.value,
           tokens: polling.agentContext.value?.tokens,
           stale: polling.isStale.value,
+          status: polling.agentStatus.value,
+          context: polling.agentContext.value,
         })}
       </output>
+      {new URLSearchParams(location.search).has('compose') && <ChatPanel />}
     </>
   );
 }
@@ -87,6 +92,7 @@ function Fixture() {
         ]),
       setSnapshot: (value:Record<string,unknown>) => { overrides = value; },
       calls,
+      pendingCount: () => pending.length,
       clear: () => calls.splice(0),
       setMounted,
       setMobile,

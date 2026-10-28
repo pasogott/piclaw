@@ -155,8 +155,7 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
     expect(fixture.channel.getThreadRootId("web:test", "m-1")).toBe(52);
     fixture.channel.resumeChat("web:test", 12);
     fixture.channel.resumePendingChats("web:test");
-    fixture.channel.loadState();
-    fixture.channel.saveState();
+    expect(fixture.channel).not.toHaveProperty('loadState');expect(fixture.channel).not.toHaveProperty('saveState');
     fixture.channel.setPanelExpanded("turn-1", "thought", true);
     expect(fixture.channel.isPanelExpanded("turn-1", "thought")).toBe(true);
     fixture.channel.updateThoughtBuffer("turn-1", "thought text", 3);
@@ -184,8 +183,6 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
       "thread-root:web:test:m-1",
       "resume:web:test:12",
       "resume-pending:web:test",
-      "load",
-      "save",
       "panel-set:turn-1:thought:true",
       "panel-get:turn-1:thought",
       "thought:turn-1:thought text:3",

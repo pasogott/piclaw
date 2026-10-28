@@ -79,11 +79,9 @@ export interface ResolvedCommandModelState {
 export interface DeferredControlCommandRuntime {
   agentPool: Pick<WebChannelLike["agentPool"], "applyControlCommand" | "getAvailableModels" | "getCurrentModelLabel" | "getContextUsageForChat" | "getSessionGenerationForChat">;
   sendMessage: WebChannelLike["sendMessage"];
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void;
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void;
   getAgentStatus?(chatJid: string): Record<string, unknown> | null;
   broadcastEvent(eventType: string, data: unknown): void;
-  saveState?(): void;
   resumeChat(chatJid: string, threadRootId?: number | null): void;
 }
 
@@ -266,7 +264,6 @@ export async function executeDeferredControlCommand(
       sessionGeneration: result.sessionGeneration,
       context_usage: boundaryUsage,
     };
-    channel.setContextUsage(chatJid, { ...boundaryUsage, reset: true });
     channel.updateAgentStatus(chatJid, statusPayload);
     channel.broadcastEvent("agent_status", statusPayload);
   }
@@ -300,7 +297,7 @@ export async function executeDeferredControlCommand(
       }
       const sessionGeneration = usageGeneration ?? activeGeneration;
       if (contextUsage && sessionGeneration) {
-        const persistedUsage = {
+        const contextSnapshot = {
           tokens: contextUsage.tokens,
           contextWindow: contextUsage.contextWindow,
           percent: contextUsage.percent,
@@ -314,13 +311,12 @@ export async function executeDeferredControlCommand(
           turn_id: compactTurn ?? createUuid("turn"),
           type: "context_usage",
           context_usage: {
-            ...persistedUsage,
+            ...contextSnapshot,
             estimated: contextUsage.estimated === true,
             source: contextUsage.source ?? null,
             phase: contextUsage.phase ?? null,
           },
         };
-        channel.setContextUsage(chatJid, persistedUsage);
         channel.updateAgentStatus(chatJid, statusPayload);
         channel.broadcastEvent("agent_status", statusPayload);
       }
@@ -342,7 +338,6 @@ export async function executeDeferredControlCommand(
     compactStatus(result.status === "success" ? "done" : "error", result.message);
   }
   cursorStore.setChatCursor(chatJid, message.timestamp);
-  channel.saveState?.();
 
   const cursorNow = cursorStore.getChatCursor(chatJid);
   const remainingPersisted = cursorStore.getMessagesSince(chatJid, cursorNow, assistantName);

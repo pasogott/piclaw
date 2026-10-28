@@ -33,15 +33,11 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "getThreadRootId"
   | "resumeChat"
   | "resumePendingChats"
-  | "loadState"
-  | "saveState"
   | "setPanelExpanded"
   | "isPanelExpanded"
   | "updateThoughtBuffer"
   | "updateDraftBuffer"
   | "getBuffer"
-  | "setContextUsage"
-  | "getContextUsage"
 >;
 
 type WebChannelRuntimePublicSurfaceStorage = Pick<
@@ -449,14 +445,6 @@ export class WebChannelRuntimePublicSurfaceService {
     return this.channel.runtimeFollowupFacade.getAgentStatus(chatJid);
   }
 
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void {
-    this.channel.runtimeFollowupFacade.setContextUsage(chatJid, usage);
-  }
-
-  getContextUsage(chatJid: string): Record<string, unknown> | null {
-    return this.channel.runtimeFollowupFacade.getContextUsage(chatJid);
-  }
-
   replaceQueuedFollowupPlaceholder(
     chatJid: string,
     rowId: number,
@@ -487,14 +475,6 @@ export class WebChannelRuntimePublicSurfaceService {
 
   resumePendingChats(chatJid?: string): void {
     this.channel.runtimeFollowupFacade.resumePendingChats(chatJid);
-  }
-
-  loadState(): void {
-    this.channel.runtimeFollowupFacade.loadState();
-  }
-
-  saveState(): void {
-    this.channel.runtimeFollowupFacade.saveState();
   }
 
   setPanelExpanded(turnId: string, panel: "thought" | "draft", expanded: boolean): void {

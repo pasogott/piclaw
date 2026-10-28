@@ -865,7 +865,7 @@ async function handleAgentMessageInScope(
       : null;
     if (usageGeneration && activeGeneration && usageGeneration !== activeGeneration) return;
     const sessionGeneration = usageGeneration ?? activeGeneration;
-    const persistedUsage = {
+    const contextSnapshot = {
       tokens: contextUsage.tokens,
       contextWindow: contextUsage.contextWindow,
       percent: contextUsage.percent,
@@ -873,12 +873,11 @@ async function handleAgentMessageInScope(
       contextUpdate: "replace",
     };
     const statusUsage = {
-      ...persistedUsage,
+      ...contextSnapshot,
       estimated: contextUsage.estimated === true,
       source: contextUsage.source ?? null,
       phase: contextUsage.phase ?? null,
     };
-    if (typeof channel.setContextUsage === "function") channel.setContextUsage(chatJid, persistedUsage);
     emitCommandStatus({
       thread_id: payload.threadId,
       agent_id: agentId,
@@ -987,7 +986,6 @@ async function handleAgentMessageInScope(
         sessionGeneration: result.sessionGeneration,
         contextUpdate: "replace",
       };
-      channel.setContextUsage(chatJid, { ...boundaryUsage, reset: true });
       emitCommandStatus({
         thread_id: interaction.timestamp,
         agent_id: agentId,

@@ -108,11 +108,8 @@ export interface WebChannelLike
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void;
   getAgentStatus(chatJid: string): Record<string, unknown> | null;
   getExtensionWorkingState?(chatJid: string): Record<string, unknown> | null;
-  setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void;
-  getContextUsage(chatJid: string): Record<string, unknown> | null;
   getBuffer(turnId: string, panel: "thought" | "draft"): WebAgentBufferEntry | undefined;
   getThreadRootId(chatJid: string, messageId: string): number | null;
-  saveState(): void;
 
   setPanelExpanded(turnId: string, panel: "thought" | "draft", expanded: boolean): void;
   isPanelExpanded(turnId: string, panel: "thought" | "draft"): boolean;

@@ -97,11 +97,10 @@ for (const command of ['compact'] as const) {
         cursorStore: { getChatCursor: () => '', setChatCursor() {}, getMessagesSince: () => [] },
       });
       expect(fallbackReads).toBe(0);
-      expect(writes).toEqual([{ tokens, contextWindow: 10000, percent: tokens === null ? null : tokens / 100,
-        sessionGeneration: 'stable-session', contextUpdate: 'replace' }]);
+      expect(writes).toEqual([]);
       const snapshot = events.filter(event => event.payload.type === 'context_usage');
       expect(snapshot).toHaveLength(1);
-      expect(snapshot[0].payload.context_usage).toMatchObject(writes[0]);
+      expect(snapshot[0].payload.context_usage).toMatchObject({tokens,contextWindow:10000,percent:tokens===null?null:tokens/100,sessionGeneration:'stable-session',contextUpdate:'replace'});
       expect(snapshot[0].payload).not.toHaveProperty('context_reset');
       expect(JSON.stringify(events)).not.toContain('tokensAreAuthoritative');
     });

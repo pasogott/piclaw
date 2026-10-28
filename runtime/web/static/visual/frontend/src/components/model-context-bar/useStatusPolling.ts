@@ -4,7 +4,6 @@ import { getChatJid } from "../../api/chat-jid";
 import type { AgentStatus, AgentContext, ModelInfo, ProviderUsage } from "./types";
 import { addonHealthSignal } from "./addonHealthSignal";
 import { providerConfigured } from "../../app/providerState";
-import { safeGetItem, safeSetItem } from "../../utils/storage";
 import { mergeVisualLiveContext } from "./telemetry";
 import { mergeModelStatePayload } from "../../../../../../src/ui/app-model-state";
 import { AGENT_UI_POLL_MS, getAgentUiSnapshot, invalidateAgentUiSnapshot } from "../../../../../../src/ui/agent-ui-snapshot";
@@ -30,16 +29,9 @@ export interface UseStatusPollingResult {
   fetchContext: () => Promise<void>;
 }
 
-function loadCachedContext(): AgentContext | null {
-  const jid = getChatJid();
-  const cached = safeGetItem(`piclaw:context-cache:${jid}`);
-  if (!cached) return null;
-  try { return JSON.parse(cached) as AgentContext; } catch { return null; }
-}
-
 export function useStatusPolling(): UseStatusPollingResult {
   const agentStatus = useSignal<AgentStatus | null>(null);
-  const agentContext = useSignal<AgentContext | null>(loadCachedContext());
+  const agentContext = useSignal<AgentContext | null>(null);
   const error = useSignal<boolean>(false);
   const lastSuccessAt = useSignal<number>(0);
   const pollTick = useSignal(0);
@@ -92,7 +84,7 @@ export function useStatusPolling(): UseStatusPollingResult {
     modelInfo.current = null; modelSelectionKnown.value = false;
     agentStatus.value = null; currentModel.value = null; currentThinkingLevel.value = '';
     modelContextWindow.value = 0; providerUsage.value = null;
-    agentContext.value = loadCachedContext();
+    agentContext.value = null;
     lastSuccessAt.value = 0; error.value = false;
     clearTimeout(statusRefresh.current); clearTimeout(contextRefresh.current);
   };
@@ -123,11 +115,10 @@ export function useStatusPolling(): UseStatusPollingResult {
       if (snapshot.model) applyModel(snapshot.model);
       if (snapshot.context && contextRevision === contextVersion.current) {
         const data = snapshot.context as AgentContext;
-        if (data.tokens != null || data.cacheUsage?.latest || data.sessionGeneration) {
+        if (data.contextUpdate === 'replace' || data.tokens != null || data.cacheUsage?.latest || data.sessionGeneration) {
           const next = mergeVisualLiveContext(agentContext.value, data, { authoritative: true });
           if (JSON.stringify(next) !== JSON.stringify(agentContext.value)) {
             agentContext.value = next;
-            safeSetItem(`piclaw:context-cache:${getChatJid()}`, JSON.stringify(next));
           }
         }
       }
@@ -164,6 +155,8 @@ export function useStatusPolling(): UseStatusPollingResult {
   // Immediately refresh model/context when SSE connects (first load + reconnects)
   useEffect(() => {
     const onConnect = () => {
+      statusVersion.current++; contextVersion.current++;
+      agentStatus.value=null; agentContext.value=null;
       invalidateAgentUiSnapshot(getChatJid());
       void fetchStatus();
     };
@@ -202,7 +195,6 @@ export function useStatusPolling(): UseStatusPollingResult {
         contextVersion.current++;
         const cu = detail.context_usage;
         agentContext.value = mergeVisualLiveContext(agentContext.value, cu);
-        safeSetItem(`piclaw:context-cache:${getChatJid()}`, JSON.stringify(agentContext.value));
       }
       // Always refresh context after a turn completes
       if (detail?.type === "done" || detail?.type === "error" || detail?.status === "idle") {

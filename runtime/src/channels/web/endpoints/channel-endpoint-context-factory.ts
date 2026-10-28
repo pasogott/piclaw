@@ -59,37 +59,18 @@ export interface WebChannelEndpointFactoryOptions {
   getIdentitySnapshot(): WebChannelIdentitySnapshot;
 }
 
-/** Lazily built endpoint contexts consumed by WebChannel handlers. */
-function normalizeStoredContextUsage(value: Record<string, unknown> | null): {
-  tokens: number | null;
-  contextWindow: number | null;
-  percent: number | null;
-  sessionGeneration: string;
-} | null {
-  if (!value) return null;
-  const sessionGeneration = typeof value.sessionGeneration === "string" ? value.sessionGeneration.trim() : "";
-  if (!sessionGeneration) return null;
-  const tokens = typeof value.tokens === "number" && Number.isFinite(value.tokens) ? value.tokens : null;
-  const contextWindow = typeof value.contextWindow === "number" && Number.isFinite(value.contextWindow)
-    ? value.contextWindow
-    : null;
-  const percent = typeof value.percent === "number" && Number.isFinite(value.percent) ? value.percent : null;
-  return { tokens, contextWindow, percent, sessionGeneration };
-}
-
 function getTokenUsageForChat(chatJid: string): AgentTokenUsageContext | null {
   try {
     const latest = getLatestTokenUsage(chatJid);
     const totals = getTokenUsageTotals(chatJid);
     return latest || totals.runs > 0 ? { latest, totals } : null;
   } catch (error) {
-    if (error instanceof Error && (error.message === "Database not initialized" || error.message.includes("closed database"))) {
-      return null;
-    }
+    if (error instanceof Error && (error.message === "Database not initialized" || error.message.includes("closed database"))) return null;
     throw error;
   }
 }
 
+/** Lazily built endpoint contexts consumed by WebChannel handlers. */
 export interface WebChannelEndpointContexts {
   postMutations(): PostMutationsContext;
   agentStatus(): AgentStatusContext;
@@ -135,43 +116,14 @@ export function createWebChannelEndpointContexts(
           getExtensionWorkingState: (chatJid) => channel.getExtensionWorkingState?.(chatJid) ?? null,
           getBuffer: (turnId, panel) => channel.getBuffer(turnId, panel),
           getContextUsageForChat: async (chatJid) => {
-            // A rejected native read may mean ownership/binding loss. Do not
-            // turn that failure into permission to display a stored estimate.
-            let runtimeUsage;
-            try { runtimeUsage = await channel.agentPool.getContextUsageForChat(chatJid); }
-            catch {
-              const generation = channel.agentPool.getSessionGenerationForChat?.(chatJid);
-              return generation
-                ? { tokens: null, contextWindow: null, percent: null, sessionGeneration: generation, tokensAreAuthoritative: true as const }
-                : null;
-            }
-            const currentGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
-              ? channel.agentPool.getSessionGenerationForChat(chatJid)
-              : null;
-            const runtimeGeneration = typeof runtimeUsage?.sessionGeneration === "string"
-              ? runtimeUsage.sessionGeneration.trim()
-              : "";
-            const storedUsage = normalizeStoredContextUsage(
-              typeof channel.getContextUsage === "function" ? channel.getContextUsage(chatJid) : null,
-            );
-            const authoritativeGeneration = currentGeneration || runtimeGeneration || storedUsage?.sessionGeneration || null;
-            const currentRuntimeUsage = runtimeUsage && (!authoritativeGeneration || runtimeGeneration === authoritativeGeneration)
-              ? runtimeUsage
-              : null;
-            const currentStoredUsage = storedUsage && (!authoritativeGeneration || storedUsage.sessionGeneration === authoritativeGeneration)
-              ? storedUsage
-              : null;
-
-            // Durable readers know that current counts are unknown, including after
-            // compaction. A same-session stored estimate cannot make them current.
-            if (currentRuntimeUsage?.tokensAreAuthoritative) return currentRuntimeUsage;
-            if (currentRuntimeUsage?.tokens !== null && currentRuntimeUsage?.tokens !== undefined) return currentRuntimeUsage;
-            if (currentStoredUsage?.tokens !== null && currentStoredUsage?.tokens !== undefined) return currentStoredUsage;
-            if (currentRuntimeUsage) return currentRuntimeUsage;
-            if (currentStoredUsage) return currentStoredUsage;
-            return authoritativeGeneration
-              ? { tokens: null, contextWindow: null, percent: null, sessionGeneration: authoritativeGeneration }
-              : null;
+            const generation = () => channel.agentPool.getSessionGenerationForChat?.(chatJid) ?? null;
+            const before = generation();
+            let usage;
+            try { usage = await channel.agentPool.getContextUsageForChat(chatJid); }
+            catch { usage = null; }
+            const current = generation();
+            if (before === current && usage && (!current || usage.sessionGeneration === current)) return usage;
+            return current ? {tokens:null,contextWindow:null,percent:null,sessionGeneration:current,tokensAreAuthoritative:true as const} : null;
           },
           getSessionTreeSummaryForChat: typeof channel.agentPool.getSessionTreeSummaryForChat === "function"
             ? (chatJid) => channel.agentPool.getSessionTreeSummaryForChat(chatJid)

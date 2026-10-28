@@ -48,8 +48,12 @@ export function createNativeTurnView(database: Database, channel: NativeTurnView
       const input = database.query(`SELECT b.operation_id,m.rowid,m.thread_id FROM piclaw_durable_bindings_v1 b
         JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.primary_source_seq=b.source_seq
         LEFT JOIN messages m ON m.id=b.source_id AND m.chat_jid=b.chat_jid
-        WHERE b.chat_jid=? AND b.conversation_id=? AND b.submission_id IN (SELECT value FROM json_each(?)) LIMIT 1`)
-        .get(chat, view.conversation.id, JSON.stringify(live.run.inputs)) as { operation_id: string; rowid: number | null; thread_id: number | null } | null;
+        WHERE b.chat_jid=? AND b.conversation_id=? AND
+          (b.submission_id IN (SELECT value FROM json_each(?)) OR EXISTS (
+            SELECT 1 FROM piclaw_durable_intent_bindings_v1 i WHERE i.operation_id=b.operation_id
+              AND i.chat_jid=b.chat_jid AND i.conversation_id=b.conversation_id
+              AND i.submission_id IN (SELECT value FROM json_each(?)))) LIMIT 1`)
+        .get(chat, view.conversation.id, JSON.stringify(live.run.inputs), JSON.stringify(live.run.inputs)) as { operation_id: string; rowid: number | null; thread_id: number | null } | null;
       if (!input) return;
       runId = live.run.taskId;
       operationId = input.operation_id; lastTool = undefined;

@@ -17,7 +17,7 @@ for (const terminal of ['success', 'error', 'cancelled'] as const) {
     const result = gate<any>();
     const publish = gate<void>();
     const publishing = gate<void>();
-    const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) });
+    const store = new AgentStatusStore();
     let physicallyCompacting = false;
     let abortCalls = 0;
     const channel = {
@@ -93,7 +93,7 @@ for (const terminal of ['success', 'error', 'cancelled'] as const) {
       result.release({ status: 'error', message: 'Test cleanup' });
       publish.release();
       await command;
-      store.clearPersistedStatuses();
+      store.dispose();
     }
   });
 }
