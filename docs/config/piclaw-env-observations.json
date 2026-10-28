@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 64
     },
     "docsDeploy": {
-      "referencedNames": 153,
+      "referencedNames": 154,
       "directReaderNames": 18,
       "directReaderOccurrences": 42,
       "helperReaderNames": 0,
@@ -2441,6 +2441,16 @@
     {
       "name": "PICLAW_LOCAL_TEST_NICE",
       "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/development/native-ui-projections.md"
+          ],
+          "readerFiles": []
+        },
         "tooling": {
           "referenced": true,
           "directReaders": 0,
