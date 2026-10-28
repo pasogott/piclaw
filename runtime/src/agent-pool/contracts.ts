@@ -148,6 +148,8 @@ export interface NativeDreamRequest {
 
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  /** Trusted explicit historical resident-capture/test composition, never native fallthrough. */
+  legacyCapture?: true;
   dispatchDreamOperation?: (request:NativeDreamRequest)=>Promise<AgentOutput>;
   /** Host-owned add-on admission; policy is derived from its persisted owner/grant. */
   prepareAddonOperation?: (operationId:string,signal?:AbortSignal)=>Promise<PreparedNativeBackgroundInput>;

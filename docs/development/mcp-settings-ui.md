@@ -1,5 +1,7 @@
 # MCP settings pane
 
+Current native hosts retain the existing read/preview pane, with Apply disabled by backend capability fields and observed policy unknown. Startup-owned native MCP contexts cannot be reconfigured through a legacy session-pool shutdown. See [native host composition](native-host-composition.md). The earlier Apply/browser receipts below concern the explicit historical session-owner boundary; they do not enable native live Apply.
+
 Classic and Visual Settings include an MCP pane backed by the owner-only [settings API](mcp-settings-api.md). It previews engine/codemode compatibility and applies adapter codemode changes to current and new sessions. Engine replacement remains blocked, with the exact 1.0.1 public-contract gaps and closure blocker listed for Native.
 
 Both skins use one request/state controller and their own Preact renderer. Initial load and Refresh use GET; Preview sends only the selected engine/codemode. Changing a selector sends nothing until Preview is pressed. Apply requires a fresh compatible preview and an explicit acknowledgement that turns across all chats may be interrupted. Changing a selector clears that acknowledgement. The pane separates persisted and observed policy; native projection and unknown connection status are not connection health.

@@ -51,7 +51,7 @@
   },
   "current": {
     "production": {
-      "referencedNames": 170,
+      "referencedNames": 168,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -60,7 +60,7 @@
       "semanticReaderOccurrences": 23
     },
     "runtimeSrc": {
-      "referencedNames": 169,
+      "referencedNames": 167,
       "directReaderNames": 7,
       "directReaderOccurrences": 13,
       "helperReaderNames": 10,
@@ -5329,56 +5329,6 @@
           "files": [
             "runtime/src/core/config-runtime.ts",
             "runtime/src/core/config-sources.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STARTUP_WARM_DEFAULT_CHAT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_STARTUP_WARMUP_RECENT_LIMIT",
-      "scopes": {
-        "production": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
-          ],
-          "readerFiles": []
-        },
-        "runtimeSrc": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "runtime/src/runtime/startup.ts"
           ],
           "readerFiles": []
         }

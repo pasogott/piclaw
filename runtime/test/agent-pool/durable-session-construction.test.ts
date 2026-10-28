@@ -87,19 +87,13 @@ for (const empty of [false, true]) {
       });
       Object.defineProperties(serviceOptions, Object.getOwnPropertyDescriptors(compatibility));
       services = createAgentPoolServices(serviceOptions);
-      expect(services.sessionManager).not.toBeInstanceOf(AgentSessionManager);
-      expect(services.sessionBinder).not.toBeInstanceOf(AgentSessionBinder);
-      expect(services.toolFactory).not.toBeInstanceOf(AgentToolFactory);
+      for(const field of ["sessionManager","sessionBinder","toolFactory"])expect(services).not.toHaveProperty(field);
       expect(services).not.toHaveProperty("turnCoordinator");
       const databaseBefore = getDb().serialize();
       let runnerOptionReads = 0;
       // Backend-owned lookup remains live for post-startup routes.
       for (const chat of ["web:bound", "web:unknown"]) {
         await expect(pool.getSessionForIntrospection(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
-        await expect(services.sessionManager.getOrCreate(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
-        expect("getOrCreateSide" in services.sessionManager).toBe(false);
-        expect(services.sessionManager.prewarm(chat, { mode: "lightweight" })).toBe(false);
-        expect(services.sessionManager.prewarm(chat, { mode: "full" })).toBe(false);
         await expect(pool.mergeChatBranchIntoParent(chat)).rejects.toThrow("Durable branch rollup unavailable");
         // Native restore now exists. An absent branch must still reject before
         // any legacy fallback or persisted metadata change.
@@ -124,7 +118,7 @@ for (const empty of [false, true]) {
       expect(snapshot()).toEqual(before);
     } finally {
       await pool?.shutdown();
-      await services?.sessionManager.shutdown();
+      await services?.sessionManager?.shutdown();
       for (const spy of spies) spy.mockRestore();
     }
   });

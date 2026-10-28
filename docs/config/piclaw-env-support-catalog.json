@@ -2984,23 +2984,18 @@
       "owner": "core",
       "type": "boolean",
       "default": false,
-      "bounds": "startup-only boolean",
+      "bounds": null,
       "allowedValues": [],
       "secret": false,
-      "persistence": [
-        "env"
-      ],
-      "precedence": [
-        "process.env",
-        "default"
-      ],
-      "status": "supported",
+      "persistence": [],
+      "precedence": [],
+      "status": "removed",
       "compatibilityAliasFor": null,
       "deprecation": null,
       "removalVersion": null,
       "bootstrapAllowed": false,
-      "source": "startup session warmup policy",
-      "migrationDisposition": "retain-startup-tuning",
+      "source": "Legacy startup session prewarm retired (#1672)",
+      "migrationDisposition": "removed-reference-only",
       "supportedPersistence": [
         "env"
       ]
@@ -3010,23 +3005,18 @@
       "owner": "core",
       "type": "integer",
       "default": 0,
-      "bounds": "0..8 chats",
+      "bounds": null,
       "allowedValues": [],
       "secret": false,
-      "persistence": [
-        "env"
-      ],
-      "precedence": [
-        "process.env",
-        "default"
-      ],
-      "status": "supported",
+      "persistence": [],
+      "precedence": [],
+      "status": "removed",
       "compatibilityAliasFor": null,
       "deprecation": null,
       "removalVersion": null,
       "bootstrapAllowed": false,
-      "source": "startup session warmup policy",
-      "migrationDisposition": "retain-startup-tuning",
+      "source": "Legacy startup session prewarm retired (#1672)",
+      "migrationDisposition": "removed-reference-only",
       "supportedPersistence": [
         "env"
       ]

@@ -44,12 +44,11 @@ for (const mode of ["durable", "legacy"] as const) {
         });
       }});
       const { AgentPool } = await import(source + "/agent-pool.ts");
-      const { createAgentPoolModelOptions } = await import(${JSON.stringify(resolve(import.meta.dir, "../model-services-fixture.ts"))});
+      const { createAgentPoolModelOptions,createLegacyCapturePoolOptions } = await import(${JSON.stringify(resolve(import.meta.dir, "../model-services-fixture.ts"))});
       const { initDatabase } = await import(source + "/db.ts");
       initDatabase();
       const mode = ${JSON.stringify(mode)};
-      const pool = new AgentPool({ ...createAgentPoolModelOptions(),
-        ...(mode === "durable" ? { getDurableSession: () => undefined } : {}) });
+      const pool = new AgentPool(mode === "durable" ? createAgentPoolModelOptions() : createLegacyCapturePoolOptions());
       try {
         if (attempts.length) throw new Error("Construction evaluated a forbidden local module");
         if (mode === "durable") {

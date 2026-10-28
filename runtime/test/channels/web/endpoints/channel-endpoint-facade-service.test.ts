@@ -198,7 +198,7 @@ describe("web channel endpoint facade service", () => {
     expect(await branchesResponse.json()).toEqual({ chats: knownChats });
   });
 
-  test("can schedule recent-chat warmup from the branches endpoint without changing payload shape", async () => {
+  test("stale recent warmup query cannot hydrate a session or change payload shape", async () => {
     const { facade, knownChats, scheduledWarmups } = createFacade(() => createIdentitySnapshot());
 
     const branchesResponse = facade.handleAgentBranches(
@@ -206,10 +206,10 @@ describe("web channel endpoint facade service", () => {
     );
     expect(branchesResponse.status).toBe(200);
     expect(await branchesResponse.json()).toEqual({ chats: knownChats });
-    expect(scheduledWarmups).toEqual([{ limit: 4, excludeChatJids: ["web:default"] }]);
+    expect(scheduledWarmups).toEqual([]);
   });
 
-  test("can schedule a validated priority warmup for the currently opened chat", async () => {
+  test("stale priority warmup query cannot hydrate the currently opened chat", async () => {
     const { facade, scheduledPriorityWarmups } = createFacade(() => createIdentitySnapshot());
 
     const response = facade.handleAgentBranches(
@@ -218,7 +218,7 @@ describe("web channel endpoint facade service", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ chats: [{ chat_jid: "web:branch", agent_name: "Branch" }] });
-    expect(scheduledPriorityWarmups).toEqual(["web:branch"]);
+    expect(scheduledPriorityWarmups).toEqual([]);
   });
 });
 
