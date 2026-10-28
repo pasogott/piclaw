@@ -4,7 +4,7 @@
  * Provides helpers for building previews of agent drafts/thoughts, tracking
  * tool call titles, and constructing agent profile metadata objects.
  *
- * Consumers: web/agent-events.ts, web/agent-message-store.ts.
+ * Consumers: native-turn-view.ts and handlers/agent.ts.
  */
 
 import { buildPreviewLines, countSoftLines, splitLines } from "../../../utils/preview.js";
