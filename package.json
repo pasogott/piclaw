@@ -148,7 +148,7 @@
     "js-yaml": "5.5.0",
     "katex": "0.19.0",
     "marked": "18.1.1",
-    "openai": "7.43.0",
+    "openai": "7.31.0",
     "pele": "1.9.0",
     "pi-mcp-adapter": "github:piclaw-bot/pi-mcp-adapter#dddfcf630508f42c169889c11dee94e69b746e7c",
     "pptxviewjs": "1.1.9",
