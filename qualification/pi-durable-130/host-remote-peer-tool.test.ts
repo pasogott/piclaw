@@ -21,7 +21,7 @@ function fixture() {
     runtime: () => ({ async captureToolSource(conversation, task, call) {
       expect([conversation, task, call]).toEqual([11, 22, "owned-call"]); captured++;
       return { operation: { operationId: "owned-op", chatJid: "real-chat", version: 1,
-        harness: { harnessOperationId: "hop", sessionId: "session", lane: "main", watchGeneration: 3 } }, inputs: [] } as any;
+        harness: { harnessOperationId: "hop", sessionId: "session" } }, inputs: [] } as any;
     } }), assertOwner() {}, cwd: "/owned-workspace", nativeHostPorts: ports });
   return { tool, invoke: (args: unknown) => tool.execute(args as any,
     { callId: "owned-call", conversationId: 11, taskId: 22 } as any, {} as any),

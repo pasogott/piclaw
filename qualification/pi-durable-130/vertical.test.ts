@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import {hashCanonicalRequest} from '../../runtime/src/service-effects/contracts/common.js';
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ToolDefinition, ExtensionToolContext } from "../../node_modules/@earendil-works/pi-coding-agent";
@@ -204,8 +205,11 @@ test("vertical: copied existing chat -> host 1.2 models + actual Plan + guarded 
       const entry = status.status === "done" ? await conversation.commit(tx => tx.entry(AssistantEntry, status.answer), context) : undefined;
       if (status.status === "done" && (!entry || entry.conversationId !== identity.conversationId)) throw new Error("Wrong answer owner");
       if (status.status === "unanswered") expect(status.reason.length).toBeGreaterThan(0);
-      operation = value(await work.bindHarness(sealed({ effect: effect(`bind:${id}`, operation.operationId, sourceSeq), expectedVersion: operation.version,
-        sessionId: identity.sourceSessionId, lane: "main", harnessOperationId: String(submission.id), state: "finished" as const, watchGeneration: owner.token.generation })));
+      operation = value(await work.bindHarness(sealed({ effect: effect(`bind:${id}`, operation.operationId, sourceSeq), expectedVersion: operation.version, sessionId: identity.sourceSessionId, harnessOperationId: String(submission.id) })));
+      const completion={effect:{...effect(`finish:${id}`,operation.operationId,sourceSeq),operationId:operation.operationId},expectedVersion:operation.version,
+        expectedHarness:{sessionId:operation.harness!.sessionId,harnessOperationId:operation.harness!.harnessOperationId}};
+      completion.effect.requestHash=hashCanonicalRequest({method:'finishHarness.v1',...completion});
+      operation=value(await work.finishHarness(completion));
       const cancelled = operation.cancellation !== null;
       const text = (entry?.model ?? []).filter(m => m.role === "assistant").flatMap(m => m.content.filter(p => p.type === "text").map(p => p.text)).join("");
       payloads.putText(`answer:${id}`, text);

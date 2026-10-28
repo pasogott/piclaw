@@ -500,8 +500,7 @@ async function reconcileCompletedScheduledAgentSources(store: ScheduledRunStore,
     JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id AND r.operation_id=o.operation_id AND r.accepted_source_seq=s.source_seq
     JOIN service_effect_s07_source_bindings b ON b.run_id=r.run_id AND b.operation_id=o.operation_id AND b.source_seq=s.source_seq AND b.chat_jid=o.chat_jid
     WHERE r.state='completed' AND o.phase IN ('claimed','executing') AND s.state NOT IN ('consumed','disposed')
-      AND o.cancellation_source_seq IS NULL AND o.harness_session_id IS NULL AND o.harness_lane IS NULL
-      AND o.harness_operation_id IS NULL AND o.harness_state IS NULL AND o.harness_watch_generation IS NULL`;
+      AND o.cancellation_source_seq IS NULL AND o.harness_session_id IS NULL AND o.harness_operation_id IS NULL`;
   const rows = db.query(`SELECT o.operation_id,o.chat_jid,o.primary_source_seq,o.version,r.run_id ${proof} ORDER BY r.settled_at,r.run_id LIMIT 100`)
     .all() as { operation_id: string; chat_jid: string; primary_source_seq: number; version: number; run_id: string }[];
   for (const row of rows) {

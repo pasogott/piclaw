@@ -62,7 +62,7 @@ applicationTest("owned application peer steer joins active native operation and 
     let running = false;
     for (let n=0; n<1000; n++) {
       const rows = root.query("SELECT * FROM service_effect_s01_operations WHERE chat_jid=?").all(chat) as any[];
-      running = rows.some(r => r.harness_state === "running" && r.harness_operation_id !== null);
+      running = rows.some(r => r.phase === "executing" && r.harness_operation_id !== null);
       if (running) break;
       await Bun.sleep(2);
     }

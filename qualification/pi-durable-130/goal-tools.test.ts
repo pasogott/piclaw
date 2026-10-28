@@ -60,8 +60,7 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   const chat = "web:goal-operation";
   const source = value(await work.acceptSource(sealed({ effect: effect("goal-accept"), chatJid: chat, sourceId: "goal-source", kind: "message", payloadRef: "goal-payload", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const claimed = value(await work.claimNext(sealed({ effect: effect("goal-claim"), chatJid: chat, expectedFrontier: 0, newOperationId: "goal-operation", claimedAt: at })))!;
-  const operation = value(await work.bindHarness(sealed({ effect: effect("goal-bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version,
-    sessionId: "goal-session", lane: "main", harnessOperationId: "42", state: "running", watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("goal-bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "goal-session", harnessOperationId: "42" })));
   const captured = { operation, inputs: [{ incarnation: "goal-copy", conversationId: 2 as never, chatJid: chat, branchId: "main", operationId: operation.operationId,
     sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "goal-request", requestHash: "a".repeat(64), submissionId: 42 as never }] };
   let revokeDuringCapture = false;
@@ -174,7 +173,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       const adapter = createDurableConversationAdapter({ incarnation: f.incarnation,
         manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }], runtime: f.runtime! });
       const coordinator = createDurableQueuedSteering({ work: f.ports.work, adapter, chatJid: f.chatJid, branchId: "main",
-        assertCurrentWriter: () => f.owner.assert(), runningBinding: { sessionId: f.incarnation, lane: "main", watchGeneration: f.generation },
+        assertCurrentWriter: () => f.owner.assert(), runningBinding: { sessionId: f.incarnation },
         readQueued: id => getDeferredQueuedFollowups(f.chatJid).find(item => item.rowId === id),
         validatePayload({ item }) { expect(item.queuedContent).toBe(steerText); },
         materialize: (item, accept) => storeWebMessage({} as any, { chatJid: f.chatJid, content: item.queuedContent,
@@ -325,8 +324,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
       requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: acceptedText }) };
     const id = await f.runtime!.submit(input);
-    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
-      sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
+    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: f.incarnation, harnessOperationId: String(id) })));
     await f.runtime!.wait(input, id);
     if (mode === "compacted-foreign-boundary") {
       expect(compacted).toBe(true);
@@ -415,7 +413,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
       const adapter = createDurableConversationAdapter({ incarnation: f.incarnation, manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }], runtime: f.runtime! });
       allowedContinuationRequests.add(`message:${stored.id}:${item.source_id}`);
       const dispatch = createDurableQueueDispatch({ work: f.ports.work, adapter, branchId: "main", assertCurrentWriter: () => f.owner.assert(),
-        runningCorrelation(id) { return { sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation }; },
+        runningCorrelation(id) { return { sessionId: f.incarnation, harnessOperationId: String(id) }; },
         async waitForReconciliation() {}, shutdown: new AbortController().signal });
       expect(await dispatch(f.chatJid, item.source_id!, stored.id)!()).toBe("settled");
       expect(modelEntries).toBe(3);
@@ -512,8 +510,7 @@ for (const mode of [false, true, "snapshot-replace", "snapshot-stop", "snapshot-
     const laterInput = { ...input, operationId: laterClaim.operation.operationId, sourceSeq: laterSource.sourceSeq, sourceId: laterSource.sourceId,
       payloadRef: laterSource.payloadRef, requestId: laterRequest, requestHash: hashCanonicalRequest({ type: "input", requestId: laterRequest, content: "LATER_GOAL_OPERATION" }) };
     const laterId = await f.runtime!.submit(laterInput);
-    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:later-running`, laterInput.operationId, laterSource.sourceSeq), expectedVersion: laterClaim.operation.version,
-      sessionId: f.incarnation, lane: "main", harnessOperationId: String(laterId), state: "running", watchGeneration: f.generation })));
+    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:later-running`, laterInput.operationId, laterSource.sourceSeq), expectedVersion: laterClaim.operation.version, sessionId: f.incarnation, harnessOperationId: String(laterId) })));
     await f.runtime!.wait(laterInput, laterId);
     expect(terminalProofs).toEqual([true, false, false, true, false, false, false, false]);
     expect(captures).toBe(3);
@@ -639,7 +636,7 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
   });
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership: applicationOwnership(lock), offlineInitialize: true,
     manifest: [{ chatJid: chat, branchId: "main", conversationId: conversation }], sessions: new Map([[chat, "original"]]),
-    runtime: { incarnation: "goal-admission", sessionId: "goal-admission", lane: "main", generation: 1, now: () => new Date().toISOString(),
+    runtime: { incarnation: "goal-admission", sessionId: "goal-admission", now: () => new Date().toISOString(),
       harnessOptions: { models: fixture.models, registry: fixture.registry } },
     answers: { resolver: { resolve: () => null }, put() {} },
     prepareInputText,

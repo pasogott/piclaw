@@ -335,8 +335,7 @@ describe("WebAgentControlPlaneService", () => {
           newOperationId: "running-operation", claimedAt: "2026-08-14T09:00:00.000Z" }));
         expect(claim.ok && claim.value?.source.sourceId).toBe(primary.source_id);
         expect((await f.work.bindHarness(seal({ effect: { ...f.effect("bind"), operationId: "running-operation", sourceSeq: 1 },
-          expectedVersion: 1, sessionId: "owned-session", lane: "main", harnessOperationId: "native-operation",
-          state: "running", watchGeneration: 1 }))).ok).toBe(true);
+          expectedVersion: 1, sessionId: "owned-session", harnessOperationId: "native-operation" }))).ok).toBe(true);
         const rowId = await f.enqueue(chat, "  accepted input stays exact  ");
         const siblingRowId = await f.enqueue(chat, "sibling");
         const [queued, sibling] = getDeferredQueuedFollowups(chat);
@@ -355,7 +354,7 @@ describe("WebAgentControlPlaneService", () => {
             } },
         });
         const coordinator = createDurableQueuedSteering({ work: f.work, adapter, chatJid: chat, branchId: "main",
-          runningBinding: { sessionId: "owned-session", lane: "main", watchGeneration: 1 },
+          runningBinding: { sessionId: "owned-session" },
           assertCurrentWriter() { if (failure === "fenced") throw Error("PRIVATE_FENCED_ENGINE"); },
           readQueued: id => getDeferredQueuedFollowups(chat).find(item => item.rowId === id),
           validatePayload: ({ item }) => expect(f.work.getAcceptedSource(chat, item.source_id)?.provenanceRef).toBe(f.digest(item)),

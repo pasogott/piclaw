@@ -42,8 +42,7 @@ test("installed pinned Plan executes the public registry definition against root
   const source = value(await work.acceptSource(sealed({ effect: effect("plan:accept"), chatJid, sourceId: "plan:source", kind: "message" as const,
     payloadRef: "plan:payload", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const claimed = value(await work.claimNext(sealed({ effect: effect("plan:claim"), chatJid, expectedFrontier: 0, newOperationId: "plan:operation", claimedAt: at })))!;
-  const operation = value(await work.bindHarness(sealed({ effect: effect("plan:bind", claimed.operation.operationId, source.sourceSeq),
-    expectedVersion: claimed.operation.version, sessionId: "plan:session", lane: "main", harnessOperationId: "42", state: "running" as const, watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect("plan:bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "plan:session", harnessOperationId: "42" })));
   // Committed root evidence; this fixture does not claim public run-capture proof.
   const captured = { operation, inputs: [{ incarnation: "plan:copy", conversationId: 2 as never,
     chatJid, branchId: "main", operationId: operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,

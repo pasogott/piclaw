@@ -13,8 +13,7 @@ for (const status of ["complete", "budget_limited"] as const) for (const change 
   const chatJid = `web:goal-race-${change}`;
   const source = value(await work.acceptSource(sealed({ effect: effect(`goal-race:${change}:accept`), chatJid, sourceId: "race", kind: "message", payloadRef: "race", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const claimed = value(await work.claimNext(sealed({ effect: effect(`goal-race:${change}:claim`), chatJid, expectedFrontier: 0, newOperationId: `goal-race:${change}:op`, claimedAt: at })))!;
-  const operation = value(await work.bindHarness(sealed({ effect: effect(`goal-race:${change}:bind`, claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version,
-    sessionId: "race-session", lane: "main", harnessOperationId: "42", state: "running", watchGeneration: 1 })));
+  const operation = value(await work.bindHarness(sealed({ effect: effect(`goal-race:${change}:bind`, claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: "race-session", harnessOperationId: "42" })));
   const captured = { operation, inputs: [{ incarnation: "race-copy", conversationId: 2 as never, chatJid, branchId: "main", operationId: operation.operationId,
     sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "race", requestHash: "a".repeat(64), submissionId: 42 as never }], runTaskId: 9 as never };
   let goal: { goal_id: string; lifecycle_generation: number; status: string } | null = { goal_id: "original", lifecycle_generation: 2, status };

@@ -327,8 +327,7 @@ for (const cancel of [false, true]) {
         sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
         requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: "ROOT_SOURCE" }) };
       const id = await f.runtime!.submit(input);
-      value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:native-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
-        sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running" as const, watchGeneration: f.generation })));
+      value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:native-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: f.incarnation, harnessOperationId: String(id) })));
       waiting = f.runtime!.wait(input, id);
       await Promise.race([entered.promise, waiting.then(() => { throw Error("Root settled before owned child source capture"); })]);
       expect(children).toBe(1); expect(proofs).toHaveLength(1);
@@ -442,8 +441,7 @@ for (const boundary of ["before-effect", "after-effect"] as const) {
         sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
         requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: "ROOT_STANDARD" }) };
       const id = await f.runtime!.submit(input);
-      value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:standard-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
-        sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running" as const, watchGeneration: f.generation })));
+      value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:standard-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version, sessionId: f.incarnation, harnessOperationId: String(id) })));
       waiting = f.runtime!.wait(input, id); void waiting.catch(() => {});
       await Promise.race([entered.promise, waiting.then(() => { throw Error("Parent settled before write boundary"); })]);
       expect(delegate.replay).toBe("safe"); expect(write.replay).toBe("unsafe");

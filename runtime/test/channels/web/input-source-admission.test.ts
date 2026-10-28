@@ -741,7 +741,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     if (!accepted) { accepted = work; throw Error("lost wait acknowledgement"); }
   } } : adapter;
   f.channel.dispatchAcceptedInput = createDurableQueueDispatch({ ...lifecycle, work: f.work, adapter: selectedAdapter, branchId: "main", assertCurrentWriter: assert,
-    ...(steering ? { runningCorrelation: (id: number) => ({ sessionId: 'queue-test', lane: 'main', harnessOperationId: String(id), state: 'running' as const, watchGeneration: 1 }) } : {}) });
+    ...(steering ? { runningCorrelation: (id: number) => ({ sessionId: 'queue-test', harnessOperationId: String(id) }) } : {}) });
   let legacyCalls = 0;
   (f.channel.agentPool as any).runAgent = () => { legacyCalls++; throw Error("legacy forbidden"); };
   const resumeQueued = f.channel.resumeChat.bind(f.channel);
@@ -809,7 +809,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
         } },
         onPendingIntent(input) { pendingIntent = input; recoveryDispatch.onPendingIntent(input); },
         chatJid: 'web:default', branchId: 'main', assertCurrentWriter: assert,
-        runningBinding: { sessionId: 'queue-test', lane: 'main', watchGeneration: 1 },
+        runningBinding: { sessionId: 'queue-test' },
         readQueued: id => getDeferredQueuedFollowups('web:default').find(item => item.rowId === id),
         validatePayload: ({ item }) => {
           const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutable } = item;

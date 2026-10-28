@@ -571,7 +571,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore, ScheduledRunR
       WHERE o.operation_id=? AND o.chat_jid=? AND o.primary_source_seq=? AND s.source_id=? AND s.kind='scheduled_agent'
       AND o.phase='terminal' AND o.terminal_disposition='failed' AND o.terminal_error_code='scheduled_run_interrupted'
       AND s.state='disposed' AND s.disposition_reason='scheduled_run_interrupted'
-      AND o.harness_session_id IS NULL AND o.harness_lane IS NULL AND o.harness_operation_id IS NULL AND o.harness_state IS NULL AND o.harness_watch_generation IS NULL
+      AND o.harness_session_id IS NULL AND o.harness_operation_id IS NULL
       AND o.cancellation_source_seq IS NULL AND o.terminal_message_row_id IS NULL
       AND (c.active_operation_id IS NULL OR c.active_operation_id<>o.operation_id)
       AND (SELECT COUNT(*) FROM service_effect_s01_operation_sources os WHERE os.operation_id=o.operation_id)=1`).get(run.operation_id,snapshot.chatJid,run.accepted_source_seq,run.run_id) as {version:number;terminal_committed_at:string}|null;

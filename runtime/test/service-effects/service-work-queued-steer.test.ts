@@ -13,7 +13,7 @@ function seal<T extends { effect: { requestHash: string } }>(request: T, method?
 function fixture() {
   const subject = openSqliteSubject(":memory:", [], false);
   const db = subject.database;
-  const harness = { ...TERMINAL_HARNESS, state: "running" as const };
+  const harness = { ...TERMINAL_HARNESS };
   subject.seedOperation(terminalOperation({ phase: "executing", harness }));
   let owner = true;
   let checks = 0;

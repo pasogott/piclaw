@@ -127,11 +127,7 @@ test("one DB imported fork tree through actual facade, original provenance and n
     expect(provenance?.binding?.originalEntries.map((e: any) => e.id)).toContain("original-root");
     await harness.close(context);
     const manifest = receipt.branches.map(b => ({ chatJid: b.chatJid, branchId: b.branchId, conversationId: b.engineConversationId }));
-    runtime = await HostConversationRuntime.open({ incarnation: "tree", owner: { assert: () => f.owner.assert(), release() {} }, openStorage,
-      harnessOptions: { models: f.base.models, registry: f.base.registry }, work: f.ports.work, terminal: f.ports.terminal, bindings: f.ports.bindings,
-      conversationFor: (chat, branch) => { const b = manifest.find(b => b.chatJid === chat && b.branchId === branch); if (!b) throw Error("binding"); return b.conversationId as ConversationId; },
-      existingConversationIds: manifest.map(b => b.conversationId as ConversationId), authorizeScheduling() { throw Error("read only"); }, putAnswer() { throw Error("read only"); }, sessionId: "original-host-session", lane: "tree", generation: 1, now: () => new Date(0).toISOString(),
-    }, context);
+    runtime = await HostConversationRuntime.open({ incarnation: "tree", owner: { assert: () => f.owner.assert(), release() {} }, openStorage, harnessOptions: { models: f.base.models, registry: f.base.registry }, work: f.ports.work, terminal: f.ports.terminal, bindings: f.ports.bindings, conversationFor: (chat, branch) => { const b = manifest.find(b => b.chatJid === chat && b.branchId === branch); if (!b) throw Error("binding"); return b.conversationId as ConversationId; }, existingConversationIds: manifest.map(b => b.conversationId as ConversationId), authorizeScheduling() { throw Error("read only"); }, putAnswer() { throw Error("read only"); }, sessionId: "original-host-session", now: () => new Date(0).toISOString() }, context);
     const adapter = createDurableConversationAdapter({ incarnation: "tree", manifest, runtime });
     const app = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[branch.chatJid, adapter.sessionPosition(branch.chatJid, branch.branchId, "original-host-session")]]), modelRegistry: {} as any, modelRuntime: {} as any, authPath: "unused",});
     const tree = await app.getSessionTreeForChat(branch.chatJid);

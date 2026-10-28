@@ -1321,8 +1321,7 @@ function authorise(
         !cancelled &&
         (operation.phase === "claimed" || operation.phase === "starting_harness") &&
         (operation.harness === null ||
-          (operation.harness.state === "not_started" &&
-            operation.harness.harnessOperationId === null));
+          operation.harness.harnessOperationId === null);
       break;
     case "superseded":
       allowed =
@@ -1359,18 +1358,12 @@ function authoriseOutbox(
 function validFakeHarness(value: HarnessCorrelation | null): boolean {
   if (value === null) return true;
   return (
+    Object.keys(value).sort().join(',') === 'harnessOperationId,sessionId' &&
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
-    typeof value.lane === "string" &&
-    value.lane.length > 0 &&
     (value.harnessOperationId === null ||
       (typeof value.harnessOperationId === "string" &&
-        value.harnessOperationId.length > 0)) &&
-    ["not_started", "running", "suspended", "aborting", "finished"].includes(
-      value.state,
-    ) &&
-    Number.isSafeInteger(value.watchGeneration) &&
-    value.watchGeneration >= 0
+        value.harnessOperationId.length > 0))
   );
 }
 
@@ -1381,10 +1374,7 @@ function sameHarness(
   if (left === null || right === null) return left === right;
   return (
     left.sessionId === right.sessionId &&
-    left.lane === right.lane &&
-    left.harnessOperationId === right.harnessOperationId &&
-    left.state === right.state &&
-    left.watchGeneration === right.watchGeneration
+    left.harnessOperationId === right.harnessOperationId
   );
 }
 

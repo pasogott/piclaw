@@ -87,7 +87,7 @@ for (const scenario of ["success", "siblings", "materialization-recovery", "alte
           expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=?").get(id)).toEqual({ phase: "terminal" });
           controls.onOperationSettled(id, receipt);
         },
-        runtime: { incarnation: "native-process-test", sessionId: "runtime", lane: "main", generation: 1,
+        runtime: { incarnation: "native-process-test", sessionId: "runtime",
           now: () => new Date().toISOString(), harnessOptions: { models: base.models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
       }, context);
     };

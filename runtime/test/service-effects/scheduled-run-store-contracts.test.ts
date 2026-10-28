@@ -692,7 +692,7 @@ describe('expired interrupted agent terminal reconciliation',()=>{
       if(malformed==='source-seq')f.request.effect.sourceSeq=2;
       if(malformed==='source-state')f.database.exec("UPDATE service_effect_s01_sources SET state='claimed',disposition_reason=NULL");
       if(malformed==='operation-state')f.database.exec("UPDATE service_effect_s01_operations SET phase='claimed',terminal_disposition=NULL,terminal_error_code=NULL,terminal_committed_at=NULL");
-      if(malformed==='harness')f.database.exec("UPDATE service_effect_s01_operations SET harness_session_id='old',harness_lane='main',harness_operation_id='old',harness_state='finished',harness_watch_generation=1");
+      if(malformed==='harness')f.database.exec("UPDATE service_effect_s01_operations SET harness_session_id='old',harness_operation_id='old'");
       if(malformed==='error-code')f.database.exec("UPDATE service_effect_s01_operations SET terminal_error_code='other_failure'");
       if(malformed==='active-link')f.database.query('UPDATE service_effect_s01_chats SET active_operation_id=?').run(f.request.effect.operationId);
       if(malformed==='source-kind')f.database.exec("UPDATE service_effect_s01_sources SET kind='message'");

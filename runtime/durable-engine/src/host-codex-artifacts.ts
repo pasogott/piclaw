@@ -90,9 +90,8 @@ export function createHostCodexAnswerMaterializer(options: {
         JOIN service_effect_s01_chats ch ON ch.chat_jid=o.chat_jid AND ch.active_operation_id=o.operation_id
         WHERE o.operation_id=? AND o.chat_jid=? AND o.version=? AND o.phase=?
         AND o.primary_source_seq=? AND o.cancellation_source_id IS NULL AND o.terminal_disposition IS NULL
-        AND o.harness_session_id=? AND o.harness_lane=? AND o.harness_operation_id IS ?
-        AND o.harness_state=? AND o.harness_watch_generation=?`).get(operation.operationId, operation.chatJid,
-          operation.version, operation.phase, operation.primarySourceSeq, h.sessionId, h.lane, h.harnessOperationId, h.state, h.watchGeneration);
+        AND o.harness_session_id=? AND o.harness_operation_id IS ?`).get(operation.operationId, operation.chatJid,
+          operation.version, operation.phase, operation.primarySourceSeq, h.sessionId, h.harnessOperationId);
       if (!current || !['executing', 'settling'].includes(operation.phase)) throw Error('Codex answer authority unavailable');
       const sources = root.query(`SELECT s.source_seq FROM service_effect_s01_sources s
         JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq

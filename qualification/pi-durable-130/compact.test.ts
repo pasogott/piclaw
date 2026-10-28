@@ -28,15 +28,7 @@ test("public manual compact: real model summary, idle admission, observer detach
   const unused = async () => { throw Error("legacy/effect forbidden"); };
   const binding = { incarnation: "compact", chatJid: "web:compact", branchId: "main", conversationId: id };
   let runtime!: HostConversationRuntime, approvals = 0;
-  const config = { incarnation: "compact", owner: { assert: () => owner.assert(), release() {} }, openStorage,
-    withIdleModelGuard: <T>(body: () => Promise<T>) => { beforeGuard?.(); return sql.withIdleModelGuard(body); },
-    harnessOptions: { models: f.models, registry: withTaskModelRequestScope(f.registry), settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } },
-    work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
-    terminal: { getTerminal: unused, commitTerminal: unused } as any,
-    bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
-    conversationFor: () => id, existingConversationIds: [id],
-    authorizeScheduling: async () => { approvals++; expect((await runtime.inspectAuthority()).inspection.tasks).toHaveLength(0); },
-    putAnswer: unused, sessionId: "original-session", lane: "compact", generation: 1, now: () => new Date(0).toISOString() };
+  const config = { incarnation: "compact", owner: { assert: () => owner.assert(), release() {} }, openStorage, withIdleModelGuard: <T>(body: () => Promise<T>) => { beforeGuard?.(); return sql.withIdleModelGuard(body); }, harnessOptions: { models: f.models, registry: withTaskModelRequestScope(f.registry), settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } }, work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any, terminal: { getTerminal: unused, commitTerminal: unused } as any, bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused }, conversationFor: () => id, existingConversationIds: [id], authorizeScheduling: async () => { approvals++; expect((await runtime.inspectAuthority()).inspection.tasks).toHaveLength(0); }, putAnswer: unused, sessionId: "original-session", now: () => new Date(0).toISOString() };
   const app = () => {
     const adapter = createDurableConversationAdapter({ incarnation: "compact", manifest: [binding], runtime });
     return new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, adapter.sessionPosition(binding.chatJid, "main", "original-session")]]), modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
@@ -156,17 +148,8 @@ for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) 
   });
   let runtime!: HostConversationRuntime;
   try {
-    runtime = await HostConversationRuntime.open({ incarnation: binding.incarnation,
-      owner: { assert: () => owner.assert(), release() { releases++; } }, openStorage,
-      withIdleModelGuard: body => sql.withIdleModelGuard(body),
-      harnessOptions: { models: f.models, registry: f.registry,
-        settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } },
-      work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
-      terminal: { getTerminal: unused, commitTerminal: unused } as any,
-      bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
-      conversationFor: () => id, existingConversationIds: [id], authorizeScheduling() {},
-      putAnswer: unused, sessionId: "original", lane: "observations", generation: 1, now: () => new Date(0).toISOString(),
-    }, context);
+    runtime = await HostConversationRuntime.open({ incarnation: binding.incarnation, owner: { assert: () => owner.assert(), release() { releases++; } }, openStorage, withIdleModelGuard: body => sql.withIdleModelGuard(body), harnessOptions: { models: f.models, registry: f.registry,
+        settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } }, work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any, terminal: { getTerminal: unused, commitTerminal: unused } as any, bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused }, conversationFor: () => id, existingConversationIds: [id], authorizeScheduling() {}, putAnswer: unused, sessionId: "original", now: () => new Date(0).toISOString() }, context);
   } finally { openSpy.mockRestore(); }
   const closeSpy = spyOn(ownedHarness, "close");
   const adapter = createDurableConversationAdapter({ incarnation: binding.incarnation, manifest: [binding], runtime });
@@ -317,12 +300,7 @@ for (const scoped of [false, true]) test(`controller adopts one checkpointed man
   try {
     controller = await createHostController({ acquireOwnership: async () => ({ assertCurrentOwner: () => owner.assert(), release() {} }),
       createStorage: async () => openStorage(),
-      runtime: { incarnation: "recovered-manual", sessionId: "original", lane: "maintenance", generation: 1,
-        now: () => new Date(0).toISOString(), harnessOptions, work, bindings,
-        terminal: { getTerminal: forbidden, commitTerminal: forbidden } as any,
-        existingConversationIds: [id], conversationFor: () => id, putAnswer: forbidden,
-        withIdleModelGuard: body => sql.withIdleModelGuard(body),
-        ...(scoped ? { withCompactionGuard: <T>(body: () => Promise<T>) => sql.withCompactionGuard(body) } : {}) },
+      runtime: { incarnation: "recovered-manual", sessionId: "original", now: () => new Date(0).toISOString(), harnessOptions, work, bindings, terminal: { getTerminal: forbidden, commitTerminal: forbidden } as any, existingConversationIds: [id], conversationFor: () => id, putAnswer: forbidden, withIdleModelGuard: body => sql.withIdleModelGuard(body), ...(scoped ? { withCompactionGuard: <T>(body: () => Promise<T>) => sql.withCompactionGuard(body) } : {}) },
       recovery: { manifest: [binding], work, bindings, readAcceptedInput: forbidden } }, context);
     expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
     expect(f.host.modelCalls).toBe(0);
