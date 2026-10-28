@@ -379,7 +379,11 @@ async function handleAgentMessageInScope(
     const targetName = mentionTarget.agent_name;
     const validateTarget = captureInputTarget(targetJid);
     const sourceContent = typeof normalized.content === 'string' ? normalized.content : content;
-    const sourceOptions = { contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint };
+    const sourceOptions = { contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
+      // The source is consumed by this forwarding handoff. Its cursor belongs
+      // to the same commit, before publication can cancel/revoke the request.
+      acceptSource: ({ message }: { message: { timestamp: string } }) => setChatCursor(chatJid, message.timestamp),
+    };
     let sourceInteraction: ReturnType<typeof storeAgentUserMessage>;
     try {
       // Mentions commit the source before forwarding, but creation and its
@@ -394,8 +398,9 @@ async function handleAgentMessageInScope(
     }
     if (!sourceInteraction) return channel.json({ error: "Failed to store message" }, 500);
 
+    // Synchronous legacy-only channels retain their old storage contract.
+    if (!channel.admitUserMessage) setChatCursor(chatJid, sourceInteraction.timestamp);
     channel.broadcastEvent("new_post", sourceInteraction);
-    await admitSqliteWrite(getDb(), () => setChatCursor(chatJid, sourceInteraction!.timestamp), revalidateInputAuthority, req.signal);
 
     const sourceAgentName = typeof (channel.agentPool as { getAgentHandleForChat?: (chatJid: string) => string }).getAgentHandleForChat === "function"
       ? (channel.agentPool as { getAgentHandleForChat: (chatJid: string) => string }).getAgentHandleForChat(chatJid)
