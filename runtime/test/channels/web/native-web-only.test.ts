@@ -1,6 +1,17 @@
-import { expect, test } from "bun:test";
-import { initDatabase, getDb, storeChatMetadata, storeMessage, getChatCursor } from "../../../src/db.js";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { readFileSync } from 'node:fs';
+import {createTempWorkspace,setEnv} from '../../helpers.js';
+import {initializeChatCursorStorage,legacyCursorArchive} from '../../../src/db/chat-cursor-storage.js';
+import { initDatabase, closeDatabase, getDb, storeChatMetadata, storeMessage, getChatCursor } from "../../../src/db.js";
 import { processChat } from "../../../src/channels/web/handlers/agent.js";
+
+let cleanup = () => {};
+beforeEach(() => {
+  const ws = createTempWorkspace('native-web-only-');
+  const restore = setEnv({PICLAW_WORKSPACE:ws.workspace,PICLAW_STORE:ws.store,PICLAW_DATA:ws.data});
+  cleanup = () => {restore();ws.cleanup();};
+});
+afterEach(() => {closeDatabase();cleanup();});
 
 function pendingInput(chatJid: string) {
   initDatabase();
@@ -28,16 +39,28 @@ test("historical failed markers cannot skip accepted native input or be rewritte
   const chat = "web:native-with-legacy-history";
   const input = pendingInput(chat);
   const db = getDb();
-  db.query(`INSERT INTO chat_cursors(chat_jid,cursor_ts,failed_prev_ts,failed_ts,failed_message_id)
-    VALUES(?,'','',?,?)`).run(chat, input.timestamp, input.id);
+  // Construct the pre-ledger source inside this blank isolated fixture, then
+  // retire it through the real owned migration. Never restore a legacy writer.
+  expect(db.query('SELECT COUNT(*) AS n FROM chat_cursors').get()).toEqual({n:0});
+  db.transaction(() => {
+    db.exec("DROP TABLE chat_cursors; DELETE FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'");
+    db.exec(readFileSync(new URL('../../fixtures/legacy-chat-cursors.sql',import.meta.url),'utf8'));
+    db.query(`INSERT INTO chat_cursors(chat_jid,cursor_ts,failed_prev_ts,failed_ts,failed_message_id)
+      VALUES(?,'','',?,?)`).run(chat,input.timestamp,input.id);
+    initializeChatCursorStorage(db);
+  })();
+  const history = db.query('SELECT rowid,* FROM '+legacyCursorArchive).all();
+  const receipts = db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'").all();
   const calls: unknown[] = [];
   await processChat({ dispatchAcceptedInput: (...args: unknown[]) => {
     calls.push(args); return async () => "settled";
   }, broadcastEvent() {}, resumeChat() {} } as any, chat, "default");
   expect(calls).toEqual([[chat, input.id, input.rowId]]);
   expect(getChatCursor(chat)).toBe(input.timestamp);
-  expect(db.query("SELECT failed_message_id FROM chat_cursors WHERE chat_jid=?").get(chat))
-    .toEqual({ failed_message_id: input.id });
+  expect(db.query('SELECT rowid,* FROM '+legacyCursorArchive).all()).toEqual(history);
+  expect(db.query("SELECT * FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'").all()).toEqual(receipts);
+  expect(db.query('SELECT failed_message_id FROM '+legacyCursorArchive+' WHERE chat_jid=?').get(chat)).toEqual({failed_message_id:input.id});
+  expect((db.query('PRAGMA main.table_info(chat_cursors)').all() as {name:string}[]).map(row=>row.name)).toEqual(['chat_jid','cursor_ts','queued_followups_json']);
 });
 
 test("pending wakeups retain one input identity until settlement advances its cursor", async () => {
