@@ -91,6 +91,9 @@ try {
   // authenticate against a dropped table's rows.
   db.run("DROP TABLE web_sessions");
   db.run("CREATE TABLE web_sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL,auth_method TEXT,created_at TEXT NOT NULL,expires_at TEXT NOT NULL,session_id TEXT)");
+  // Rebuild the owned index as part of this fixture's current schema. This
+  // exercises statement invalidation, not repair of missing already-owned DDL.
+  db.run("CREATE UNIQUE INDEX idx_web_sessions_session_id ON web_sessions(session_id) WHERE session_id IS NOT NULL");
   assert.equal(getWebSession("legacy-fixture"), null);
   const renewed = createWebSession("legacy-fixture", "new-user", 3600, "passkey");
   assert.equal(getWebSession("legacy-fixture")?.session_id, renewed.session_id);

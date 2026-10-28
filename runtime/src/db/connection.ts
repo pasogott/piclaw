@@ -39,7 +39,7 @@ import { ensureLegacyColumns } from "./legacy-columns.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
 import { registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
 import { configureSqliteRole, openSqliteRole } from "./sqlite-role-policy.js";
-import { ensureOwnedMigrationLedger } from "./migrations.js";
+import { applyOwnedMigrations } from "./migrations.js";
 import { retireAttachmentRowidIndex } from "./attachment-index-retirement.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
 import { installScheduledRunCompositionSchema } from "../service-effects/current-piclaw/scheduled-run-schema.js";
@@ -647,20 +647,6 @@ function ensureScheduledTaskColumns(database: Database): void {
   ensureColumn("revision", "INTEGER NOT NULL DEFAULT 1");
 }
 
-function ensureWebSessionColumns(database: Database): void {
-  const columns = database.prepare("PRAGMA table_info(web_sessions)").all() as Array<{ name: string }>;
-  const existing = new Set(columns.map((col) => col.name));
-  if (!existing.has("auth_method")) {
-    try {
-      database.exec("ALTER TABLE web_sessions ADD COLUMN auth_method TEXT");
-    } catch (err) {
-      debugSuppressedError(log, "Web-session auth_method migration raced an already-updated schema state.", err, {
-        operation: "db.ensure_web_session_columns.add_auth_method",
-      });
-    }
-  }
-}
-
 function ensureChatBranchConstraints(database: Database): void {
   const tableRow = database.prepare(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_branches'"
@@ -839,7 +825,6 @@ export function initDatabase(): void {
 function initializeSchema(database: Database): void {
   migrateLegacyConfigTables(database);
   createSchema(database);
-  ensureOwnedMigrationLedger(database);
   retireAttachmentRowidIndex(database);
   ensureChatBranchConstraints(database);
   initializeChatProjects(database);
@@ -852,8 +837,19 @@ function initializeSchema(database: Database): void {
   installScheduledRunCompositionSchema(database);
   initializeScheduledHistorySchema(database);
   migrateScheduledTaskAuthorities(database);
-  ensureWebSessionColumns(database);
-  ensureWebSessionIdentity(database);
+  ensureLegacyColumns(database, "web_sessions", [
+    { name: "auth_method", type: "TEXT" },
+    { name: "session_id", type: "TEXT" },
+  ]);
+  const sessionIdentitySql = "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_sessions_session_id ON web_sessions(session_id) WHERE session_id IS NOT NULL";
+  applyOwnedMigrations(database, [
+    { owner: "host.web-sessions", id: "session-identity-index-v1", order: 1, sql: sessionIdentitySql },
+  ]);
+  const sessionIdentity = database.prepare("SELECT sql FROM main.sqlite_schema WHERE type='index' AND tbl_name='web_sessions' AND name='idx_web_sessions_session_id'")
+    .get() as { sql: string } | null;
+  if (sessionIdentity?.sql.replace(/\s+/g, " ").trim().toUpperCase() !== sessionIdentitySql.replace(" IF NOT EXISTS", "").toUpperCase()) {
+    throw Error("Web session identity index postcondition failed.");
+  }
   ensureFts(database);
   initializeChatCursorStorage(database);
   migrateChatCursors(database);
@@ -867,13 +863,6 @@ function initializeSchema(database: Database): void {
   initializeOwnedForkSchema(database);
   initializeAuthLabelsSchema(database);
   initializePickerPins(database);
-}
-
-/** Add a non-secret login identifier without rewriting existing bearer tokens. */
-function ensureWebSessionIdentity(database: Database): void {
-  const columns = database.prepare("PRAGMA table_info(web_sessions)").all() as Array<{ name: string }>;
-  if (!columns.some(column => column.name === "session_id")) database.exec("ALTER TABLE web_sessions ADD COLUMN session_id TEXT");
-  database.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_sessions_session_id ON web_sessions(session_id) WHERE session_id IS NOT NULL");
 }
 
 /** Add duration_ms column to thinking_content for databases created before it was introduced. */
