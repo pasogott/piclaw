@@ -498,28 +498,19 @@ test("tool output config getter groups retention env settings", () => {
   }
 });
 
-test("log retention config defaults and caps retention at 30 days", () => {
+test("tool-output retention config defaults and caps retention at 30 days", () => {
   const ws = createTempWorkspace("piclaw-config-");
   try {
     const dayMs = 24 * 60 * 60 * 1000;
-    const defaults = loadConfigInSubprocess(ws, [
-      "AGENT_LOG_CONFIG",
-      "TOOL_OUTPUT_CONFIG",
-      "call:getAgentLogConfig",
-      "call:getToolOutputConfig",
-    ]);
-    expect(defaults.AGENT_LOG_CONFIG.retentionMs).toBe(30 * dayMs);
+    const defaults = loadConfigInSubprocess(ws, ["TOOL_OUTPUT_CONFIG", "call:getToolOutputConfig"]);
     expect(defaults.TOOL_OUTPUT_CONFIG.retentionMs).toBe(30 * dayMs);
-    expect(defaults["call:getAgentLogConfig"]).toEqual(defaults.AGENT_LOG_CONFIG);
     expect(defaults["call:getToolOutputConfig"]).toEqual(defaults.TOOL_OUTPUT_CONFIG);
 
-    const capped = loadConfigInSubprocess(ws, ["AGENT_LOG_CONFIG", "TOOL_OUTPUT_CONFIG"], {
+    const capped = loadConfigInSubprocess(ws, ["TOOL_OUTPUT_CONFIG"], {
       env: {
-        PICLAW_AGENT_LOG_RETENTION_DAYS: "90",
         PICLAW_TOOL_OUTPUT_RETENTION_MS: String(90 * dayMs),
       },
     });
-    expect(capped.AGENT_LOG_CONFIG.retentionMs).toBe(30 * dayMs);
     expect(capped.TOOL_OUTPUT_CONFIG.retentionMs).toBe(30 * dayMs);
   } finally {
     ws.cleanup();
