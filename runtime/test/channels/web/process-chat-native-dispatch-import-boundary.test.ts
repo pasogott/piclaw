@@ -52,8 +52,8 @@ for (const mode of ["settled", "pending"] as const) {
       };
 
       await processChat(channel, chatJid, "default");
-      const executionMarkers = getDb().prepare(
-        "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+      const pollingRow = getDb().prepare(
+        "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
       ).get(chatJid);
       console.log(JSON.stringify({
         mode,
@@ -61,7 +61,7 @@ for (const mode of ["settled", "pending"] as const) {
         resumed,
         waitCalls,
         cursor: getChatCursor(chatJid),
-        executionMarkers,
+        pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name),
       }));
     `;
 
@@ -90,22 +90,11 @@ for (const mode of ["settled", "pending"] as const) {
       expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
       const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
       expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
       expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
       expect(result.resumed).toBe(1);
       expect(result.waitCalls).toBe(mode === "pending" ? 1 : 0);
-      expect(result.executionMarkers).toEqual({
-        preflight_prev_ts: null,
-        preflight_message_id: null,
-        preflight_started_at: null,
-        inflight_prev_ts: null,
-        inflight_message_id: null,
-        inflight_started_at: null,
-        failed_prev_ts: null,
-        failed_ts: null,
-        failed_message_id: null,
-        failed_thread_root: null,
-        failed_created_at: null,
-      });
+      expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -162,10 +151,10 @@ test("native coordinator without admitted source fails before legacy processChat
       throw new Error("Unexpected missing-admission failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -193,9 +182,10 @@ test("native coordinator without admitted source fails before legacy processChat
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Native input has no admitted source");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -252,10 +242,10 @@ test("native accepted dispatch throw path fails before legacy lifecycle when pen
       throw new Error("Unexpected dispatch-throw failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -283,9 +273,10 @@ test("native accepted dispatch throw path fails before legacy lifecycle when pen
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch requires host pending observation");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -335,10 +326,10 @@ test("native accepted dispatch pending observer unresolved path exits without cu
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), resumed, waitCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), resumed, waitCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -366,10 +357,11 @@ test("native accepted dispatch pending observer unresolved path exits without cu
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.resumed).toBe(0);
     expect(result.waitCalls).toBe(1);
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -425,10 +417,10 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
       throw new Error("Unexpected non-callable dispatch failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -456,9 +448,10 @@ test("native accepted dispatch must be callable before legacy lifecycle fallback
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -498,10 +491,10 @@ test("native accepted dispatch invalid status is rejected before legacy lifecycl
       throw new Error("Unexpected invalid dispatch failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -510,9 +503,10 @@ test("native accepted dispatch invalid status is rejected before legacy lifecycl
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch returned invalid status");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -552,10 +546,10 @@ test("native pending observer invalid status is rejected before legacy lifecycle
       throw new Error("Unexpected invalid pending observer failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -564,9 +558,10 @@ test("native pending observer invalid status is rejected before legacy lifecycle
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted pending observer returned invalid status");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -614,10 +609,10 @@ test("native pending observer must be callable before legacy lifecycle fallback"
       throw new Error("Unexpected non-callable pending observer failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -645,9 +640,10 @@ test("native pending observer must be callable before legacy lifecycle fallback"
 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted pending observer must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -693,10 +689,10 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
       throw new Error("Unexpected non-callable coordinator failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -724,9 +720,10 @@ test("native accepted dispatch coordinator must be callable before legacy lifecy
 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(String(result.failure)).toContain("Accepted dispatch coordinator must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -776,10 +773,10 @@ test("native status updater must be callable before accepted dispatch execution"
       throw new Error("Unexpected non-callable status updater failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -807,10 +804,11 @@ test("native status updater must be callable before accepted dispatch execution"
 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native status updater must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -860,10 +858,10 @@ test("native status broadcaster must be callable before accepted dispatch execut
       throw new Error("Unexpected non-callable status broadcaster failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -891,10 +889,11 @@ test("native status broadcaster must be callable before accepted dispatch execut
 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native status broadcaster must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -944,10 +943,10 @@ test("native resume hook must be callable before accepted dispatch execution", a
       throw new Error("Unexpected non-callable resume hook failure: " + failure);
     }
 
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), failure, dispatchCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -975,10 +974,11 @@ test("native resume hook must be callable before accepted dispatch execution", a
 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(0);
     expect(String(result.failure)).toContain("Native resume hook must be callable");
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1026,10 +1026,10 @@ test("native accepted dispatch synchronous throw is treated as pending without l
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1057,11 +1057,12 @@ test("native accepted dispatch synchronous throw is treated as pending without l
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.resumed).toBe(0);
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1109,10 +1110,10 @@ test("native pending observer synchronous throw is treated as unresolved pending
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1140,11 +1141,12 @@ test("native pending observer synchronous throw is treated as unresolved pending
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("");
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.resumed).toBe(0);
-    expect(result.executionMarkers).toBeNull();
+    expect(result.pollingRow).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1200,10 +1202,10 @@ test("native status publication failures after pending settlement do not block c
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, statusCalls, broadcastCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, resumed, statusCalls, broadcastCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1231,25 +1233,14 @@ test("native status publication failures after pending settlement do not block c
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.resumed).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
-    expect(result.executionMarkers).toEqual({
-      preflight_prev_ts: null,
-      preflight_message_id: null,
-      preflight_started_at: null,
-      inflight_prev_ts: null,
-      inflight_message_id: null,
-      inflight_started_at: null,
-      failed_prev_ts: null,
-      failed_ts: null,
-      failed_message_id: null,
-      failed_thread_root: null,
-      failed_created_at: null,
-    });
+    expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1301,10 +1292,10 @@ test("native status publication failures do not block settled dispatch or trigge
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, resumed, statusCalls, broadcastCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, resumed, statusCalls, broadcastCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1332,24 +1323,13 @@ test("native status publication failures do not block settled dispatch or trigge
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
     expect(result.dispatchCalls).toBe(1);
     expect(result.resumed).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
-    expect(result.executionMarkers).toEqual({
-      preflight_prev_ts: null,
-      preflight_message_id: null,
-      preflight_started_at: null,
-      inflight_prev_ts: null,
-      inflight_message_id: null,
-      inflight_started_at: null,
-      failed_prev_ts: null,
-      failed_ts: null,
-      failed_message_id: null,
-      failed_thread_root: null,
-      failed_created_at: null,
-    });
+    expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1402,10 +1382,10 @@ test("native resume hook failure after pending settlement does not block cursor 
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1433,25 +1413,14 @@ test("native resume hook failure after pending settlement does not block cursor 
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
-    expect(result.executionMarkers).toEqual({
-      preflight_prev_ts: null,
-      preflight_message_id: null,
-      preflight_started_at: null,
-      inflight_prev_ts: null,
-      inflight_message_id: null,
-      inflight_started_at: null,
-      failed_prev_ts: null,
-      failed_ts: null,
-      failed_message_id: null,
-      failed_thread_root: null,
-      failed_created_at: null,
-    });
+    expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1510,10 +1479,10 @@ test("native pending-settle publication and resume failures together do not bloc
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, waitCalls, statusCalls, broadcastCalls, resumeCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1541,25 +1510,14 @@ test("native pending-settle publication and resume failures together do not bloc
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
     expect(result.dispatchCalls).toBe(1);
     expect(result.waitCalls).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
-    expect(result.executionMarkers).toEqual({
-      preflight_prev_ts: null,
-      preflight_message_id: null,
-      preflight_started_at: null,
-      inflight_prev_ts: null,
-      inflight_message_id: null,
-      inflight_started_at: null,
-      failed_prev_ts: null,
-      failed_ts: null,
-      failed_message_id: null,
-      failed_thread_root: null,
-      failed_created_at: null,
-    });
+    expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1608,10 +1566,10 @@ test("native resume hook failure after settled dispatch does not block cursor ad
     };
 
     await processChat(channel, chatJid, "default");
-    const executionMarkers = getDb().prepare(
-      "SELECT preflight_prev_ts, preflight_message_id, preflight_started_at, inflight_prev_ts, inflight_message_id, inflight_started_at, failed_prev_ts, failed_ts, failed_message_id, failed_thread_root, failed_created_at FROM chat_cursors WHERE chat_jid = ?"
+    const pollingRow = getDb().prepare(
+      "SELECT cursor_ts,queued_followups_json FROM chat_cursors WHERE chat_jid = ?"
     ).get(chatJid);
-    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, statusCalls, broadcastCalls, resumeCalls, executionMarkers }));
+    console.log(JSON.stringify({ attempts, cursor: getChatCursor(chatJid), dispatchCalls, statusCalls, broadcastCalls, resumeCalls, pollingRow, cursorColumns: getDb().query("PRAGMA main.table_info(chat_cursors)").all().map(row=>row.name) }));
   `;
 
   try {
@@ -1639,24 +1597,13 @@ test("native resume hook failure after settled dispatch does not block cursor ad
     expect({ exitCode, stderr: exitCode ? stderr : "" }).toEqual({ exitCode: 0, stderr: "" });
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(result.attempts).toEqual([]);
+    expect(result.cursorColumns).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
     expect(result.cursor).toBe("2026-01-01T00:00:01.000Z");
     expect(result.dispatchCalls).toBe(1);
     expect(result.statusCalls).toBe(2);
     expect(result.broadcastCalls).toBe(2);
     expect(result.resumeCalls).toBe(1);
-    expect(result.executionMarkers).toEqual({
-      preflight_prev_ts: null,
-      preflight_message_id: null,
-      preflight_started_at: null,
-      inflight_prev_ts: null,
-      inflight_message_id: null,
-      inflight_started_at: null,
-      failed_prev_ts: null,
-      failed_ts: null,
-      failed_message_id: null,
-      failed_thread_root: null,
-      failed_created_at: null,
-    });
+    expect(result.pollingRow).toEqual({cursor_ts:"2026-01-01T00:00:01.000Z",queued_followups_json:null});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

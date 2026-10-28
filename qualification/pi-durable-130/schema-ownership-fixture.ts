@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { installApprovedAddonsFixture } from "./installed-addons-fixture.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -50,6 +50,11 @@ export async function seedHistoricalSchemaFixture() {
     CREATE TABLE token_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,chat_jid TEXT NOT NULL,run_at TEXT NOT NULL,input_tokens INTEGER DEFAULT 0,output_tokens INTEGER DEFAULT 0,cache_read_tokens INTEGER DEFAULT 0,cache_write_tokens INTEGER DEFAULT 0,total_tokens INTEGER DEFAULT 0,cost_input REAL DEFAULT 0,cost_output REAL DEFAULT 0,cost_cache_read REAL DEFAULT 0,cost_cache_write REAL DEFAULT 0,cost_total REAL DEFAULT 0,model TEXT,provider TEXT,api TEXT,turns INTEGER DEFAULT 0);
     INSERT INTO token_usage(chat_jid,run_at,input_tokens,output_tokens,total_tokens,model,provider) VALUES('web:historical','2026-01-01T00:00:00.000Z',100,20,120,'retained-model','retained-provider');
   `);
+  // A real pre-retirement cursor root, including malformed queued bytes. The
+  // owned upgrade must preserve its execution evidence without consulting it.
+  database.exec(readFileSync(new URL('../../runtime/test/fixtures/legacy-chat-cursors.sql', import.meta.url), 'utf8'));
+  database.exec("INSERT INTO chat_cursors(rowid,chat_jid,cursor_ts,inflight_message_id,preflight_message_id,failed_message_id,compaction_last_error,queued_followups_json) VALUES(81,'web:historical','unacknowledged-position','old-input','old-preflight','old-failure','old-compaction','{malformed historical payload')");
+  const cursors = database.query('SELECT rowid,* FROM chat_cursors ORDER BY rowid').all();
   const archive = new SqliteSessionStore(database);
   const source = join(process.env.PICLAW_WORKSPACE!, "retained-history.jsonl");
   const bytes = '{"type": "session", "version": 3, "id": "schema-history", "timestamp": "2026-01-01T00:00:00.000Z"}\n' +
@@ -61,5 +66,5 @@ export async function seedHistoricalSchemaFixture() {
   const receipts = database.query("SELECT * FROM piclaw_schema_migrations WHERE owner='piclaw-agent-sessions'").all();
   if (archive.exportJsonl(imported.importId) !== bytes) throw Error("Historical fixture round trip failed");
   database.close();
-  return { bytes, imported, sessions, entries, receipts };
+  return { bytes, imported, sessions, entries, receipts, cursors };
 }

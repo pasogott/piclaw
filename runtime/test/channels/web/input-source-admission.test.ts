@@ -655,7 +655,7 @@ test("manual queue input is adopted by the durable queued source hook", async ()
   expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
 });
 
-for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and recovery marker without legacy`, async () => {
+for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and accepted-source authority without legacy`, async () => {
   const f = fixture();
   let legacy = 0;
   (f.channel.agentPool as any).runAgent = () => { legacy++; throw Error("legacy forbidden"); };
@@ -673,7 +673,7 @@ for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${
   await Bun.sleep(10);
   expect(released).toBe(false);
   expect(legacy).toBe(0);
-  expect(f.db.query("SELECT count(*) AS n FROM chat_cursors WHERE inflight_message_id IS NOT NULL").get()).toEqual({ n: 0 });
+  expect((f.db.query("PRAGMA main.table_info(chat_cursors)").all() as {name:string}[]).map(row=>row.name)).toEqual(["chat_jid","cursor_ts","queued_followups_json"]);
   expect(f.db.query("SELECT cursor_ts FROM chat_cursors WHERE cursor_ts<>''").get()).toBeNull();
   const before = f.db.query("SELECT * FROM chat_cursors").get();
   shutdown.abort(); await original;

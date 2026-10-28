@@ -2495,22 +2495,20 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   if (expectedFailedTurn) { expect(dispatchOutcome).toBe("settled"); assertFailedTurn(); }
   if (scenario === "native-web-cursor-ack") {
     expect(dispatchOutcome).toBe("settled"); expect(calls).toBe(1);
-    // Native terminal publication is committed, but its polling cursor ACK is
-    // deliberately lost. Complete historical markers must remain inert.
-    root.query(`INSERT INTO chat_cursors(chat_jid,cursor_ts,inflight_prev_ts,inflight_message_id,inflight_started_at,
-      failed_prev_ts,failed_ts,failed_message_id) VALUES(?,'','',?,'2026-01-01T00:00:00.000Z','',?,?)`)
-      .run(message.chat_jid, message.id, message.timestamp, message.id);
+    // Native terminal publication is committed, but polling cursor ACK is lost.
+    // Fresh native storage contains no recovery markers to reset or replay.
+    root.query("INSERT INTO chat_cursors(chat_jid,cursor_ts) VALUES(?,'')").run(message.chat_jid);
     const execution = () => ["piclaw_durable_bindings_v1", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits", "entries", "tasks", "submissions", "record_ids"]
       .map(table => root.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
     const preserved = execution(), posts = root.query("SELECT * FROM messages ORDER BY rowid").all();
-    const markers = () => root.query("SELECT inflight_prev_ts,inflight_message_id,inflight_started_at,failed_prev_ts,failed_ts,failed_message_id FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid);
-    const originalMarkers = markers();
+    const cursorColumns = () => (root.query("PRAGMA main.table_info(chat_cursors)").all() as {name:string}[]).map(row=>row.name);
+    const expectedColumns = ["chat_jid","cursor_ts","queued_followups_json"];
     root.exec("CREATE TRIGGER refuse_cursor_ack BEFORE UPDATE OF cursor_ts ON chat_cursors BEGIN SELECT RAISE(ABORT,'cursor ACK lost'); END");
     let nextBase: ReturnType<typeof createRuntimeBaseServices> | undefined, nextPool: AgentPool | undefined, nextChannel: WebChannel | undefined;
     try {
       await expect(channel.processChat(message.chat_jid, "default")).rejects.toThrow("cursor ACK lost");
       expect(root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid)).toEqual({ cursor_ts: "" });
-      expect(execution()).toEqual(preserved); expect(markers()).toEqual(originalMarkers);
+      expect(execution()).toEqual(preserved); expect(cursorColumns()).toEqual(expectedColumns);
       expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(posts);
       expect(calls).toBe(1);
       root.exec("DROP TRIGGER refuse_cursor_ack");
@@ -2524,14 +2522,14 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       const { runWebStartupRecoveryBootstrap } = await import("../../runtime/src/runtime/startup.js");
       const resumes: (() => void)[] = [];
       runWebStartupRecoveryBootstrap(nextChannel, undefined, resume => resumes.push(resume));
-      expect(resumes).toHaveLength(1); expect(markers()).toEqual(originalMarkers);
+      expect(resumes).toHaveLength(1); expect(cursorColumns()).toEqual(expectedColumns);
       resumes[0](); resumes[0](); // Repeated startup wakeups share one queue key.
       const until = Date.now() + 5000;
       while (Date.now() < until && (root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid) as {cursor_ts:string}).cursor_ts !== message.timestamp) await Bun.sleep(10);
       expect(root.query("SELECT cursor_ts FROM chat_cursors WHERE chat_jid=?").get(message.chat_jid)).toEqual({ cursor_ts: message.timestamp });
       await nextBase.queue.shutdown();
       expect(calls).toBe(1); expect(execution()).toEqual(preserved);
-      expect(markers()).toEqual(originalMarkers);
+      expect(cursorColumns()).toEqual(expectedColumns);
       expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(posts);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     } finally {

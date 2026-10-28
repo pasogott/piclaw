@@ -1,3 +1,5 @@
+import {readFileSync} from "node:fs";
+import {initializeChatCursorStorage,legacyCursorArchive} from "../../../src/db/chat-cursor-storage.js";
 import { afterEach, expect, test } from "bun:test";
 import { createTempWorkspace, setEnv } from "../../helpers.js";
 
@@ -25,6 +27,14 @@ async function initWebChannelFixture(chatJids: string[] = ["web:default"]) {
   const db = await import("../../../src/db.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  // Build a synthetic pre-ledger cursor root inside this blank isolated fixture.
+  // The actual populated file upgrade/reopen is qualified in schema-ownership.
+  if ((db.getDb().query('SELECT COUNT(*) AS n FROM chat_cursors').get() as {n:number}).n !== 0) throw Error('Cursor fixture must be empty');
+  db.getDb().transaction(() => {
+    db.getDb().exec("DROP TABLE chat_cursors; DELETE FROM piclaw_schema_migrations WHERE owner='host.chat-cursors'");
+    db.getDb().exec(readFileSync(new URL('../../fixtures/legacy-chat-cursors.sql',import.meta.url),'utf8'));
+    initializeChatCursorStorage(db.getDb());
+  })();
   const now = new Date().toISOString();
   for (const chatJid of chatJids) {
     db.storeChatMetadata(chatJid, now, "Web");
@@ -83,11 +93,9 @@ test("web channel ignores old inflight cursors as display authority while preser
     is_from_me: false,
     is_bot_message: false,
   });
-  db.beginChatRun("web:compact", userTs, {
-    prevTs: "",
-    messageId,
-    startedAt: "2026-03-14T14:00:00.000Z",
-  });
+  db.setChatCursor('web:compact',userTs);
+  db.getDb().query('INSERT INTO '+legacyCursorArchive+'(chat_jid,cursor_ts,inflight_message_id,inflight_started_at) VALUES(?,?,?,?)').run('web:compact',userTs,messageId,'2026-03-14T14:00:00.000Z');
+  const archived = db.getDb().query('SELECT rowid,* FROM '+legacyCursorArchive).all();
 
   db.setRouterState("last_agent_timestamp_web", JSON.stringify({
     agentStatuses: {
@@ -111,14 +119,14 @@ test("web channel ignores old inflight cursors as display authority while preser
   second.loadState();
 
   expect(second.getAgentStatus("web:compact")).toBeNull();
-  expect(db.getInflightRuns().some(run => run.chatJid === "web:compact")).toBe(true);
+  expect(db.getDb().query('SELECT rowid,* FROM '+legacyCursorArchive).all()).toEqual(archived);
 });
 
 test("native startup and live draft buffers preserve historical payloads without publishing them", async () => {
   const { db, webMod } = await initWebChannelFixture(["web:historical"]);
   const historical = { turnId: "old-turn", text: "Old uncommitted draft", totalLines: 1, updatedAt: 1 };
   db.setRouterState("last_agent_timestamp_web", JSON.stringify({ agentStatuses: {}, contextUsages: {}, draftRecoveries: { "web:historical": historical } }));
-  db.beginChatRun("web:historical", "2026-01-01T00:00:01.000Z", { prevTs: "", messageId: "old-input", startedAt: "2026-01-01T00:00:00.000Z" });
+  db.getDb().query('INSERT INTO '+legacyCursorArchive+'(chat_jid,cursor_ts,inflight_message_id,inflight_started_at) VALUES(?,?,?,?)').run('web:historical','2026-01-01T00:00:01.000Z','old-input','2026-01-01T00:00:00.000Z');
   const web = new (webMod.WebChannel as any)({ queue: { enqueue() { throw Error("No legacy replay"); } },
     agentPool: { getContextUsageForChat: async () => null } });
   const before = db.getDb().serialize();
