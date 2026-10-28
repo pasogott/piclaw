@@ -11,6 +11,8 @@ const realDateNow = Date.now;
 let restoreFixturePaths: (() => void) | undefined;
 afterEach(() => {
   Date.now = realDateNow;
+});
+afterEach(() => {
   restoreFixturePaths?.(); restoreFixturePaths = undefined;
 });
 
