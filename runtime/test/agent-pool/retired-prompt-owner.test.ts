@@ -10,13 +10,9 @@ for (const native of [true, false]) test(`retired direct prompt boundary cannot 
   initDatabase(); let factoryCalls=0, optionReads=0;
   const pool=new AgentPool({...createAgentPoolModelOptions(),...(native?{getDurableSession:()=>undefined}:{}),
     createSession:async()=>{factoryCalls++;throw Error("Retired legacy factory reached");}});
-  const options=new Proxy({},{get(){optionReads++;throw Error("Retired options read");}});
   try {
     const before=getDb().serialize();
-    for (const value of [options,{}]) {
-      expect(await pool.runAgent("No implicit continuation", "web:retired-direct",value)).toEqual({status:"error",result:null,
-        error:"Native execution requires an admitted operation",failureCategory:"non_recoverable"});
-    }
+    expect('runAgent' in pool).toBe(false);
     expect(optionReads).toBe(0);expect(factoryCalls).toBe(0);
     expect(getDb().serialize()).toEqual(before);
   } finally {await pool.shutdown();}

@@ -35,6 +35,6 @@ test("missing native control authority cannot hydrate, mutate or compact a legac
   await expect(facade.getCurrentModelLabel("web:unbound")).rejects.toThrow("Durable session model unavailable");
   await expect(facade.getSessionTreeForChat("web:unbound")).rejects.toThrow("Durable session tree unavailable");
   await expect(facade.saveSessionPosition("web:unbound")).rejects.toThrow("Durable session position unavailable");
-  await expect(facade.restoreSessionPosition("web:unbound", "legacy-head")).rejects.toThrow("Durable history navigation unavailable");
+  expect(facade).not.toHaveProperty("restoreSessionPosition");
   expect(legacyCalls).toBe(0);
 });

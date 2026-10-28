@@ -1,5 +1,4 @@
-import { markAddonOperationInputCommitted } from "../db/addon-operations.js";
-import type { AgentOutput, RunAgentOptions } from "../agent-pool/contracts.js";
+import type { AgentOutput } from "../agent-pool/contracts.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { readOperationsConfig } from "../core/config-operations.js";
 import { getBudgetWork, listBudgetCaps } from "../db/budget-limits.js";
@@ -11,11 +10,7 @@ export interface OperationAgentPool {
   isDurableRuntime?():boolean;
   dispatchAddonOperation?(operationId:string,signal:AbortSignal,expectedInputSequence?:number):Promise<AgentOutput>;
   reconcileAddonOperation?(operationId:string,expectedInputSequence?:number):Promise<AgentOutput|null>;
-  runAgent(
-    prompt: string,
-    chatJid: string,
-    options: RunAgentOptions,
-  ): Promise<AgentOutput>;
+
 }
 export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,target:string,action:"admit"|"read"|"cancel"|"request",readConfig=readOperationsConfig):OperationAdmission {
   if (readAccessConfig().mode !== "single-user")
@@ -65,10 +60,10 @@ export function authorizeAddonOperation(principal:Readonly<OperationPrincipal>,t
   return { decision: "allow", grant };
 }
 
-function operationResult(output:AgentOutput,native:boolean,signal:AbortSignal):OperationResult{
+function operationResult(output:AgentOutput):OperationResult{
   if(output.failureCategory==='provider_budget')return{status:'budget_blocked',reason:'budget_boundary'};
   if(output.status==='error'){
-    if((native||signal.aborted)&&output.failureCategory==='aborted')return{status:'cancelled',reason:'executor_cancelled'};
+    if(output.failureCategory==='aborted')return{status:'cancelled',reason:'executor_cancelled'};
     return{status:'failed',reason:output.failureCategory==='timeout'?'execution_timeout':'execution_failed'};
   }
   if(output.requiresToolEnabledContinuation)return{status:'input_required',reason:'continuation_required'};
@@ -82,40 +77,15 @@ export function createOperationHost(
   const host: OperationHost = {
     authorize: (principal,target,action) => authorizeAddonOperation(principal,target,action,readConfig),
     async execute(input) {
-      const native=pool.isDurableRuntime?.()===true;
-      if(native&&!pool.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
-      const output = native ? await pool.dispatchAddonOperation!(input.operationId,input.signal,input.inputSequence) : await pool.runAgent(input.text, input.chatJid, {
-        turnId: input.operationId,
-        budgetWorkId: input.workId,
-        budgetParentWorkId: input.grant.parentWorkId,
-        budgetExecutionKind: "background",
-        timeoutMs: input.grant.timeoutMs,
-        maxToolCalls: input.grant.maxToolCalls,
-        toolCeilingFilter: (name) => input.grant.allowedTools.includes(name),
-        requireToolCeiling: true,
-        onOperationInputCommitted: () => markAddonOperationInputCommitted(input.operationId),
-        abortSignal: input.signal,
-        skipPrePromptCompaction: true,
-        scheduleIdleAutoCompaction: false,
-        executionAdmissionCheck: async () => {
-          const decision = await host.authorize(
-            input.principal,
-            input.grant.target,
-            "admit",
-          );
-          return (
-            decision.decision === "allow" &&
-            JSON.stringify(decision.grant) === JSON.stringify(input.grant)
-          );
-        },
-      });
-      return operationResult(output,native,input.signal);
+      if(pool.isDurableRuntime?.()!==true || !pool.dispatchAddonOperation)throw Error('Native add-on execution unavailable');
+      const output=await pool.dispatchAddonOperation(input.operationId,input.signal,input.inputSequence);
+      return operationResult(output);
     },
   };
   if(pool.isDurableRuntime?.()===true)host.recover=async(input:OperationExecution)=>{
     if(!pool.reconcileAddonOperation)throw Error('Native add-on recovery unavailable');
     const output=await pool.reconcileAddonOperation(input.operationId,input.inputSequence);
-    return output===null?null:operationResult(output,true,input.signal);
+    return output===null?null:operationResult(output);
   };
   return host;
 }

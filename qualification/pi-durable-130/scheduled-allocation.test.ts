@@ -18,7 +18,7 @@ import type { ScheduledRunLease, ScheduledRunStore } from "../../runtime/src/ser
 import { context, openFixture, barrier } from "./src/fixture.js";
 import { value } from "./src/host-handoff.js";
 
-for (const model of [undefined, "qualification/synthetic"]) test(`allocation-only helper (fake runAgent): source-bound lease, rollback, public fork, forged route denied; model=${model}`, async () => {
+for (const model of [undefined, "qualification/synthetic"]) test(`allocation-only helper (synthetic native dispatch): source-bound lease, rollback, public fork, forged route denied; model=${model}`, async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
   mkdirSync(join(process.env.PICLAW_WORKSPACE!, ".piclaw"), { recursive: true });
   initDatabase();
@@ -61,7 +61,7 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
   let failure: unknown;
   const deps: SchedulerDeps = { queue, sendMessage: async () => {}, agentPool: {
     saveSessionPosition: async () => "main", restoreSessionPosition: async () => {}, getCurrentModelLabel: async () => null,
-    runAgent: async () => {
+    dispatchScheduledAgent: async () => {
       try {
         const input = await bundle.allocateScheduledConversation(lease);
         expect(input.conversationId).not.toBe(main.id);

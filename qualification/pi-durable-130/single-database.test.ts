@@ -64,7 +64,7 @@ test("single physical database: accepted primary + attached intent, terminal ide
     const persistedModel = await app.getCurrentModelLabel(f.chatJid);
     expect(persistedModel).toBe("qualification/synthetic");
     const beforePosition = await app.saveSessionPosition(f.chatJid);
-    await expect(app.restoreSessionPosition(f.chatJid, beforePosition)).rejects.toThrow("Durable history navigation unavailable");
+    expect(app).not.toHaveProperty("restoreSessionPosition");
     expect("applySlashCommand" in app).toBe(false);
     const sid = await adapter.submitIntent(captured);
     expect(await adapter.submitIntent(captured)).toBe(sid);

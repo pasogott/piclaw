@@ -1,7 +1,7 @@
 /**
  * Host facade for admitted native dispatch, models/auth, metadata and resources.
  * SDK tasks/submissions and host accepted-source/terminal records own execution.
- * Direct runAgent is a rejection-only boundary, never a second prompt loop.
+ * Supported execution requires admitted native operation ports.
  * Explicit legacy resource composition and migration readers remain
  * separate until their callers retire; ordinary startup selects native ports.
  */
@@ -31,7 +31,6 @@ import { type ActiveChatAgent } from "./agent-pool/branch-manager.js";
 import {
   type AgentOutput,
   type AgentPoolOptions,
-  type RunAgentOptions,
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
@@ -56,7 +55,6 @@ const requireLegacyCapture = createRequire(import.meta.url);
 export type {
   AgentOutput,
   AgentPoolOptions,
-  RunAgentOptions,
   SidePromptOptions,
   SidePromptResult,
   TurnOutput,
@@ -292,10 +290,9 @@ export class AgentPool {
   private readonly durableApplication: boolean;
   private readonly durableSessionLookup?: AgentPoolOptions["getDurableSession"];
   private readonly hostCommandDispatch?: AgentPoolOptions["dispatchHostCommand"];
-  dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> | undefined {
-    if (this.scheduledDispatch) return this.scheduledDispatch(lease);
-    if (this.durableApplication) throw new Error("Durable scheduled dispatcher unavailable");
-    return undefined;
+  dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> {
+    if (!this.scheduledDispatch) throw new Error("Durable scheduled dispatcher unavailable");
+    return this.scheduledDispatch(lease);
   }
 
   constructor(options: AgentPoolOptions) {
@@ -386,14 +383,6 @@ export class AgentPool {
 
   setSessionBinder(binder?: (runtime: AgentSessionRuntime, chatJid: string) => Promise<void> | void): void {
     this.sessionBinder.setBinder(binder);
-  }
-
-  /** @deprecated Rejection-only public boundary. Direct prompting is retired in
-   * every profile; supported callers must use admitted native operation ports.
-   * Never inspect options, create a session or change accounting here. */
-  async runAgent(_prompt: string, _chatJid: string, _options: RunAgentOptions = {}): Promise<AgentOutput> {
-    return { status: "error", result: null,
-      error: "Native execution requires an admitted operation", failureCategory: "non_recoverable" };
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
@@ -556,14 +545,6 @@ export class AgentPool {
    */
   async saveSessionPosition(chatJid: string): Promise<string | null> {
     return this.runtimeFacade.saveSessionPosition(chatJid);
-  }
-
-  /**
-   * Restore the session tree to a previously saved position.
-   * Navigates back to the saved leaf, leaving the task's output in a side branch.
-   */
-  async restoreSessionPosition(chatJid: string, leafId: string | null): Promise<void> {
-    return this.runtimeFacade.restoreSessionPosition(chatJid, leafId);
   }
 
   async disposeChatSession(chatJid: string): Promise<void> {

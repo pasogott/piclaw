@@ -55,10 +55,7 @@ for (const mode of ["durable", "legacy"] as const) {
         if (mode === "durable") {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected durable rejection"); }
           catch (error) { if (!String(error).includes("Durable application does not construct legacy sessions")) throw error; }
-          const runResult = await pool.runAgent("must not load legacy orchestration", "web:load-boundary");
-          if (runResult.status !== "error" || runResult.error !== "Native execution requires an admitted operation") {
-            throw new Error("Unexpected durable runAgent result: " + JSON.stringify(runResult));
-          }
+          if ('runAgent' in pool) throw Error('Retired direct runner API remains');
           if (attempts.length) throw new Error("Durable lookup evaluated a forbidden local module");
         } else {
           try { await pool.getSessionForIntrospection("web:load-boundary"); throw new Error("Expected load fence rejection"); }

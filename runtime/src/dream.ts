@@ -8,7 +8,6 @@ import type { Zippable } from "fflate";
 import type { AgentPool } from "./agent-pool.js";
 
 import { formatRecoverySummary } from "./agent-pool/recovery-summary.js";
-import { buildDreamPrompt } from "./agent-memory/dream-prompt.js";
 import { inspectDailyNoteSummaryBacklog, refreshDailyNotesFromMessages } from "./agent-memory/daily-notes.js";
 import { refreshAgentMemoryFromDailyNotes, type RefreshAgentMemoryResult } from "./agent-memory/refresh.js";
 import { dreamStartupBackfillRequired, recordDreamConsolidationResult } from "./agent-memory/startup-state.js";
@@ -60,16 +59,6 @@ const DREAM_ALL_CHATS_SCOPE_ANCHOR = "*";
 const DREAM_CURRENT_STATE_PATH = resolve(DREAM_MEMORY_DIR, "current-state.md");
 const DREAM_RECENT_CONTEXT_PATH = resolve(DREAM_MEMORY_DIR, "recent-context.md");
 const DREAM_MEMORY_PATH = resolve(DREAM_MEMORY_DIR, "MEMORY.md");
-const DREAM_ALLOWED_TOOL_NAMES = new Set([
-  "read",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-  "messages",
-  "search_workspace",
-]);
 const log = createLogger("dream");
 
 type FflateModule = typeof import("fflate");
@@ -87,38 +76,6 @@ export interface DreamAgentTurnResult {
   mode: "manual" | "auto";
   skipped: boolean;
   result: string;
-}
-
-function parseModelLabel(label: string): { provider?: string; modelId: string } {
-  const trimmed = String(label || "").trim();
-  const slash = trimmed.indexOf("/");
-  if (slash > 0 && slash < trimmed.length - 1) {
-    return {
-      provider: trimmed.slice(0, slash),
-      modelId: trimmed.slice(slash + 1),
-    };
-  }
-  return { provider: undefined, modelId: trimmed };
-}
-
-async function applyModelLabel(agentPool: AgentPool, chatJid: string, label: string): Promise<string | null> {
-  const trimmed = String(label || "").trim();
-  if (!trimmed) return null;
-  const { provider, modelId } = parseModelLabel(trimmed);
-  const control = await agentPool.applyControlCommand(chatJid, {
-    type: "model",
-    provider,
-    modelId,
-    raw: `/model ${trimmed}`,
-  });
-  if (control.status === "error") {
-    return control.message;
-  }
-  return null;
-}
-
-function isDreamToolAllowed(toolName: string): boolean {
-  return DREAM_ALLOWED_TOOL_NAMES.has(String(toolName || "").trim());
 }
 
 function refreshDailyNotes(_chatJid: string, days: number): boolean {
@@ -561,7 +518,8 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     }
   }
 
-  const native=options.agentPool.isDurableRuntime?.()===true;
+  if(options.agentPool.isDurableRuntime?.()!==true || typeof options.agentPool.dispatchDreamOperation!=="function")
+    throw Error("Native Dream dispatcher unavailable");
   let shouldCleanupDreamChat = false;
   const dreamChatJid = buildDreamChatJid(chatJid, mode);
   const requestedDreamModel = typeof options.model === "string" && options.model.trim()
@@ -584,40 +542,9 @@ export async function runDreamAgentTurn(options: { chatJid: string; days?: numbe
     const backupPath = await createDreamBackup(chatJid, mode, days, checkAccess);
     checkAccess();
     const dailyNotesRefreshed = refreshDailyNotes(chatJid, days);
-    if (requestedDreamModel&&!native) {
-      const modelError = await applyModelLabel(options.agentPool, dreamChatJid, requestedDreamModel);
-      checkAccess();
-      if (modelError) {
-        const refresh = refreshAgentMemoryFromDailyNotes({ recentDays: days });
-        const postBacklog = inspectDailyNoteSummaryBacklog({ recentDays: days });
-        const workspaceIndexRefreshed = await refreshWorkspaceSearchIndex(checkAccess);
-        checkAccess();
-        return {
-          mode,
-          skipped: false,
-          result: [
-            `${mode === "auto" ? "AutoDream" : "Dream"} model switch failed; deterministic refresh completed.`,
-            `- Model switch error: ${modelError}`,
-            `- Daily notes refreshed before Dream: ${dailyNotesRefreshed ? "yes" : "no"}`,
-            formatDailyNoteBacklogSummary(postBacklog),
-            `- Memory refreshed after Dream: yes`,
-            `- Updated memory: ${refresh.memoryPath}`,
-            `- Updated current state: ${refresh.currentStatePath}`,
-            `- Updated recent context: ${refresh.recentContextPath}`,
-            `- Pre-Dream backup: ${backupPath || "(none)"}`,
-            `- Workspace index refreshed: ${workspaceIndexRefreshed ? "yes" : "no"}`,
-          ].filter(Boolean).join("\n"),
-        };
-      }
-    }
     const execution = await (async () => {
       try {
-        const output = native?await options.agentPool.dispatchDreamOperation({invocationId:inherited?.invocationId??crypto.randomUUID(),chatJid,mode,days,model:requestedDreamModel,timeoutMs:getDreamAgentTimeoutMs(),acceptedAt:new Date().toISOString(),assertCurrent:checkAccess}):await options.agentPool.runAgent(buildDreamPrompt({ mode, days }), dreamChatJid, {
-          budgetWorkId: `background:${dreamChatJid}`,
-          budgetExecutionKind: "background",
-          timeoutMs: getDreamAgentTimeoutMs(),
-          toolCeilingFilter: isDreamToolAllowed,
-        });
+        const output = await options.agentPool.dispatchDreamOperation({invocationId:inherited?.invocationId??crypto.randomUUID(),chatJid,mode,days,model:requestedDreamModel,timeoutMs:getDreamAgentTimeoutMs(),acceptedAt:new Date().toISOString(),assertCurrent:checkAccess});
         return { ok: true as const, output };
       } catch (error) { return { ok: false as const, error }; }
     })();
