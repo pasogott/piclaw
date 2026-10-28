@@ -1566,8 +1566,7 @@ test("web channel queues steering without advancing cursor", async () => {
   const json = await res.json();
   expect(json.queued).toBe("steer");
   expect(db.getChatCursor("web:default")).toBe("");
-  const pending = (web as any).consumePendingSteering("web:default");
-  expect(pending).toEqual([]);
+  expect(web).not.toHaveProperty("consumePendingSteering");
   expect(intents).toHaveLength(1);
   expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "this", behavior: "steer" });
   const accepted = db.getTimeline("web:default", 10);
@@ -1673,7 +1672,7 @@ test("web channel materializes active /steer as one accepted timeline message", 
   expect(res.status).toBe(201);
   expect(json.queued).toBe("steer");
   expect(applyCalls).toBe(0);
-  expect((web as any).consumePendingSteering("web:default")).toEqual([]);
+  expect(web).not.toHaveProperty("consumePendingSteering");
 
   expect(intents).toHaveLength(1);
   expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "now", behavior: "steer" });
@@ -2023,7 +2022,7 @@ for (const persistSteer of [undefined, false, true]) test(`web channel materiali
   expect(res.status).toBe(201);
   expect(json.queued).toBe("steer");
   expect(db.getChatCursor("web:default")).toBe("");
-  expect((web as any).consumePendingSteering("web:default")).toEqual([]);
+  expect(web).not.toHaveProperty("consumePendingSteering");
 
   expect(intents).toHaveLength(1);
   expect(intents[0]).toMatchObject({ chatJid: "web:default", text: "steer now", behavior: "steer" });
@@ -2098,7 +2097,7 @@ test("web channel defers /steer without active stream into queue-state", async (
   expect(intents).toEqual([]);
 });
 
-test("processChat does not advance cursor to pending steering timestamps or skip later persisted messages", async () => {
+test("processChat advances only through persisted input rows without a timestamp mirror", async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -2144,7 +2143,7 @@ test("processChat does not advance cursor to pending steering timestamps or skip
     },
   });
 
-  web.queuePendingSteering("web:default", "2024-01-01T00:00:10.000Z");
+  expect(web).not.toHaveProperty("queuePendingSteering");
 
   await web.processChat("web:default", "default");
   expect(db.getChatCursor("web:default")).toBe(firstTs);

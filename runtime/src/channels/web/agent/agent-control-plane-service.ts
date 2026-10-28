@@ -106,7 +106,6 @@ export interface WebAgentControlPlaneServiceOptions {
   queue: AgentQueueLike;
   agentPool: ControlPlaneAgentPool;
   queuedFollowupLifecycle: ControlPlaneQueuedLifecycle;
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void;
   storeMessage(
     chatJid: string,
     content: string,
@@ -131,7 +130,6 @@ export interface WebAgentControlPlaneChannelLike {
   queue: AgentQueueLike;
   agentPool: ControlPlaneAgentPool;
   queuedFollowupLifecycle: ControlPlaneQueuedLifecycle;
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void;
   storeMessage(
     chatJid: string,
     content: string,
@@ -159,7 +157,6 @@ export function createWebAgentControlPlaneService(
     queuedFollowupLifecycle: channel.queuedFollowupLifecycle,
     get getAcceptedQueuedSteering() { return channel.getAcceptedQueuedSteering?.bind(channel); },
     get getQueuedInputSourceWithdrawal() { return channel.getQueuedInputSourceWithdrawal?.bind(channel); },
-    queuePendingSteering: (chatJid, timestamp) => channel.queuePendingSteering(chatJid, timestamp),
     storeMessage: (chatJid, content, isBot, mediaIds, options) =>
       channel.storeMessage(chatJid, content, isBot, mediaIds, options),
     processChat: (chatJid, agentId, threadRootId) => channel.processChat(chatJid, agentId, threadRootId),
@@ -360,7 +357,6 @@ export class WebAgentControlPlaneService {
         });
         this.options.broadcastEvent('agent_followup_removed', { chat_jid: chatJid, row_id: rowId, thread_id: queued.threadId ?? null });
         this.options.broadcastEvent('new_post', interaction);
-        this.options.queuePendingSteering(chatJid, interaction.timestamp);
         this.options.broadcastEvent('agent_steer_queued', { chat_jid: chatJid,
           thread_id: interaction.data?.thread_id ?? null, source: 'queued-item' });
         // Host intent accepted; this does not promise provider placement/execution.

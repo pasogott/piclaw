@@ -93,7 +93,6 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
     queue: { enqueue: () => {} },
     agentPool: { setSessionBinder: () => {} },
     queuedFollowupLifecycle: queueLifecycle,
-    queuePendingSteering: () => {},
     storeMessage: () => null,
     processChat: () => {},
     ...overrides,
@@ -302,7 +301,7 @@ describe("WebAgentControlPlaneService", () => {
       const forbidden = () => { effects++; throw Error("must not enter submission/removal/publication"); };
       const service = createService({ queuedFollowupLifecycle: f.lifecycle,
         getAcceptedQueuedSteering: forbidden, getQueuedInputSourceWithdrawal: forbidden,
-        broadcastEvent: forbidden, queuePendingSteering: forbidden, storeMessage: forbidden,
+        broadcastEvent: forbidden, storeMessage: forbidden,
         processChat: forbidden, queue: { enqueue: forbidden },
       });
       for (const rowId of [manual, historical, placeholder]) {
@@ -377,8 +376,9 @@ describe("WebAgentControlPlaneService", () => {
           broadcastEvent(type) {
             events.push(type);
             if (failure === "publication") throw Error("PRIVATE_PUBLICATION_DETAIL");
-          }, queuePendingSteering: () => {},
+          },
         };
+        Object.defineProperty(options, 'queuePendingSteering', { get: forbidden });
         // Replacement while the body is awaited must not redirect trusted selection.
         const request = abortRequest({ chat_jid: chat, row_id: rowId, source_id: "forged", engine: "forged" });
         request.json = async () => {

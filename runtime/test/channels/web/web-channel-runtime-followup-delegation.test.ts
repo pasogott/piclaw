@@ -74,13 +74,6 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
         calls.push(`remove:${chatJid}:${rowId}`);
         return queuedItem;
       },
-      queuePendingSteering: (chatJid: string, timestamp: string | undefined) => {
-        calls.push(`pending-queue:${chatJid}:${timestamp ?? ""}`);
-      },
-      consumePendingSteering: (chatJid: string) => {
-        calls.push(`pending-consume:${chatJid}`);
-        return ["2026-03-28T00:03:00.000Z"];
-      },
       updateAgentStatus: (chatJid: string, nextStatus: Record<string, unknown>) => {
         calls.push(`status-update:${chatJid}:${String(nextStatus.title ?? "")}`);
       },
@@ -147,8 +140,6 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
     expect(fixture.channel.getQueuedFollowupCount("web:test")).toBe(2);
     expect(fixture.channel.getQueuedFollowupItems("web:test")).toEqual([queuedItem]);
     expect(fixture.channel.removeQueuedFollowupItem("web:test", 31)).toBe(queuedItem);
-    fixture.channel.queuePendingSteering("web:test", "2026-03-28T00:04:00.000Z");
-    expect(fixture.channel.consumePendingSteering("web:test")).toEqual(["2026-03-28T00:03:00.000Z"]);
     fixture.channel.updateAgentStatus("web:test", status);
     expect(fixture.channel.getAgentStatus("web:test")).toEqual(status);
     expect(fixture.channel.replaceQueuedFollowupPlaceholder("web:test", 22, "updated", [1, 2], [{ type: "text" }], 6, true)).toBe(replaced);
@@ -175,8 +166,6 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
       "count:web:test",
       "items:web:test",
       "remove:web:test:31",
-      "pending-queue:web:test:2026-03-28T00:04:00.000Z",
-      "pending-consume:web:test",
       "status-update:web:test:Thinking",
       "status-get:web:test",
       "replace:web:test:22:updated:1,2:6:1",
