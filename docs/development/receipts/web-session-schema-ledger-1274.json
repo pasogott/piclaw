@@ -147,5 +147,25 @@
     "fix": "include full historical label column; retain full-row comparison and strengthen duplicate-ID failure to exact UNIQUE constraint",
     "assertionsOrTimeoutsWeakened": false
   },
-  "creditNote": "Actual redundant ensure/control/probe deletion; no type/comment/doc/test or prior1699/1700/1701 credit, no moved implementation, no global query/performance claim. Source-only; no live schema/backup/restore/install/restart operation. Final merged-head acceptance still required."
+  "creditNote": "Actual redundant ensure/control/probe deletion; no type/comment/doc/test or prior1699/1700/1701 credit, no moved implementation, no global query/performance claim. Source-only; no live schema/backup/restore/install/restart operation. Final merged-head acceptance still required.",
+  "hostedCacheFixtureCorrection": {
+    "failedCI": 40779132244,
+    "hostPassesBeforeFailure": 7145,
+    "failedCase": "cached auth statements rebind, observe revocation and expire across disk database lifecycles",
+    "localReproduction": {
+      "pass": 0,
+      "fail": 1,
+      "assertions": 1
+    },
+    "cause": "replacement-table fixture dropped its already-owned canonical index; new startup postcondition correctly refused inconsistent schema",
+    "fix": "fixture rebuilds canonical index with replacement table",
+    "productionChanges": 0,
+    "assertionsAndTimeoutsUnchanged": true,
+    "missingOwnedIndexGuardStillRejects": true,
+    "after": {
+      "pass": 18,
+      "assertions": 75,
+      "files": 2
+    }
+  }
 }
