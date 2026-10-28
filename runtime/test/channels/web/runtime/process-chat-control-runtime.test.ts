@@ -158,7 +158,7 @@ describe("process chat control runtime", () => {
 
     expect(action).toBe("resumed");
     expect(cursorHistory).toEqual(["2024-01-01T00:00:01.000Z"]);
-    expect(saveCalls).toBe(1);
+    expect(saveCalls).toBe(0); // Cursor persistence has its own owner; no UI snapshot write.
     expect(remainingReads).toBe(1);
     expect(sends).toEqual([
       {
@@ -234,14 +234,7 @@ describe("process chat control runtime", () => {
       cursorStore,
     });
 
-    expect(contextUpdates).toEqual([{
-      tokens: null,
-      contextWindow: null,
-      percent: null,
-      sessionGeneration: "session-new",
-      contextUpdate: "replace",
-      reset: true,
-    }]);
+    expect(contextUpdates).toEqual([]); // The exact replacement remains in SSE below, without a host copy.
     expect(statusUpdates).toHaveLength(3);
     expect(statusUpdates.map(status => status.type)).toEqual(["intent", "context_usage", "done"]);
     expect(new Set(statusUpdates.map(status => status.turn_id)).size).toBe(1);
