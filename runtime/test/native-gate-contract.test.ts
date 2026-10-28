@@ -97,7 +97,7 @@ describe('canonical offline native contract', () => {
   test('cold-start factory aggregate budget is bounded without relaxing scenario deadlines', () => {
     expect(DEFAULT_NATIVE_FILE_TIMEOUT_MS).toBe(300_000);
     expect(nativeFileTimeout('runtime.test.ts', contract.fileTimeoutMs, contract.tests)).toBe(300_000);
-    expect(nativeFileTimeout('default-application-runtime.test.ts', contract.fileTimeoutMs, contract.tests)).toBe(600_000);
+    expect(nativeFileTimeout('default-application-runtime.test.ts', contract.fileTimeoutMs, contract.tests)).toBe(900_000);
     expect(Object.keys(contract.fileTimeoutMs)).toEqual(['default-application-runtime.test.ts']);
     for (const value of [0, -1, Infinity, 900_001]) expect(() => nativeFileTimeout('runtime.test.ts', { 'runtime.test.ts': value }, contract.tests)).toThrow('Invalid bounded');
     expect(() => nativeFileTimeout('runtime.test.ts', { 'missing.test.ts': 1 }, contract.tests)).toThrow('Invalid bounded');

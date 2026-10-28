@@ -2422,7 +2422,8 @@
       "owner": "core:chat_cursors",
       "fingerprints": [
         "3125449c9efbed908701f37c68fa6027df4529f20db9c5014be6f95b71516352",
-        "e8c98fd6860a74cd86adc7b2d27c7d9aed81d77088c98a7225a87aa9af623af7"
+        "e8c98fd6860a74cd86adc7b2d27c7d9aed81d77088c98a7225a87aa9af623af7",
+        "1d50d10665c7ed7c01d30a122acd233df072afc6fcad2311b5dfaab1f9ef947c"
       ],
       "requiredIn": [
         "core",
@@ -4715,7 +4716,8 @@
         "b4945abd8cee9f692f680ef342915691e35b2ef4d067c02f5e2704abcdccaf07",
         "be281afc6464d4f4f9b30815bf4a1836aac1390eff21adcadc7b1e791b82b63b",
         "d5300ec7f030c41fb4326e78d0d446ff2f6bdf1ba8399ec87e21457252d82c90",
-        "dac993334c0130b5094b212c37c5a2f612d25cba18ac5ec40b73d795eec28513"
+        "dac993334c0130b5094b212c37c5a2f612d25cba18ac5ec40b73d795eec28513",
+        "f70e49382a5e78426e14e2617d2668b352d29c4f2b2b60e461fed1715fc00c25"
       ],
       "requiredIn": [],
       "requiredWhenOwnerPresent": true,

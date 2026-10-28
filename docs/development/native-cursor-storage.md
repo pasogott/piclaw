@@ -33,6 +33,8 @@ Historical upgrades rename the original table to `host_legacy_chat_cursor_state_
 
 Recognition covers finite physical generations from `c8c502cd4`, `79f2a7b52`, `44d036256` and `35e443fc6`, the additive backoff columns introduced by `3fbe834cc`, and their pre-queue variants. Partial field groups, unknown constraints/columns/indexes, dependent views/triggers/foreign keys, temporary shadows and unreceipted archives refuse the transition. Recognition preserves quoted tokens and string literals, matching the schema inventory. Case-insensitive SQLite identifiers are checked before DDL.
 
+The complete S01 owner generation includes eight `operation_*` fields and two exact legacy ownership guards. Its separate `native-frontier-s01-owner-v1` transition removes those two guards atomically with archival and the receipt. Every operation field remains in the historical table. Missing or modified guards, partial operation groups and other dependencies refuse migration; archived operation values grant no native execution authority.
+
 A receipt replay validates the selected transition, exact checksum/order and current/archive shapes. It preserves receipt timestamps, unrelated owners' receipts and subsequent polling/queue updates. Copy, receipt and caller-transaction failures roll back together.
 
 The schema inventory declares the minimal active shape and finite archive variants. Its previous active fingerprint remains available for read-only inspection of historical backups. No inventory rule is relaxed.
