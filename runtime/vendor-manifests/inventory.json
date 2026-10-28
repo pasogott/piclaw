@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "runtime/extensions/viewers/editor/vendor/codemirror.js",
-      "bytes": 1413945,
-      "sha256": "4f8db5d98c9ca84afb6d4a94cf45ae03eb9a1869a8b4533f3bd10e1021d14b94",
+      "bytes": 1394319,
+      "sha256": "882b4287631a5e54849c46cf0fd377857c55199a7dff7978f855ca67acba4c5a",
       "manifests": [
         "runtime/vendor-manifests/codemirror-editor.json"
       ],
@@ -300,8 +300,8 @@
     },
     {
       "path": "runtime/web/static/common/js/marked.min.js",
-      "bytes": 45950,
-      "sha256": "5c024edb6e86d06c2768c90f401054a828600fc8fe1e8367825f867a97d76501",
+      "bytes": 46683,
+      "sha256": "46bbef693cb146d74a33a98e206a0dd667e872d1e3c466c148ee9de0eb451f10",
       "manifests": [
         "runtime/vendor-manifests/marked-global.json"
       ],
@@ -377,7 +377,7 @@
     {
       "path": "runtime/web/static/common/js/vendor/diagram-sanitizer-license.meta.json",
       "bytes": 1145,
-      "sha256": "8c8d88e08d119ea06deb50c4cb4545970b452aba7fe79a86080cb1800c3a5b4d",
+      "sha256": "593933c33d8d2a39adc54917c3bb0f6dba301a6f9fef7b2a4fa75d3ae5415c8d",
       "manifests": [],
       "provenance": "unrecorded"
     },
@@ -428,7 +428,7 @@
     {
       "path": "runtime/web/static/common/js/vendor/pele-license.meta.json",
       "bytes": 1026,
-      "sha256": "cb885e15badb0a40af3947151b0a370e159ba100c3a48dff575f6e8a81d76c0c",
+      "sha256": "dae3c728050e617f2e28bea9f7d2e80d92484ea83eaeb8e7665963eda67ddeb6",
       "manifests": [],
       "provenance": "unrecorded"
     },
@@ -441,8 +441,8 @@
     },
     {
       "path": "runtime/web/static/common/js/vendor/pele.js",
-      "bytes": 701894,
-      "sha256": "7a33e3d9f6d005863c437b61bb25e2ff489393e3f3b3a0d0b6ca71a6d23cb3b9",
+      "bytes": 726976,
+      "sha256": "b709159845bdb14309991d768cca1d24d32dbd532d5a2e983c24ef497d03a201",
       "manifests": [
         "runtime/vendor-manifests/pele.json"
       ],
@@ -451,7 +451,7 @@
     {
       "path": "runtime/web/static/common/js/vendor/pele.meta.json",
       "bytes": 1214,
-      "sha256": "28f252549440003c09a71713fa7eb4f8dd568f20142dba2db0befba9be0810a2",
+      "sha256": "1e01683b87f47e7b95db5353a08f2f041cb3484afff6c2c0389da1ad74240824",
       "manifests": [],
       "provenance": "unrecorded"
     },
