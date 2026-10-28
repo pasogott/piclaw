@@ -12,7 +12,6 @@ type WebChannelHttpSurfaceEndpointFacade = Pick<
   | "handleManifest"
   | "handleAvatar"
   | "handleWorkspaceVisibility"
-  | "handleTimeline"
   | "handleHashtag"
   | "handleSearch"
   | "handleThread"
@@ -110,10 +109,6 @@ export class WebChannelHttpSurfaceService {
 
   async handleWorkspaceVisibility(req: Request): Promise<Response> {
     return await this.channel.endpointFacade.handleWorkspaceVisibility(req);
-  }
-
-  handleTimeline(limit: number, before?: number, chatJid?: string): Response {
-    return this.channel.endpointFacade.handleTimeline(limit, before, chatJid);
   }
 
   handleHashtag(tag: string, limit: number, offset: number, chatJid?: string): Response {

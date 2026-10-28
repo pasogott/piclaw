@@ -7,7 +7,7 @@ function response(label: string, status = 200): Response {
 }
 
 describe("web channel http surface delegation", () => {
-  test("prototype HTTP wrapper methods stay compatible with bare stubs", async () => {
+  test("remaining prototype HTTP wrapper methods stay compatible with bare stubs", async () => {
     const calls: string[] = [];
     const stub = {
       serverLifecycleGateway: {
@@ -27,10 +27,6 @@ describe("web channel http surface delegation", () => {
         handleAgents: async () => {
           calls.push("agents");
           return response("agents");
-        },
-        handleTimeline: (limit: number, before?: number, chatJid?: string) => {
-          calls.push(`timeline:${limit}:${before ?? "null"}:${chatJid ?? ""}`);
-          return response("timeline");
         },
         handleDeletePost: (_req: Request, id: number | null, cascade: boolean) => {
           calls.push(`delete:${id ?? "null"}:${cascade}`);
@@ -117,7 +113,6 @@ describe("web channel http surface delegation", () => {
     expect(await (await WebChannel.prototype.handleFetch.call(stub, getReq)).text()).toBe("fetch");
     expect(await (await WebChannel.prototype.handleRequest.call(stub, getReq)).text()).toBe("request");
     expect(await (await WebChannel.prototype.handleAgents.call(stub)).text()).toBe("agents");
-    expect(await WebChannel.prototype.handleTimeline.call(stub, 5, 8, "web:branch").text()).toBe("timeline");
     expect(await WebChannel.prototype.handleDeletePost.call(stub, postReq, 9, true).text()).toBe("delete");
     expect(await (await WebChannel.prototype.handlePost.call(stub, postReq, true)).text()).toBe("post");
     expect(await WebChannel.prototype.handleAgentStatus.call(stub, getReq).text()).toBe("status");
@@ -140,7 +135,6 @@ describe("web channel http surface delegation", () => {
       "fetch:/timeline",
       "request:/timeline",
       "agents",
-      "timeline:5:8:web:branch",
       "delete:9:true",
       "post:1",
       "status",

@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("WebChannel endpoint facade delegation", () => {
-  test("delegates extracted endpoint wrapper methods to the facade service", async () => {
+  test("delegates remaining endpoint wrapper methods to the facade service", async () => {
     const fixture = await createWebChannelTestFixture({ workspace: "temp" });
     cleanup = fixture.cleanup;
 
@@ -36,10 +36,6 @@ describe("WebChannel endpoint facade delegation", () => {
       handlePost: async (req: Request, isReply: boolean) => {
         calls.push(`post:${req.method}:${isReply ? 1 : 0}:${new URL(req.url).searchParams.get("chat_jid") ?? ""}`);
         return response("post", 207);
-      },
-      handleTimeline: (limit: number, before?: number, chatJid?: string) => {
-        calls.push(`timeline:${limit}:${before ?? "null"}:${chatJid ?? ""}`);
-        return response("timeline");
       },
       handleHashtag: (tag: string, limit: number, offset: number, chatJid?: string) => {
         calls.push(`hashtag:${tag}:${limit}:${offset}:${chatJid ?? ""}`);
@@ -114,7 +110,6 @@ describe("WebChannel endpoint facade delegation", () => {
       .toBe(202);
     expect((await fixture.channel.handlePost(new Request("https://example.com/post?chat_jid=web%3Abranch", { method: "POST" }), false)).status)
       .toBe(207);
-    expect(await fixture.channel.handleTimeline(5, 4, "web:branch").text()).toBe("timeline");
     expect(await fixture.channel.handleHashtag("tag", 6, 2, "web:branch").text()).toBe("hashtag");
     expect(await fixture.channel.handleSearch("query", 7, 3, "web:branch", "root", "web:root").text()).toBe("search");
     expect(await fixture.channel.handleThread(9, "web:branch").text()).toBe("thread");
@@ -138,7 +133,6 @@ describe("WebChannel endpoint facade delegation", () => {
       "avatar:user:GET",
       "workspace:POST",
       "post:POST:0:web:branch",
-      "timeline:5:4:web:branch",
       "hashtag:tag:6:2:web:branch",
       "search:query:7:3:web:branch:root:web:root",
       "thread:9:web:branch",

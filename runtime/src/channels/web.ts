@@ -58,6 +58,7 @@ import { createLazyTerminalService, createLazyVncService } from "./web/lazy-sess
 import type { WebMessageProcessingStorageService } from "./web/messaging/message-processing-storage-service.js";
 import type { WebChannelRuntimeFollowupFacadeService } from "./web/runtime/runtime-followup-facade-service.js";
 import { initializeWebChannelConstructor } from "./web/core/web-channel-constructor-factory.js";
+import { handleTimelineRequest } from "./web/endpoints/content-endpoints.js";
 
 const DEFAULT_CHAT_JID = "web:default";
 const DEFAULT_AGENT_ID = "default";
@@ -82,6 +83,10 @@ export interface WebChannelOpts {
 export class WebChannel implements WebChannelLike {
   requestWorkspaceFileOpen(chatJid: string, path: string, label: string): Promise<unknown> {
     return this.uiBridge.openWorkspaceFile(chatJid, path, label);
+  }
+
+  handleTimeline(limit: number, before?: number, chatJid?: string): Response {
+    return handleTimelineRequest(limit, before, chatJid, this.endpointContexts.content());
   }
 
   private _terminalService: TerminalSessionService | null = null;

@@ -386,12 +386,6 @@ export function installWebChannelPrototype(
       writable: true,
       value: withHttpSurface(async (service, req: Request) => await service.handleWorkspaceVisibility(req)),
     },
-    handleTimeline: {
-      configurable: true,
-      writable: true,
-      value: withHttpSurface((service, limit: number, before?: number, chatJid?: string) =>
-        service.handleTimeline(limit, before, chatJid)),
-    },
     handleHashtag: {
       configurable: true,
       writable: true,
