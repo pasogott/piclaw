@@ -395,6 +395,7 @@ export function createWebChannelConstructorFactory(
       uiBridge: sessionBroadcast.uiBridge,
       sse: sessionBroadcast.sse,
       runtimeState,
+      sessionBroadcast,
     },
     {
       webServerConfig: options.webServerConfig,

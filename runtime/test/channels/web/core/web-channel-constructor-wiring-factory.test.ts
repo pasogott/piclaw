@@ -240,6 +240,7 @@ describe("web channel constructor wiring factory", () => {
         expect(seenChannel.uiBridge).toBe(sessionBroadcast.uiBridge);
         expect(seenChannel.sse).toBe(sessionBroadcast.sse);
         expect(seenChannel.runtimeState).toBe(runtimeState);
+        expect(seenChannel.sessionBroadcast).toBe(sessionBroadcast);
         expect(configs).toEqual({
           webServerConfig: options.webServerConfig,
           webRuntimeConfig: options.webRuntimeConfig,

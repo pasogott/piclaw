@@ -29,11 +29,21 @@ interface WebSessionBroadcastServiceOpts {
 export class WebSessionBroadcastService implements UiBridgeChannel {
   readonly sse: SseHub;
   readonly uiBridge: UiBridge;
+  private readonly releaseProviderUsage?: () => void;
+  private providerUsageActive = true;
 
   constructor(agentPool: AgentPool, opts: WebSessionBroadcastServiceOpts = {}) {
     this.sse = opts.sse ?? new SseHub();
     this.uiBridge = opts.uiBridge ?? new UiBridge(this);
-    agentPool.setProviderUsageRefreshListener?.((event: ProviderUsageRefreshEvent) => this.broadcastEvent("model_changed", event));
+    this.releaseProviderUsage = agentPool.setProviderUsageRefreshListener?.((event: ProviderUsageRefreshEvent) => {
+      if (this.providerUsageActive) this.broadcastEvent("model_changed", event);
+    });
+  }
+
+  /** Release this observer; the web gateway still owns transport/UI cleanup. */
+  dispose(): void {
+    this.providerUsageActive = false;
+    this.releaseProviderUsage?.();
   }
 
   handleSse(req: Request, authorisation?: SseAuthorisation): Response {
