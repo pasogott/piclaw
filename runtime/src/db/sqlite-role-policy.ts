@@ -4,7 +4,7 @@ import { enableSqliteWal } from "./sqlite-journal.js";
 import { isZfsFilesystem } from "./sqlite-checkpoint.js";
 import { RuntimeStartupCleanupError } from "../runtime/startup-cleanup-error.js";
 
-export type SqliteConnectionRole = "root" | "sdk" | "scheduler";
+export type SqliteConnectionRole = "root" | "sdk" | "scheduler" | "index-worker";
 export interface SqliteRoleOptions {
   role: SqliteConnectionRole;
   create?: boolean;
@@ -33,8 +33,9 @@ function assertFile(database: Database, path: string, options: SqliteRoleOptions
  * Root preserves its existing FK policy. Its schema batch borrows FK=ON itself. */
 export function configureSqliteRole(database: Database, path: string, options: SqliteRoleOptions): void {
   options.assertOwner?.();
-  assertFile(database, path, options);
   const memory = path === ":memory:", root = options.role === "root";
+  if (options.role === "index-worker" && memory) throw Error("Index worker requires an existing file-backed WAL database.");
+  assertFile(database, path, options);
   const foreignKeys = root ? pragma(database, "foreign_keys", "foreign_keys") : 1;
   const timeout = options.role === "sdk" ? 0 : 5000;
   const zfs = !memory && (options.zfs ?? isZfsFilesystem(path));
@@ -45,6 +46,7 @@ export function configureSqliteRole(database: Database, path: string, options: S
   if (root && !memory && pragma(database, "page_count", "page_count") === 0)
     database.exec("PRAGMA auto_vacuum=INCREMENTAL");
   if (!memory && pragma(database, "journal_mode", "journal_mode") !== "wal") {
+    if (options.role === "index-worker") throw Error("Index worker requires an existing WAL database.");
     // SDK admission must not inherit a synchronous writer-wait loop.
     if (options.role === "sdk") {
       if (pragma(database, "journal_mode=WAL", "journal_mode") !== "wal") throw Error("SQLite did not enable WAL journal mode.");
@@ -67,6 +69,7 @@ export function configureSqliteRole(database: Database, path: string, options: S
 /** Open one owned handle. Failed configuration never publishes that handle. */
 export function openSqliteRole(path: string, options: SqliteRoleOptions): Database {
   options.assertOwner?.();
+  const create = options.role === "index-worker" ? false : options.create ?? options.role !== "scheduler";
   let before = options.expectedIdentity;
   if (path !== ":memory:") {
     try {
@@ -75,10 +78,10 @@ export function openSqliteRole(path: string, options: SqliteRoleOptions): Databa
       before = current;
       if (options.expectedPath && realpathSync(path) !== realpathSync(options.expectedPath)) throw Error("SQLite role database path alias is unsupported");
     } catch (error) {
-      if ((error as { code?: string }).code !== "ENOENT" || options.create === false || before) throw error;
+      if ((error as { code?: string }).code !== "ENOENT" || !create || before) throw error;
     }
   }
-  const database = new Database(path, { create: options.create ?? options.role !== "scheduler", strict: options.role === "sdk" });
+  const database = new Database(path, { create, strict: options.role === "sdk" });
   try {
     configureSqliteRole(database, path, { ...options, expectedIdentity: before });
     return database;

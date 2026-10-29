@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { workspaceIndexPolicySnapshot } from '../core/workspace-index-policy.js';
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { getDb, initDatabase } from '../db/connection.js';
+import { getDb, openWorkspaceIndexDatabase } from '../db/connection.js';
 import { admitNoteIndexStore, captureNoteIndexBinding, receiveNoteIndexBinding, NoteIndexDenied } from './access.js';
 import { ensureNoteSchema, NOTE_INDEX_FORMAT } from './schema.js';
 import { CHUNKER_VERSION, chunkMarkdown, NoteChunkerExclusionError } from './chunker.js';
@@ -35,10 +35,14 @@ export function markNoteIndexDirty(paths?: string[]): void | Promise<void> {
 /** Sole content writer: requires and consumes the coordinator-owned inherited pipe. */
 export async function runNoteIndexPhase(options: { rebuild?: boolean; signal?: AbortSignal } = {}): Promise<void> {
   const admission=receiveNoteIndexBinding(); // Before database open or option access.
-  initDatabase();const db=getDb();admission.bindDatabase(db);admission.validate();
-  ensureNoteSchema(db);
-  const started=performance.now(),signal=options.signal,policy=workspaceIndexPolicySnapshot();
+  const signal=options.signal;if(signal?.aborted)throw new Error('cancelled');
+  openWorkspaceIndexDatabase(undefined,admission.validate,admission.binding.databaseIdentity);
+  const db=getDb();admission.bindDatabase(db);admission.validate();
+  const started=performance.now(),policy=workspaceIndexPolicySnapshot();
   const check=()=>{admission.validate();policy.validate();if(signal?.aborted)throw new Error('cancelled');if(performance.now()-started>=NOTE_LIMITS.elapsedMs)throw new NoteScanLimited();};
+  // Optional projection schema belongs to this fd3-admitted writer, never core startup.
+  await admitSqliteWrite(db,()=>ensureNoteSchema(db),check,signal,undefined,check);
+  check();
   const purge=(generation:number)=>{db.query('DELETE FROM note_retrieval_fts WHERE generation=?').run(generation);db.query('DELETE FROM note_retrieval_chunks WHERE generation=?').run(generation);db.query('DELETE FROM note_retrieval_sources WHERE generation=?').run(generation);};
   const deleteStagedPath=(generation:number,path:string)=>{db.query('DELETE FROM note_retrieval_fts WHERE generation=? AND path=?').run(generation,path);db.query('DELETE FROM note_retrieval_chunks WHERE generation=? AND path=?').run(generation,path);db.query('DELETE FROM note_retrieval_sources WHERE generation=? AND path=?').run(generation,path);};
   let captured!:State;let namespace='';let generation=0;let claimed=false;let dirtyPaths:string[]=[];let incremental=false;const binding=bindingKey(admission.binding);

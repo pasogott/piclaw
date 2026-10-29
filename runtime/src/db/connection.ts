@@ -55,6 +55,7 @@ let dbPathCache: string | null = null;
 let stopCheckpoint: (() => void) | undefined;
 let dbFileIdentity: string | null = null;
 let dbInstance = 0;
+let dbRole: "root" | "index-worker" | undefined;
 let cleanupFailure: RuntimeStartupCleanupError | undefined;
 function currentFileIdentity(pathname: string): string {
   const stat = fs.statSync(pathname);
@@ -734,6 +735,26 @@ function migrateChatCursors(database: Database): void {
  * work uses initializeDatabaseSchema on a caller-owned idle handle.
  */
 export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeConfigPaths()): void {
+  openDatabase(paths, "root");
+}
+
+/** Borrow ready state or open an existing index store; never acquire core migration ownership. */
+export function openWorkspaceIndexDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeConfigPaths(),
+  assertCurrent: () => void = () => {}, expectedIdentity?: string): void {
+  openDatabase(paths, "index-worker", assertCurrent, expectedIdentity);
+}
+
+function assertIndexStore(database: Database): void {
+  for (const sql of [
+    "SELECT path,mtime_ms,size_bytes,indexed_at FROM main.workspace_files LIMIT 0",
+    "SELECT scope,state,last_indexed_at,last_error,indexed_file_count,roots_json,updated_at FROM main.workspace_index_status LIMIT 0",
+    "SELECT content,path,mtime_ms,size_bytes FROM main.workspace_fts LIMIT 0",
+  ]) database.query(sql).all();
+}
+
+function openDatabase(paths: Readonly<RuntimeConfigPaths>, role: "root" | "index-worker",
+  assertCurrent: () => void = () => {}, expectedIdentity?: string): void {
+  assertCurrent();
   if (cleanupFailure) throw cleanupFailure;
   const useMemory = paths.databasePath === ":memory:";
   const nextMode: "memory" | "file" = useMemory ? "memory" : "file";
@@ -755,6 +776,8 @@ export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeCon
     throw Error("Database bootstrap target changed; close the database before selecting another target.");
   }
   if (db && dbPathCache === nextCacheKey) {
+    if (role === "root" && dbRole !== "root") throw Error("Index worker connection cannot become a migration owner; close it first.");
+    if (expectedIdentity && dbFileIdentity !== expectedIdentity) throw Error("SQLite role database identity changed");
     if (!useMemory) {
       try {
         if (dbFileIdentity !== currentFileIdentity(nextPath)) throw Error("Database file identity changed.");
@@ -765,29 +788,37 @@ export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeCon
         throw failure;
       }
     }
-    try { db.prepare("SELECT 1;").get(); return; }
+    try { db.prepare("SELECT 1;").get(); }
     catch (error) {
-      // Pinned Bun closed-handle contract; storage/inspection errors are not closure.
+      // Only the pinned Bun liveness probe may classify a closed handle.
       if (!(error instanceof RangeError) || error.message !== "Cannot use a closed database") throw error;
+      closeDatabase({ shrinkMemory: false });
+    }
+    if (db) {
+      if (role === "index-worker") assertIndexStore(db);
+      assertCurrent(); return;
     }
   }
+  if (role === "index-worker" && useMemory) throw Error("Index worker requires an existing file-backed database.");
   closeDatabase({ shrinkMemory: false });
-  if (!useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
+  if (role === "root" && !useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
   let database: Database | undefined, releaseCheckpoint: (() => void) | undefined;
   try {
-    database = openSqliteRole(nextPath, { role: "root" });
+    database = openSqliteRole(nextPath, { role, create: role === "root", assertOwner: assertCurrent, expectedIdentity,
+      expectedPath: role === "index-worker" ? nextPath : undefined });
     const identity = useMemory ? null : currentFileIdentity(nextPath);
-    initializeDatabaseSchema(database);
-    if (!useMemory) {
-      releaseCheckpoint = registerSqliteCheckpoint(database, nextPath);
-      if (identity !== currentFileIdentity(nextPath)) throw Error("Database file identity changed.");
-    }
+    if (role === "root") {
+      initializeDatabaseSchema(database);
+      if (!useMemory) releaseCheckpoint = registerSqliteCheckpoint(database, nextPath);
+    } else assertIndexStore(database);
+    if (!useMemory && identity !== currentFileIdentity(nextPath)) throw Error("Database file identity changed.");
+    assertCurrent();
     log.info("Opened database connection", {
-      operation: "init_database.open", mode: nextMode, path: nextPath, reusedConnection: false,
+      operation: "init_database.open", mode: nextMode, role, path: nextPath, reusedConnection: false,
     });
     // Readiness is published together, only after all owned startup work succeeds.
     db = database; dbPathCache = nextCacheKey; dbFileIdentity = identity;
-    stopCheckpoint = releaseCheckpoint; dbInstance += 1;
+    stopCheckpoint = releaseCheckpoint; dbRole = role; dbInstance += 1;
   } catch (error) {
     const cleanup = database ? disposeDatabase(database, releaseCheckpoint) : [];
     if (cleanup.length) throw cleanupFailure = new RuntimeStartupCleanupError([error, ...cleanup], "Database initialization cleanup uncertain");
@@ -958,7 +989,7 @@ export function closeDatabase(_options?: { shrinkMemory?: boolean }): void {
 
   const database = db, releaseCheckpoint = stopCheckpoint;
   // Unpublish before cleanup; a throwing disposer cannot leave a usable singleton.
-  db = null; dbPathCache = null; dbFileIdentity = null; stopCheckpoint = undefined;
+  db = null; dbPathCache = null; dbFileIdentity = null; stopCheckpoint = undefined; dbRole = undefined;
 
   const failures = disposeDatabase(database, releaseCheckpoint);
   if (failures.length) throw cleanupFailure = new RuntimeStartupCleanupError(failures, "Database close cleanup uncertain");

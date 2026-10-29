@@ -6,12 +6,13 @@ import {join,resolve} from 'node:path';
 import {Database} from 'bun:sqlite';
 import {createTempWorkspace,setEnv} from '../helpers.js';
 import {markNoteIndexDirty,runNoteIndexPhase} from '../../src/note-retrieval/coordinator.js';
+import {initDatabase,closeDatabase} from '../../src/db/connection.js';
 import {withExecutionIdentity} from '../../src/core/execution-context.js';
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void;
 const workspaceEnvKeys=['PICLAW_WORKSPACE','PICLAW_STORE','PICLAW_DATA','PICLAW_DB_IN_MEMORY'] as const;
 let previousWorkspaceEnv:Record<string,string|undefined>;
 setDefaultTimeout(30_000);
-beforeEach(()=>{previousWorkspaceEnv=Object.fromEntries(workspaceEnvKeys.map(key=>[key,process.env[key]]));ws=createTempWorkspace('note-index-376-');restore=setEnv({PICLAW_DISABLE_BACKGROUND_WORKSPACE_INDEX:'1'});Object.assign(process.env,{PICLAW_WORKSPACE:ws.workspace,PICLAW_STORE:ws.store,PICLAW_DATA:ws.data,PICLAW_DB_IN_MEMORY:'0'});mkdirSync(join(ws.workspace,'notes'),{recursive:true});writeFileSync(join(ws.store,'messages.db'),Buffer.alloc(0));});
+beforeEach(()=>{previousWorkspaceEnv=Object.fromEntries(workspaceEnvKeys.map(key=>[key,process.env[key]]));ws=createTempWorkspace('note-index-376-');restore=setEnv({PICLAW_DISABLE_BACKGROUND_WORKSPACE_INDEX:'1'});Object.assign(process.env,{PICLAW_WORKSPACE:ws.workspace,PICLAW_STORE:ws.store,PICLAW_DATA:ws.data,PICLAW_DB_IN_MEMORY:'0'});mkdirSync(join(ws.workspace,'notes'),{recursive:true});closeDatabase();initDatabase();closeDatabase();});
 afterEach(()=>{restore();for(const key of workspaceEnvKeys){const value=previousWorkspaceEnv[key];if(value===undefined)delete process.env[key];else process.env[key]=value;}ws.cleanup();});
 const put=(name:string,content:string)=>{writeFileSync(join(ws.workspace,'notes',name),content);};
 const binding=()=>{const paths=[ws.workspace,ws.store,ws.data,join(ws.store,'messages.db')].map(realpathSync),identities=paths.map(p=>{const s=lstatSync(p);return `${s.dev}:${s.ino}`;});return {version:1,mode:'single-user',workspace:paths[0],store:paths[1],data:paths[2],database:paths[3],databaseIdentity:identities[3],identities};};
@@ -30,6 +31,10 @@ test('worker requires inherited binding before opening note schema',async()=>{
  const r=await run({...binding(),store:join(ws.workspace,'other')});expect(r.code).toBe(1);expect(r.errors).toContain('NoteIndexDenied');
  expect(sql("SELECT name FROM sqlite_master WHERE name='note_retrieval_state'")).toBeNull();
  await expect(runNoteIndexPhase()).rejects.toThrow('Note index access denied');
+});
+test('cancelled first note phase cannot install even its optional projection schema',async()=>{
+ const r=await run(binding(),false,true);expect(r.code).toBe(1);expect(r.errors).toContain('cancelled');
+ expect(sql("SELECT name FROM sqlite_master WHERE name='note_retrieval_state'")).toBeNull();
 });
 test('database path replacement is denied against both captured binding and an already-open parent instance',async()=>{
  const captured=binding(),dbPath=join(ws.store,'messages.db'),oldPath=join(ws.store,'old-messages.db');renameSync(dbPath,oldPath);writeFileSync(dbPath,Buffer.alloc(0));
