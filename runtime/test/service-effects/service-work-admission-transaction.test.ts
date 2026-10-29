@@ -329,3 +329,14 @@ for (const fault of ["owner-after-attach", "foreign-parent", "foreign-connection
     } finally { other.close(); }
   });
 }
+
+test('service-work construction preserves caller busy timeout', () => {
+  const f = fixture();
+  try {
+    for (const timeout of [0, 71]) {
+      f.db.exec(`PRAGMA busy_timeout=${timeout}`);
+      expect(createCurrentPiclawServiceWorkStore(f.db, {hitFault: () => false, recordTrace() {}}).ok).toBeTrue();
+      expect(f.db.query('PRAGMA busy_timeout').get()).toEqual({timeout});
+    }
+  } finally { f.db.exec("PRAGMA busy_timeout=0"); }
+});

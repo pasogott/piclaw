@@ -1,5 +1,6 @@
 // Application-owned host schema; SDK tables retain their separate owner.
 import type { Database } from "bun:sqlite";
+import { admitSqliteWrite } from "../../src/db/sqlite-async-admission.js";
 import { applyOwnedMigrations } from "../../src/db/migrations.js";
 
 import { nativeBindingRecoveryIndex as acceptedPayloadRecoveryIndex, nativeBindingRecoveryMigration as recoveryIndexMigration } from "../../src/db/native-host-schema-contract.js";
@@ -65,34 +66,46 @@ function applyRecoveryIndex(db: Database, owner: () => void): void {
   assertRecoveryIndex(db, true);
   owner();
 }
-/** Explicit additive host step, using the existing owned ledger and no SDK DDL. */
-export function migrateHostAcceptedPayloadLookup(db: Database, ownerguard: () => void): void {
-  const owner = () => { if (ownerguard() !== undefined) throw new Error("Invalid synchronous owner guard"); };
-  owner();
+function assertSchemaConnection(db: Database): void {
   if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
     throw new Error("Host schema requires foreign_keys ON");
   if (db.inTransaction) throw new Error("Host schema requires an offline outer transaction");
+}
+function schemaOwner(db: Database, ownerguard: () => void): () => void {
+  const owner = () => { if (ownerguard() !== undefined) throw new Error("Invalid synchronous owner guard"); };
+  owner(); assertSchemaConnection(db);
+  return owner;
+}
+function initializeTables(db: Database, owner: () => void, indices: readonly number[]): void {
+  owner();
+  for (const i of indices) {
+    const exists = db.query("SELECT 1 FROM sqlite_master WHERE name=?").get(names[i]!);
+    if (exists) assertHostSchema(db, [i]);
+  }
+  for (const i of indices) db.exec(definitions[i]!);
+  assertHostSchema(db, indices);
+  if (indices.includes(0)) applyRecoveryIndex(db, owner);
+  owner();
+}
+/** Explicit additive host step, using the existing owned ledger and no SDK DDL. */
+export function migrateHostAcceptedPayloadLookup(db: Database, ownerguard: () => void): void {
+  const owner = schemaOwner(db, ownerguard);
   db.transaction(() => applyRecoveryIndex(db, owner)).immediate();
 }
 export function initializeHostSchemaTables(db: Database, ownerguard: () => void, indices: readonly number[]): void {
-  const owner = () => { if (ownerguard() !== undefined) throw new Error("Invalid synchronous owner guard"); };
-  owner();
-  if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
-    throw new Error("Host schema requires foreign_keys ON");
-  if (db.inTransaction) throw new Error("Host schema requires an offline outer transaction");
-  db.transaction(() => {
-    owner();
-    for (const i of indices) {
-      const exists = db.query("SELECT 1 FROM sqlite_master WHERE name=?").get(names[i]!);
-      if (exists) assertHostSchema(db, [i]);
-    }
-    for (const i of indices) db.exec(definitions[i]!);
-    assertHostSchema(db, indices);
-    if (indices.includes(0)) applyRecoveryIndex(db, owner);
-    owner();
-  }).immediate();
+  const owner = schemaOwner(db, ownerguard);
+  db.transaction(() => initializeTables(db, owner, indices)).immediate();
 }
 /** Explicit OFFLINE initialization only; caller owns an FK-enabled host connection. */
 export function initializeHostSchema(db: Database, ownerguard: () => void): void {
   initializeHostSchemaTables(db, ownerguard, [0, 1, 2, 3]);
+}
+/** Bootstrap yields only before writer acquisition; entered schema work is never replayed. */
+export async function prepareHostSchema(db: Database, ownerguard: () => void, offlineInitialize: boolean,
+  signal?: AbortSignal, assertBinding: () => void = () => {}): Promise<void> {
+  const owner = schemaOwner(db, ownerguard);
+  await admitSqliteWrite(db, () => {
+    if (offlineInitialize) initializeTables(db, owner, [0, 1, 2, 3]);
+    else { assertHostSchema(db); applyRecoveryIndex(db, owner); }
+  }, owner, signal, undefined, () => { owner(); assertSchemaConnection(db); assertBinding(); });
 }

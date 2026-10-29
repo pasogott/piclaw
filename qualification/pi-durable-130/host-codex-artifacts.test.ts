@@ -1,6 +1,7 @@
 import "./src/test-guard.js";
 import { test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { isSqliteContention } from '../../runtime/src/db/sqlite-async-admission.js';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,17 +100,23 @@ import { Harness } from '../../runtime/durable-engine/qualification/durable.ts';
 test('native application bootstrap forwards Codex projection before EF-S02; public SDK history stays canonical after reopen',()=>sourceRoot(async f=>{
  const path=join(f.cwd,'root.sqlite');
  const base=await openFixture({acquired:true},()=>{},()=>SqliteStorage.open(new BunSqliteDatabase(path,{root:f.root,assertOwner:f.assertOwner})));
- const id=base.root.id;await base.close();
+ const id=base.root.id;await base.close();await base.storage.close(context);
  const payloads=new InMemoryEffectPayloadResolver();const writes=new Map<string,string>();
  const answers={resolver:payloads,put(ref:string,text:string){f.assertOwner();writes.set(ref,text);payloads.putText(ref,text);}};
  let canonical='';let calls=0;
  const project=createHostCodexAnswerMaterializer({...f,answers});
  let runtime:any;
- const bundle=await createApplicationBootstrapBundle({root:f.root,path,ownership:applicationOwnership(f.lock),
+ const blocker=new Database(path);const deadline=Date.now()+2500;
+ for(;;){try{blocker.exec('BEGIN IMMEDIATE');break;}catch(error){if(!isSqliteContention(error)||Date.now()>=deadline){blocker.close();throw error;}await Bun.sleep(5);}}
+ let released=false;const release=setTimeout(()=>{blocker.exec('ROLLBACK');released=true;},75);
+ let bundle:Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
+ try { bundle=await createApplicationBootstrapBundle({root:f.root,path,ownership:applicationOwnership(f.lock),
   manifest:[{chatJid:'web:images',branchId:'main',conversationId:id}],sessions:new Map([['web:images','image-session']]),offlineInitialize:true,answers,
   onRuntime(r){runtime=r;},materializeAnswer:async(ref,answer,op)=>{calls++;canonical=answer.text;return project(ref,answer,op);},
   runtime:{incarnation:'image-native',sessionId:'image-session',lane:'main',generation:1,now:()=>at,harnessOptions:{models:base.models,registry:base.registry,settings:{retry:{enabled:false},compaction:{enabled:false}}}}
  },context);
+ } finally {clearTimeout(release);if(blocker.inTransaction)blocker.exec('ROLLBACK');blocker.close();}
+ expect(released).toBe(true);
  try {
   await f.accept();await f.publish(0);
   f.root.query("INSERT INTO chats(jid,name,last_message_time) VALUES(?,?,?)").run(f.source.chatJid,'images',at);

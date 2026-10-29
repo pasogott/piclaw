@@ -29,7 +29,7 @@ import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { createHostController, type HostControllerOptions } from "./host-controller.js";
 import { createHostDurableBindings, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
-import { assertHostSchema, initializeHostSchema, migrateHostAcceptedPayloadLookup } from "./host-schema.js";
+import { prepareHostSchema } from "./host-schema.js";
 import { readApplicationMessagePayload } from "./accepted-payload-recovery.js";
 import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
@@ -188,11 +188,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   // Verify physical identity BEFORE any optional host schema mutation.
   database = new BunSqliteDatabase(path, { root, assertOwner: assert, fenceTransactions: true });
   const candidateDatabase = database;
-    if (config.offlineInitialize === true) initializeHostSchema(root, assert);
-    else {
-      assertHostSchema(root);
-      migrateHostAcceptedPayloadLookup(root, assert);
-    }
+    await prepareHostSchema(root, assert, config.offlineInitialize === true, context.abortSignal, () => candidateDatabase.assertApplicationRoot(root));
     const hostFollowups = new QueuedFollowupLifecycleService();
     const work = value(createCurrentPiclawServiceWorkStore(root, { hitFault: () => false, recordTrace() {}, validateAcceptance() { assert(); return true; },
       pendingQueuedSourceOrder: chat => {
