@@ -2112,7 +2112,7 @@ independent review are clear.
 ### Historical application session-position map binding without JSONL
 
 The isolated `AgentRuntimeFacadeOptions.durableSessions` map input in this
-historical receipt is retired under #1837. Current application routing already
+historical receipt is retired under #1837 (29 October 2026). Current routing already
 uses the backend-owned `getDurableSession` callback; it does not accept a map
 through `AgentPoolOptions`. Surviving fixtures now use that same lookup and
 immutable backend-produced ports. The original counts and results below remain
