@@ -6,7 +6,7 @@ import {
   getWebRuntimeConfig,
   getWebServerConfig,
 } from "../../../core/config.js";
-import { getChatCursor, getDb, replaceMessageContent } from "../../../db.js";
+import { getDb, replaceMessageContent } from "../../../db.js";
 import { getChatProject } from "../../../db/chat-project.js";
 import { handlePost as handlePostRequest } from "../handlers/posts.js";
 import { handleAgentMessage as handleAgentMessageRequest } from "../handlers/agent.js";
@@ -163,7 +163,6 @@ export interface WebChannelConstructorFactoryResult {
 
 export interface WebChannelConstructorFactoryDeps {
   getIdentityConfig(): ReturnType<typeof getIdentityConfig>;
-  getChatCursor(chatJid: string): string;
   createSessionBroadcast(agentPool: AgentPool): WebSessionBroadcastService;
   createRuntimeState(
     callbacks: WebChannelRuntimeStateCallbacks,
@@ -222,7 +221,6 @@ export interface WebChannelConstructorFactoryDeps {
 
 const defaultDeps: WebChannelConstructorFactoryDeps = {
   getIdentityConfig,
-  getChatCursor,
   createSessionBroadcast: (agentPool) => new WebSessionBroadcastService(agentPool),
   createRuntimeState: (callbacks, options) => new WebChannelRuntimeStateService(callbacks, options),
   createIdentitySnapshot: (identity) => createWebChannelIdentitySnapshot(identity),
@@ -287,7 +285,6 @@ export function createWebChannelConstructorFactory(
   const runtimeState = deps.createRuntimeState(
     {
       getAssistantName: () => deps.getIdentityConfig().assistantName,
-      getChatCursor: (chatJid) => deps.getChatCursor(chatJid),
       isNativeRuntime: () => channel.agentPool.isDurableRuntime?.() === true,
       isChatLaneBusy: chat => channel.queue.isLaneBusy(`chat:${chat}`),
       readNativeTurnState: chat => readNativeTurnState(getDb(), chat),
@@ -397,6 +394,7 @@ export function createWebChannelConstructorFactory(
       broadcastEvent: (eventType, data) => channel.broadcastEvent(eventType, data),
       uiBridge: sessionBroadcast.uiBridge,
       sse: sessionBroadcast.sse,
+      runtimeState,
     },
     {
       webServerConfig: options.webServerConfig,

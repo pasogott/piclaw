@@ -13,7 +13,6 @@ describe("web runtime state service", () => {
 
     const callbacks: WebChannelRuntimeStateCallbacks = {
       getAssistantName: () => "Pi",
-      getChatCursor: () => "2026-03-27T20:00:00.000Z",
       enqueue: (task, key, laneKey) => {
         enqueued.push({ task, key, laneKey });
       },
@@ -51,7 +50,6 @@ describe("web runtime state service", () => {
 
     const callbacks: WebChannelRuntimeStateCallbacks = {
       getAssistantName: () => assistantName,
-      getChatCursor: () => "cursor",
       enqueue: (task, key, laneKey) => {
         enqueued.push({ task, key, laneKey });
       },
@@ -124,7 +122,6 @@ describe("web runtime state service", () => {
     const service = new WebChannelRuntimeStateService(
       {
         getAssistantName: () => "Pi",
-        getChatCursor: () => "cursor",
         enqueue: async () => {},
         processChat: async () => {},
       },
@@ -160,7 +157,7 @@ describe("web runtime state service", () => {
 test("native terminal status stays idle during worker cleanup; accepted work remains active", () => {
   let operation: {operation_id:string;phase:string}|null = null, queued = 0;
   const statuses = new Map<string,any>([["chat",{type:"done",title:"Idle",turn_id:"durable:1"}]]);
-  const service = new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){},isNativeRuntime:()=>true,isChatLaneBusy:()=>true,readNativeTurnState:()=>({operation,queued})},{defaultAgentId:"default"},{agentStatusStore:{get:(chat:string)=>statuses.get(chat),update:(chat:string,value:any)=>statuses.set(chat,value),dispose(){}} as any});
+  const service = new WebChannelRuntimeStateService({getAssistantName:()=>"Test",enqueue(){},async processChat(){},isNativeRuntime:()=>true,isChatLaneBusy:()=>true,readNativeTurnState:()=>({operation,queued})},{defaultAgentId:"default"},{agentStatusStore:{get:(chat:string)=>statuses.get(chat),update:(chat:string,value:any)=>statuses.set(chat,value),dispose(){}} as any});
   expect(service.getAgentStatus("chat")?.type).toBe("done");
   queued=1;expect(service.getAgentStatus("chat")?.state).toBe("active");
   queued=0;operation={operation_id:"op",phase:"executing"};expect(service.getAgentStatus("chat")?.operation_id).toBe("op");
@@ -172,4 +169,18 @@ test("native terminal status stays idle during worker cleanup; accepted work rem
   }
   statuses.set("chat",{type:"intent",title:"Old model status"});
   expect(service.getAgentStatus("chat")?.type).toBe("done");
+});
+
+test('direct resume context preserves callback receivers and null thread semantics', async () => {
+  const tasks: Array<() => Promise<void>> = [], threads: Array<number | null | undefined> = [];
+  const callbacks: WebChannelRuntimeStateCallbacks = {
+    getAssistantName() { expect(this).toBe(callbacks); return 'Fixture'; },
+    enqueue(task) { expect(this).toBe(callbacks); tasks.push(task); },
+    async processChat(_chat, _agent, thread) { expect(this).toBe(callbacks); threads.push(thread); },
+  };
+  const service = new WebChannelRuntimeStateService(callbacks, { defaultAgentId: 'default' });
+  try {
+    service.resumeChat('fixture', null); await tasks[0]!();
+    expect(threads).toEqual([undefined]);
+  } finally { service.dispose(); }
 });
