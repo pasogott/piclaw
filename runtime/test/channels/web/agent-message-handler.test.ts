@@ -242,6 +242,7 @@ describe("web agent message handler", () => {
     } finally { setAssistantAvatar(previous); }
   });
   test("handles /meters as a UI-only command while still returning command output as an assistant message", async () => {
+    initDatabase();
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const sentMessages: Array<{ chatJid: string; content: string; options: unknown }> = [];
 
@@ -284,6 +285,7 @@ describe("web agent message handler", () => {
   });
 
   test("handles /theme as a UI-only command while still returning command output as an assistant message", async () => {
+    initDatabase();
     const queuedFollowups: Array<{ chatJid: string; content: string }> = [];
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const sentMessages: Array<{ chatJid: string; content: string; options: unknown }> = [];
