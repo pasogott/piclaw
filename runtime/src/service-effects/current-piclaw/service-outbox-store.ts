@@ -1135,7 +1135,6 @@ function verifyDatabase(database: Database): void {
   if (fk?.foreign_keys !== 1) throw new Error("foreign keys");
   for (const table of [OUTBOX, LEASES, OUTCOMES, RESOLUTIONS, DECISIONS])
     database.query(`SELECT * FROM ${table} LIMIT 1`).get();
-  database.exec("PRAGMA busy_timeout=5000");
 }
 function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");

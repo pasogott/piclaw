@@ -110,3 +110,78 @@ test('a changed binding while awaiting acquisition prevents callback entry witho
   await Bun.sleep(0);valid=false;blocker.exec('ROLLBACK');
   await expect(pending).rejects.toThrow('binding revoked');expect(operations).toBe(0);expect(count(db)).toBe(0);expect(timeout(db)).toBe(5000);
 }));
+
+
+test("admission rejects async callbacks before their SQL prefix executes", () => fixture(async (db) => {
+  let entered = false;
+  await expect(admitSqliteWrite(db, async () => {
+    entered = true; db.run("INSERT INTO input(value) VALUES ('async-prefix')");
+  })).rejects.toThrow("synchronous");
+  expect(entered).toBe(false); expect(count(db)).toBe(0);
+}));
+
+test("admission rolls back SQL when a synchronous callback returns a thenable", () => fixture(async (db) => {
+  let entered = 0;
+  await expect(admitSqliteWrite(db, () => {
+    entered++; db.run("INSERT INTO input(value) VALUES ('thenable-prefix')");
+    return { then() { throw new Error("thenable must not execute"); } };
+  })).rejects.toThrow("synchronous");
+  expect(entered).toBe(1); expect(count(db)).toBe(0);
+}));
+
+test("post-commit timeout restoration failure cannot turn durable success into not_applied", () => fixture(async (db) => {
+  const exec = db.exec.bind(db); let restored = 0;
+  try {
+    exec("PRAGMA busy_timeout=71");
+    db.exec = ((sql: string) => {
+      if (sql === "PRAGMA busy_timeout=71") { restored++; throw new Error("injected restoration failure"); }
+      return exec(sql);
+    }) as typeof db.exec;
+    await expect(admitSqliteWrite(db, () => {
+      db.run("INSERT INTO input(value) VALUES ('committed')"); return "receipt";
+    })).resolves.toBe("receipt");
+    expect(restored).toBe(1);
+    expect(db.query("SELECT value FROM input").all()).toEqual([{ value: "committed" }]);
+  } finally { db.exec = exec; }
+}));
+
+
+test("failed diagnostics cannot replace a completed transaction result", () => fixture(async (db) => {
+  const exec = db.exec.bind(db), write = process.stderr.write;
+  try {
+    exec("PRAGMA busy_timeout=71");
+    db.exec = ((sql: string) => {
+      if (sql === "PRAGMA busy_timeout=71") throw new Error("injected restoration failure");
+      return exec(sql);
+    }) as typeof db.exec;
+    process.stderr.write = (() => { throw new Error("injected diagnostic failure"); }) as typeof process.stderr.write;
+    await expect(admitSqliteWrite(db, () => {
+      db.run("INSERT INTO input VALUES ('committed')"); return "receipt";
+    })).resolves.toBe("receipt");
+    expect(count(db)).toBe(1);
+  } finally { db.exec = exec; process.stderr.write = write; }
+}));
+
+test("nested successful admission preserves outer durability ownership despite restoration failure", () => fixture(async (db, blocker) => {
+  const exec = db.exec.bind(db);
+  try {
+    exec("PRAGMA busy_timeout=71;BEGIN IMMEDIATE");
+    db.exec = ((sql: string) => {
+      if (sql === "PRAGMA busy_timeout=71") throw new Error("injected restoration failure");
+      return exec(sql);
+    }) as typeof db.exec;
+    await expect(admitSqliteWrite(db, () => { db.run("INSERT INTO input VALUES ('savepoint')"); return "saved"; })).resolves.toBe("saved");
+    expect(db.inTransaction).toBe(true); expect(count(db)).toBe(1); expect(count(blocker)).toBe(0);
+    exec("ROLLBACK"); expect(count(db)).toBe(0);
+  } finally { db.exec = exec; if (db.inTransaction) exec("ROLLBACK"); }
+}));
+
+test("rejected Promise returned by a synchronous wrapper is contained without executing it again", () => fixture(async (db) => {
+  let calls = 0;
+  await expect(admitSqliteWrite(db, () => {
+    calls++; db.run("INSERT INTO input VALUES ('prefix')");
+    return Promise.reject(new Error("already rejected async work"));
+  })).rejects.toThrow("synchronous");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(calls).toBe(1); expect(count(db)).toBe(0);
+}));

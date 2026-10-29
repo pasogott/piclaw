@@ -1,6 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import { statSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
+import { isAsyncFunction, isPromise } from 'node:util/types';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('db.admission');
 
 export function isSqliteContention(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -15,7 +19,8 @@ export function isSqliteContention(error: unknown): boolean {
 }
 
 /** Retry writer acquisition only; never replay an entered transaction callback.
- * Keep operations/authorization synchronous and SQL-only. Restore connection
+ * Keep operations/authorization synchronous and SQL-only. Rejecting async misuse
+ * cannot cancel work already started. Restore connection
  * policy before yielding and run rollback cleanup before returning any failure. */
 export async function admitSqliteWrite<T>(
   database: Database,
@@ -31,6 +36,7 @@ export async function admitSqliteWrite<T>(
   const identity = () => { const stat = statSync(file!); return `${stat.dev}:${stat.ino}`; };
   const original = file ? identity() : undefined;
   const checkFile = () => { if (file && identity() !== original) throw Error('SQLite database file changed.'); };
+  if (isAsyncFunction(operation)) throw new TypeError('SQLite admission callback must be synchronous');
   const deadline = performance.now() + timeoutMs;
   for (;;) {
     signal.throwIfAborted();
@@ -38,24 +44,36 @@ export async function admitSqliteWrite<T>(
     assertBinding(); checkFile();
     const previous = (database.query('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
     let contention: unknown;
-    let callbackEntered = false;
+    let callbackEntered = false, completed = false;
     database.exec('PRAGMA busy_timeout=0');
     try {
-      return database.transaction(() => {
+      const result = database.transaction(() => {
         callbackEntered = true; // Authorization can mutate attempt-local state too.
         checkFile(); authorise('before');
         signal.throwIfAborted();
         const result = operation();
+        if (result !== null && (typeof result === 'object' || typeof result === 'function') &&
+          typeof (result as { then?: unknown }).then === 'function') {
+          if (isPromise(result)) void Promise.prototype.catch.call(result, () => {});
+          throw new TypeError('SQLite admission callback must be synchronous');
+        }
         authorise('after'); checkFile();
         signal.throwIfAborted();
         return result;
       }).immediate();
+      completed = true; return result;
     } catch (error) {
       afterRollback(); // Synchronous: restore attempt-local memory on terminal failures too.
       if (callbackEntered || !isSqliteContention(error)) throw error;
       contention = error;
     } finally {
-      database.exec(`PRAGMA busy_timeout=${previous}`);
+      try { database.exec(`PRAGMA busy_timeout=${previous}`); }
+      catch (error) {
+        if (!completed) throw error;
+        // The transaction has completed. Cleanup failure cannot mean not_applied.
+        try { log.warn('SQLite timeout restoration failed after completed transaction', { error }); }
+        catch { /* Diagnostics cannot replace the completed transaction result. */ }
+      }
     }
     if (performance.now() >= deadline) throw contention;
     await new Promise<void>((resolve, reject) => {

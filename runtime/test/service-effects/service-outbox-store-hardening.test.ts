@@ -1871,3 +1871,14 @@ describe("EF-S05 hostile input and redaction", () => {
     }
   });
 });
+
+test('outbox construction preserves caller busy timeout', () => {
+  const f = open();
+  try {
+    for (const timeout of [0, 71]) {
+      f.database.exec(`PRAGMA busy_timeout=${timeout}`);
+      expect(createCurrentPiclawServiceOutboxStore(f.database, f.runtime).ok).toBeTrue();
+      expect(f.database.query('PRAGMA busy_timeout').get()).toEqual({timeout});
+    }
+  } finally { f.database.close(); }
+});

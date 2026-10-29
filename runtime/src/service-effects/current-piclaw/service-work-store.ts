@@ -171,7 +171,6 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     if (foreignKeys?.foreign_keys !== 1) {
       throw new Error("EF-S01 requires SQLite foreign-key enforcement.");
     }
-    database.exec("PRAGMA busy_timeout = 5000");
   }
 
   acceptSource(
