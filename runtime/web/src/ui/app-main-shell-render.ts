@@ -60,6 +60,9 @@ export function scrollToPostedTimelineMessage(options: {
   };
 
   const tryScroll = (attemptsRemaining: number) => {
+    // The acknowledgement can precede the post render. Retry the reveal too:
+    // a DOM-only retry cannot mount a row outside the virtual history window.
+    requestReveal(id);
     const element = getElementById(`post-${id}`);
     if (element) {
       highlight(element);
@@ -74,7 +77,6 @@ export function scrollToPostedTimelineMessage(options: {
     });
   };
 
-  requestReveal(id);
   tryScroll(maxAttempts);
 }
 
