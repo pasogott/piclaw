@@ -2109,7 +2109,14 @@ earlier import failure from masquerading as evidence. Final correctly configured
 candidate run passes 381 tests / 6,476 assertions across 27 files; types and bounded
 independent review are clear.
 
-### Application session-position binding without JSONL
+### Historical application session-position map binding without JSONL
+
+The isolated `AgentRuntimeFacadeOptions.durableSessions` map input in this
+historical receipt is retired under #1837. Current application routing already
+uses the backend-owned `getDurableSession` callback; it does not accept a map
+through `AgentPoolOptions`. Surviving fixtures now use that same lookup and
+immutable backend-produced ports. The original counts and results below remain
+historical; see [retirement evidence](../../docs/development/durable-session-map-retirement-1837.md).
 
 Explicit internal `AgentPoolOptions.durableSessions` now routes the existing
 session-position reader through the runtime facade and captured adapter to public

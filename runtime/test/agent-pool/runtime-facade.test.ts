@@ -86,176 +86,6 @@ test("durable runtime lookup must be callable", () => {
   })).toThrow("Durable runtime lookup must be callable");
 });
 
-test("durable compatibility readPosition must be callable", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid", {
-      sessionId: "invalid-binding",
-      branchId: "main",
-      readPosition: "invalid-position-reader",
-    } as unknown as { sessionId: string; branchId: string; readPosition: () => Promise<string | null> }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility readPosition must be callable");
-});
-
-test("durable compatibility readContextUsage must be callable", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-context-reader", {
-      sessionId: "invalid-binding",
-      branchId: "main",
-      readPosition: async () => null,
-      readContextUsage: "invalid-context-reader",
-    } as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-      readContextUsage: () => Promise<{ tokens: number | null; contextWindow: number | null }>;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility readContextUsage must be callable");
-});
-
-test("durable compatibility chat key must be non-empty", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["", {
-      sessionId: "binding",
-      branchId: "main",
-      readPosition: async () => null,
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility chat key must be non-empty");
-});
-
-test("durable compatibility lifetimeSignal must be AbortSignal-like", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-signal", {
-      sessionId: "binding",
-      branchId: "main",
-      readPosition: async () => null,
-      lifetimeSignal: "invalid-signal-shape",
-    } as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-      lifetimeSignal: AbortSignal;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
-});
-
-test("durable compatibility lifetimeSignal requires removeEventListener", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-signal-shape", {
-      sessionId: "binding",
-      branchId: "main",
-      readPosition: async () => null,
-      lifetimeSignal: { aborted: false, addEventListener() {} },
-    } as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-      lifetimeSignal: AbortSignal;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility lifetimeSignal must be AbortSignal-like");
-});
-
-test("durable compatibility binding must be an object", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-binding", null as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility binding must be an object");
-});
-
-test("durable compatibility sessionId must be non-empty", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-session-id", {
-      sessionId: "",
-      branchId: "main",
-      readPosition: async () => null,
-    } as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility sessionId must be non-empty");
-});
-
-test("durable compatibility branchId must be non-empty", () => {
-  const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  expect(() => new AgentRuntimeFacade({
-    pool,
-    durableSessions: new Map([["web:invalid-branch-id", {
-      sessionId: "binding",
-      branchId: "",
-      readPosition: async () => null,
-    } as unknown as {
-      sessionId: string;
-      branchId: string;
-      readPosition: () => Promise<string | null>;
-    }]]),
-    getOrCreateRuntime: async () => { throw new Error("legacy runtime must not open"); },
-    modelRegistry: { getAll: () => [], getAvailable: () => [], registerProvider: () => {} } as any,
-    modelRuntime: { getProviders: () => [], getRegisteredProviderIds: () => [], getError: () => undefined } as any,
-    authPath: "/tmp/runtime-facade-auth.json",
-    clearAttachments: () => {},
-    refreshRuntime: async () => {},
-  })).toThrow("Durable compatibility branchId must be non-empty");
-});
-
 test("durable runtime binding must be an object", () => {
   const { facade } = createFacade({ getDurableSession: () => null as any });
   expect(() => facade.getSessionGenerationForChat("web:invalid-runtime-binding")).toThrow("Durable runtime binding must be an object");
@@ -357,7 +187,7 @@ test("every unavailable native command and alias fails closed without reading or
   const port = { sessionId: "native-audit", branchId: "main", readPosition: unexpected,
     readModel: unexpected, setModel: unexpected, readThinkingLevel: unexpected, setThinkingLevel: unexpected,
     reset: unexpected, abort: unexpected, compact: unexpected, readTree: unexpected, readReport: unexpected };
-  const { facade } = createFacade({ durableSessions: new Map([["web:native-audit", port]]),
+  const { facade } = createFacade({ getDurableSession: chat => chat === "web:native-audit" ? port : undefined,
     getOrCreateRuntime: async () => { legacy++; throw Error("Legacy must never open"); } });
   const unavailable = getNativeCommandCatalogue(port).filter(command => command.status === "unavailable");
   expect(unavailable.length).toBeGreaterThan(0);
@@ -377,14 +207,14 @@ test("every unavailable native command and alias fails closed without reading or
 test("native provider authentication uses a host-owned lifetime, never an AgentSession", async () => {
   const lifetime = new AbortController();
   let controls = 0, protectedCount = 0, released = 0;
-  const port = { sessionId: "native-auth", branchId: "main", readPosition: async () => null, lifetimeSignal: lifetime.signal,
+  const port = Object.freeze({ sessionId: "native-auth", branchId: "main", readPosition: async () => null, lifetimeSignal: lifetime.signal,
     assertCurrent() { expect(this.sessionId).toBe("native-auth"); },
-    async runOwnedControl<T>(operation: () => Promise<T>) { controls++; return operation(); } };
-  const { facade } = createFacade({ durableSessions: new Map([["web:native-auth", port]]),
+    async runOwnedControl<T>(operation: () => Promise<T>) { controls++; return operation(); } });
+  const { facade } = createFacade({ getDurableSession: chat => chat === "web:native-auth" ? port : undefined,
     modelRuntime: { listCredentials: async () => [], getProviders: () => [], getProviderAuthStatus: () => ({ configured: false }) } as any,
     acquireCommandProtection: () => { protectedCount++; return () => { released++; }; },
     getOrCreateRuntime: async () => { throw Error("Legacy session must never open"); } });
-  port.assertCurrent = () => { throw Error("Mutated authority port"); };
+  expect(Reflect.set(port, "assertCurrent", () => { throw Error("Mutated authority port"); })).toBe(false);
   for (const type of ["login", "logout"] as const) {
     const result = await facade.applyControlCommand("web:native-auth", { type, raw: `/${type}` });
     expect(result.status).toBe("success"); expect(result.message).toBe("Provider authentication"); expect(result.contentBlocks).toHaveLength(1);
@@ -396,7 +226,7 @@ test("native provider authentication uses a host-owned lifetime, never an AgentS
 });
 
 test("native authentication without an owned lifetime fails closed", async () => {
-  const { facade } = createFacade({ durableSessions: new Map([["web:no-auth-scope", { sessionId: "native", branchId: "main", readPosition: async () => null }]]) });
+  const { facade } = createFacade({ getDurableSession: chat => chat === "web:no-auth-scope" ? { sessionId: "native", branchId: "main", readPosition: async () => null } : undefined });
   for (const type of ["login", "logout"] as const) expect(await facade.applyControlCommand("web:no-auth-scope", { type, raw: `/${type}` }))
     .toEqual({ status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." });
 });
@@ -406,12 +236,12 @@ test("native report controls use captured passive SDK reports, never a legacy se
   const report = { activeEntries: 7, userMessages: 2, assistantMessages: 3, contextWindow: 10000,
     observedTokens: 30, observedModel: "test/model", lastAnswer: "exact committed final answer",
     usage: { input: 10, output: 20, cacheRead: 5, cacheWrite: 2, cost: 0.125 } };
-  const port = { sessionId: "native-report", branchId: "main", readPosition: async () => null,
+  const port = Object.freeze({ sessionId: "native-report", branchId: "main", readPosition: async () => null,
     readModel: async () => "test/model",
-    async readReport() { expect(this.sessionId).toBe("native-report"); reads++; return report; } };
-  const { facade } = createFacade({ durableSessions: new Map([["web:report", port]]),
+    async readReport() { expect(this.sessionId).toBe("native-report"); reads++; return report; } });
+  const { facade } = createFacade({ getDurableSession: chat => chat === "web:report" ? port : undefined,
     getOrCreateRuntime: async () => { legacy++; throw Error("Legacy must not open"); } });
-  port.readReport = async () => { throw Error("Mutated report port"); };
+  expect(Reflect.set(port, "readReport", async () => { throw Error("Mutated report port"); })).toBe(false);
   const stats = await facade.applyControlCommand("web:report", { type: "stats", raw: "/stats" });
   expect(stats.status).toBe("success"); expect(stats.message).toContain("10 / 20"); expect(stats.message).toContain("$0.125000");
   const ctx = await facade.applyControlCommand("web:report", { type: "context", raw: "/context" });
@@ -432,14 +262,14 @@ test("native cycle controls reuse fenced model/thinking ports and preserve captu
   const models = ["a", "b"].map(id => ({ provider: "test", id, name: id, api: "openai-completions", reasoning: false,
     input: ["text"], contextWindow: 10000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
   let current = "test/a", thinking = "off", aborts = 0;
-  const port = { sessionId: "native-cycle", branchId: "main", readPosition: async () => null,
+  const port = Object.freeze({ sessionId: "native-cycle", branchId: "main", readPosition: async () => null,
     readModel: async () => current, readThinkingLevel: async () => thinking,
     async setModel(model: { provider: string; modelId: string }) { expect(this.sessionId).toBe("native-cycle"); current = `${model.provider}/${model.modelId}`; },
     async setThinkingLevel(level: string) { expect(this.sessionId).toBe("native-cycle"); thinking = level; },
-    async abort() { expect(this.sessionId).toBe("native-cycle"); aborts++; return false; } };
-  const { facade } = createFacade({ durableSessions: new Map([["web:cycles", port]]),
+    async abort() { expect(this.sessionId).toBe("native-cycle"); aborts++; return false; } });
+  const { facade } = createFacade({ getDurableSession: chat => chat === "web:cycles" ? port : undefined,
     modelRegistry: { getAll: () => models, getAvailable: () => models, find: (p: string, id: string) => models.find(m => m.provider === p && m.id === id) } as any });
-  port.abort = async () => { throw Error("Mutated abort port"); };
+  expect(Reflect.set(port, "abort", async () => { throw Error("Mutated abort port"); })).toBe(false);
   expect((await facade.applyControlCommand("web:cycles", { type: "cycle_model", raw: "/cycle-model" })).status).toBe("success");
   expect(current).toBe("test/b");
   expect((await facade.applyControlCommand("web:cycles", { type: "cycle_model", direction: "backward", raw: "/cycle-model backward" })).status).toBe("success");
@@ -469,10 +299,10 @@ test("current model uses captured durable port and rejects unbound chats without
 
 test("tree summaries await captured public readers, preserve raw head and reject missing durable bindings", async () => {
   const snapshot = { version: 1 as const, leafId: "hidden-head", visibleLeafId: "visible", nodes: [], flat: true as const, total: 3 };
-  const port = { sessionId: "generation", branchId: "main", readPosition: async () => "hidden-head",
-    async readTree() { expect(this.sessionId).toBe("generation"); return snapshot; } };
-  const fixture = createFacade({ durableSessions: new Map([["bound", port], ["unsupported", { sessionId: "other", branchId: "main", readPosition: async () => null }]]) });
-  port.readTree = async () => { throw Error("mutated reader"); };
+  const port = Object.freeze({ sessionId: "generation", branchId: "main", readPosition: async () => "hidden-head",
+    async readTree() { expect(this.sessionId).toBe("generation"); return snapshot; } });
+  const fixture = createFacade({ getDurableSession: chat => chat === "bound" ? port : chat === "unsupported" ? { sessionId: "other", branchId: "main", readPosition: async () => null } : undefined });
+  expect(Reflect.set(port, "readTree", async () => { throw Error("mutated reader"); })).toBe(false);
   expect(await fixture.facade.getSessionTreeSummaryForChat("bound")).toEqual({ leafId: "hidden-head", total: 3 });
   expect(fixture.facade.getSessionGenerationForChat("bound")).toBe("generation");
   expect(fixture.facade.getSessionGenerationForChat("unknown")).toBeNull();
@@ -1289,10 +1119,10 @@ test('durable model query lists unique available models with persisted selection
 });
 
 test('durable model picker reads persisted thinking level without legacy hydration', async () => {
-  const { facade } = createFacade({ durableSessions: new Map([['web:thinking', {
+  const { facade } = createFacade({ getDurableSession: chat => chat === 'web:thinking' ? {
     sessionId: 'thinking', branchId: 'main', readPosition: async () => null,
     readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'high',
-  }]]), modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any });
+  } : undefined, modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any });
   expect(await facade.getAvailableModels('web:thinking', { includeProviderUsage: false, includeProviderDiagnostics: false })).toMatchObject({ current: 'synthetic/reasoning', thinking_level: 'high' });
 });
 
@@ -1314,7 +1144,7 @@ test('durable model catalogue query reuses configured model scope', async () => 
   const previous = process.env.PICLAW_SCOPED_MODELS_ONLY;
   process.env.PICLAW_SCOPED_MODELS_ONLY = '1';
   try {
-    const { facade } = createFacade({ durableSessions: new Map([['web:scoped-query', { sessionId: 'scope', branchId: 'main', readPosition: async () => null, readModel: async () => 'synthetic/allowed' }]]),
+    const { facade } = createFacade({ getDurableSession: chat => chat === 'web:scoped-query' ? { sessionId: 'scope', branchId: 'main', readPosition: async () => null, readModel: async () => 'synthetic/allowed' } : undefined,
       modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'allowed' }, { provider: 'synthetic', id: 'hidden' }] } as any,
       settingsManager: { getEnabledModels: () => ['synthetic/allowed'] } as any,
     });
@@ -1327,9 +1157,9 @@ test('durable model catalogue query reuses configured model scope', async () => 
 
 test('durable thinking mutation uses existing protection and preserves provider selection', async () => {
   const events: string[] = [];
-  const { facade } = createFacade({ durableSessions: new Map([['web:thinking-set', { sessionId: 'set', branchId: 'main', readPosition: async () => null,
+  const { facade } = createFacade({ getDurableSession: chat => chat === 'web:thinking-set' ? { sessionId: 'set', branchId: 'main', readPosition: async () => null,
     readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'low',
-    async setThinkingLevel(level) { events.push(level); } }]]),
+    async setThinkingLevel(level) { events.push(level); } } : undefined,
     modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any,
     acquireCommandProtection() { events.push('protect'); return () => { events.push('release'); }; },
   });

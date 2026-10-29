@@ -23,6 +23,7 @@
     "native-admission-boundary.test.ts",
     "default-application-runtime.test.ts",
     "side-prompt-event-types.ts",
+    "durable-session-lookup-types.ts",
     "offline-maintenance-default-factory.test.ts",
     "host-codex-model-services.test.ts",
     "host-codex-turn-routing.test.ts",
