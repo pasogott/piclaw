@@ -25,14 +25,13 @@ test("single physical database: accepted primary + attached intent, terminal ide
   const fileEvents: string[] = [];
   const watcher = watch(dirname(f.hostPath), { recursive: true }, (_event, name) => { if (name?.endsWith(".jsonl")) fileEvents.push(name); });
   function facade(adapter: Awaited<ReturnType<typeof f.open>>) {
-    const bindings = new Map([[f.chatJid, adapter.sessionPosition(f.chatJid, "main", "preserved-session-id")]]);
+    const position = adapter.sessionPosition(f.chatJid, "main", "preserved-session-id");
     const app = new AgentRuntimeFacade({
-      pool: new Map(), durableSessions: bindings,
+      pool: new Map(), getDurableSession: chat => chat === f.chatJid ? position : undefined,
       modelRegistry: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRegistry"],
       modelRuntime: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRuntime"],
       authPath: "unused",
     });
-    bindings.clear(); // Caller cannot unbind an accepted durable chat into legacy.
     return app;
   }
   try {
