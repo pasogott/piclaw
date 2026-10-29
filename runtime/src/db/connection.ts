@@ -1,7 +1,7 @@
 /**
  * db/connection.ts – SQLite database initialisation and schema management.
  *
- * Opens (or creates) the main SQLite database at `<STORE_DIR>/messages.db`,
+ * Opens (or creates) the SQLite target from one explicit bootstrap path snapshot,
  * sets pragmas for WAL mode and busy timeout, and ensures all required tables,
  * indexes, FTS virtual tables, and triggers exist.
  *
@@ -32,7 +32,8 @@ import { initializeScheduledHistorySchema } from './scheduled-history-schema.js'
 import fs from "fs";
 import path from "path";
 
-import { STORE_DIR, WORKSPACE_DIR, getRuntimeBootstrapPathOverrides } from "../core/config.js";
+import { WORKSPACE_DIR, getRuntimeConfigPaths } from "../core/config.js";
+import type { RuntimeConfigPaths } from "../core/config-paths.js";
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import { migrateMediaCompression } from "./media-recompress.js";
 import { ensureLegacyColumns } from "./legacy-columns.js";
@@ -48,7 +49,6 @@ const log = createLogger("db.connection");
 
 /** Singleton database handle; set by initDatabase(), accessed via getDb(). */
 let db: Database | null = null;
-let dbMode: "memory" | "file" | null = null;
 /** Cache key for the currently-open database target or in-memory test identity. */
 let dbPathCache: string | null = null;
 let stopCheckpoint: (() => void) | undefined;
@@ -59,7 +59,7 @@ function currentFileIdentity(pathname: string): string {
   return `${stat.dev}:${stat.ino}`;
 }
 export function getDatabaseBinding(): { path: string; identity: string; instance: number } | null {
-  if (!db || dbMode !== "file" || !dbPathCache || !dbFileIdentity) return null;
+  if (!db || !dbPathCache || !dbFileIdentity) return null;
   return { path: dbPathCache, identity: dbFileIdentity, instance: dbInstance };
 }
 
@@ -731,19 +731,15 @@ function migrateChatCursors(database: Database): void {
  *
  * Called by index.ts (the application entry point).
  */
-export function initDatabase(): void {
-  const pathOverrides = getRuntimeBootstrapPathOverrides();
-  const useMemory =
-    process.env.PICLAW_DB_IN_MEMORY === "1" ||
-    process.env.PICLAW_DB_IN_MEMORY === "true" ||
-    pathOverrides.store === ":memory:";
+export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeConfigPaths()): void {
+  const useMemory = paths.databasePath === ":memory:";
   const nextMode: "memory" | "file" = useMemory ? "memory" : "file";
-  const nextPath = useMemory ? ":memory:" : path.join(STORE_DIR, "messages.db");
+  const nextPath = paths.databasePath;
   const nextCacheKey = useMemory
-    ? `memory:${pathOverrides.workspace ?? ""}:${pathOverrides.store ?? ""}:${pathOverrides.data ?? ""}`
+    ? `memory:${JSON.stringify([paths.workspaceDir, paths.storeDir, paths.dataDir])}`
     : nextPath;
 
-  if (shouldBlockLiveDatabaseOpenInTests({ useMemory, nextPath })) {
+  if (shouldBlockLiveDatabaseOpenInTests({ useMemory, nextPath, workspaceDir: paths.workspaceDir })) {
     throw new Error(
       `Refusing to open live database from a test process: ${nextPath}. ` +
       `Set PICLAW_DB_IN_MEMORY=1 or isolate PICLAW_WORKSPACE/PICLAW_STORE, ` +
@@ -751,8 +747,12 @@ export function initDatabase(): void {
     );
   }
 
+  const isolatedMemoryChange = useMemory && dbPathCache?.startsWith("memory:") === true && isLikelyTestHarnessProcess();
+  if (db && dbPathCache !== nextCacheKey && !isolatedMemoryChange) {
+    throw Error("Database bootstrap target changed; close the database before selecting another target.");
+  }
   let reuse = false;
-  if (db && dbMode === nextMode && dbPathCache === nextCacheKey) {
+  if (db && dbPathCache === nextCacheKey) {
     try {
       if (!useMemory && dbFileIdentity !== currentFileIdentity(nextPath)) throw new Error("Database file identity changed.");
       db.prepare("SELECT 1;").get();
@@ -780,10 +780,9 @@ export function initDatabase(): void {
       }
     }
 
-    db = null; dbMode = null; dbPathCache = null; dbFileIdentity = null;
+    db = null; dbPathCache = null; dbFileIdentity = null;
     if (!useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
     db = openSqliteRole(nextPath, { role: "root" });
-    dbMode = nextMode;
     dbPathCache = nextCacheKey;
     dbFileIdentity = useMemory ? null : currentFileIdentity(nextPath);
     dbInstance += 1;
@@ -983,7 +982,7 @@ export function getDb(): Database {
 
 /** Create a verified online snapshot of the initialized file-backed messages database. */
 export function backupDatabase(destinationPath: string): SqliteBackupManifest {
-  if (!db || dbMode !== "file" || !dbPathCache) {
+  if (!db || !dbFileIdentity || !dbPathCache) {
     throw new Error("Database backup requires an initialized file-backed database.");
   }
   return createVerifiedSqliteBackup(db, dbPathCache, destinationPath);
@@ -995,7 +994,6 @@ export function closeDatabase(options?: { shrinkMemory?: boolean }): void {
   const database = db;
   stopCheckpoint?.(); stopCheckpoint = undefined;
   db = null;
-  dbMode = null;
   dbPathCache = null;
   dbFileIdentity = null;
 

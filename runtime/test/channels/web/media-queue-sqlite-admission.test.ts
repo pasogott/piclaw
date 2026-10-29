@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { createTempWorkspace, setEnv } from '../../helpers.js';
-import { STORE_DIR } from '../../../src/core/config.js';
 import { assertPathWithinTestFilesystemIsolation } from '../../../scripts/test-filesystem-isolation.js';
 import * as db from '../../../src/db.js';
+import { getDatabaseBinding } from '../../../src/db/connection.js';
 import { MediaService } from '../../../src/channels/web/media/media-service.js';
 import { QueuedFollowupLifecycleService, type QueuedInputSourceAdmission } from '../../../src/channels/web/runtime/queued-followup-lifecycle-service.js';
 import { installServiceWorkSchema } from '../../../src/service-effects/current-piclaw/service-work-schema.js';
@@ -19,19 +19,20 @@ let blocker: Database;
 let service: QueuedFollowupLifecycleService;
 beforeEach(() => {
   ws = createTempWorkspace('media-queue-admission-');
-  assertPathWithinTestFilesystemIsolation(STORE_DIR, process.env, { allowRoot: false });
+  assertPathWithinTestFilesystemIsolation(ws.store, process.env, { allowRoot: false });
   db.closeDatabase();
-  for (const suffix of ['', '-wal', '-shm']) rmSync(join(STORE_DIR, 'messages.db' + suffix), { force: true });
   restore = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data, PICLAW_DB_IN_MEMORY: '0' });
-  // This WAL fixture explicitly owns the isolated harness store.
+  // Bind this fixture's own store before opening its competing WAL writer.
   process.env.PICLAW_DB_IN_MEMORY = '0';
   db.initDatabase();
   database = db.getDb();
   const file = (database.query('PRAGMA database_list').all() as { name: string; file: string }[]).find(row => row.name === 'main')!.file;
-  expect(file).toBe(join(STORE_DIR, 'messages.db'));
+  expect(file).toBe(join(ws.store, 'messages.db'));
+  expect(getDatabaseBinding()?.path).toBe(file);
   assertPathWithinTestFilesystemIsolation(file, process.env, { allowRoot: false });
   expect(database.query('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
   blocker = new Database(file);
+  expect((blocker.query('PRAGMA database_list').all() as { name: string; file: string }[]).find(row => row.name === 'main')!.file).toBe(file);
   database.exec('CREATE TABLE fixture_grants(media_id INTEGER PRIMARY KEY REFERENCES media(id));');
   service = new QueuedFollowupLifecycleService();
 });
