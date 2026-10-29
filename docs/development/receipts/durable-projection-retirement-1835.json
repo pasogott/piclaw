@@ -180,7 +180,7 @@
   "survivingDeliveryCases": 18,
   "focused": {
     "cases": 47,
-    "assertions": 623,
+    "assertions": 624,
     "green": true
   },
   "native": {
@@ -215,5 +215,6 @@
     "rulesChanged": false
   },
   "sourceOnly": true,
-  "finalIntegrationVerified": false
+  "finalIntegrationVerified": false,
+  "retiredTypeProjectRegistrationRemoved": true
 }

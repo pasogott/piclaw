@@ -59,4 +59,6 @@ test("current native observation, settlement and browser qualification remain", 
   expect(gate.tests).toContain("native-ui-projection.test.ts");
   expect(gate.tests).toContain("native-delegate-progress.test.ts");
   expect(gate.tests).not.toContain("projection.test.ts");
+  const typeProject = JSON.parse(readFileSync(join(root, "qualification/pi-durable-130/tsconfig.json"), "utf8")) as { include: string[] };
+  expect(typeProject.include).not.toContain("projection.test.ts");
 });
