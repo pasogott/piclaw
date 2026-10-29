@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, spyOn, test } from "bun:test";
-import { linkSync, renameSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, linkSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createTempWorkspace } from "../helpers.js";
 import { configureSqliteRole, openSqliteRole, type SqliteConnectionRole } from "../../src/db/sqlite-role-policy.js";
@@ -10,14 +10,15 @@ const id = (path: string) => { const s = statSync(path); return `${s.dev}:${s.in
 const policy = (db: Database) => Object.fromEntries(["journal_mode", "synchronous", "busy_timeout", "foreign_keys", "secure_delete", "cache_size", "mmap_size"]
   .map(name => [name, db.query(`PRAGMA ${name}`).get()]));
 
-for (const zfs of [false, true]) test(`three file-backed roles share identity and preserve deliberate policy differences; zfs=${zfs}`, () => {
+for (const zfs of [false, true]) test(`file-backed roles share identity and preserve deliberate policy differences; zfs=${zfs}`, () => {
   const ws = createTempWorkspace("sqlite-role-policy-"), path = join(ws.base, "roles.db");
   const root = openSqliteRole(path, { role: "root", zfs });
   const sdk = openSqliteRole(path, { role: "sdk", create: false, expectedIdentity: id(path), expectedPath: path, zfs });
   const scheduler = openSqliteRole(path, { role: "scheduler", expectedIdentity: id(path), expectedPath: path, zfs });
+  const worker = openSqliteRole(path, { role: "index-worker", expectedIdentity: id(path), expectedPath: path, zfs });
   try {
     root.exec("CREATE TABLE visible(value TEXT); INSERT INTO visible VALUES('shared')");
-    for (const [role, db] of [["root", root], ["sdk", sdk], ["scheduler", scheduler]] as const) {
+    for (const [role, db] of [["root", root], ["sdk", sdk], ["scheduler", scheduler], ["index-worker", worker]] as const) {
       expect(db.query("SELECT * FROM visible").all()).toEqual([{ value: "shared" }]);
       expect(policy(db)).toMatchObject({
         journal_mode: { journal_mode: "wal" }, synchronous: { synchronous: 2 }, secure_delete: { secure_delete: 1 },
@@ -29,7 +30,7 @@ for (const zfs of [false, true]) test(`three file-backed roles share identity an
     root.exec("PRAGMA foreign_keys=ON");
     configureSqliteRole(root, path, { role: "root", expectedIdentity: id(path), zfs });
     expect(root.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-  } finally { scheduler.close(); sdk.close(); root.close(); ws.cleanup(); }
+  } finally { worker.close(); scheduler.close(); sdk.close(); root.close(); ws.cleanup(); }
 });
 
 for (const role of ["root", "sdk", "scheduler"] as SqliteConnectionRole[]) test(`memory role ${role} keeps memory journal and role-specific waits/FKs`, () => {
@@ -41,6 +42,15 @@ for (const role of ["root", "sdk", "scheduler"] as SqliteConnectionRole[]) test(
     db.exec("CREATE TABLE value(n INTEGER); INSERT INTO value VALUES(1)");
     expect(db.query("SELECT * FROM value").all()).toEqual([{ n: 1 }]);
   } finally { db.close(); }
+});
+
+test("index-worker role cannot create a file even with create=true and rejects memory", () => {
+  const ws = createTempWorkspace("sqlite-worker-existing-"), missing = join(ws.base, "missing.db");
+  try {
+    expect(() => openSqliteRole(missing, { role: "index-worker", create: true })).toThrow();
+    expect(existsSync(missing)).toBe(false);
+    expect(() => openSqliteRole(":memory:", { role: "index-worker" })).toThrow("existing file-backed WAL");
+  } finally { ws.cleanup(); }
 });
 
 test("new root files select incremental format without converting legacy files or running VACUUM", () => {
