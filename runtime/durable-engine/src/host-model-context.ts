@@ -40,11 +40,20 @@ export function assertModelContextFits(messages: readonly Message[], agent: unkn
       .some(value => !Number.isFinite(value) || value < 0))) throw Error("Model context usage unavailable");
   // The SDK identifies the last applicable measured prefix, including prefix
   // changes. Serialized metadata/signatures in that prefix are not token usage.
-  // Keep a byte-per-token upper bound for the unmeasured suffix and current
-  // configuration/schemas; never let a small old measurement hide new input.
+  // Bound unmeasured model payload, not envelope telemetry or duplicated tool
+  // details. Preserve content blocks verbatim: opaque reasoning/signatures and
+  // nested tool arguments still need conservative accounting without measurement.
   const estimate = estimateContextTokens(messages);
   const suffix = estimate.lastUsageIndex === null ? messages : messages.slice(estimate.lastUsageIndex + 1);
-  const unmeasuredBytes = new TextEncoder().encode(JSON.stringify([suffix, agent, tools])).length;
+  const payload = suffix.map(message => {
+    const { role, content } = message;
+    switch (message.role) {
+      case "system": return { role, content, sections: message.sections, toolsAdded: message.toolsAdded, toolsRemoved: message.toolsRemoved };
+      case "toolResult": return { role, content, toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError };
+      default: return { role, content };
+    }
+  });
+  const unmeasuredBytes = new TextEncoder().encode(JSON.stringify([payload, agent, tools])).length;
   const inputBound = Math.max(estimate.tokens, estimate.usageTokens + unmeasuredBytes);
   if (!Number.isFinite(inputBound) || inputBound < 0 || inputBound + overhead + 8192 + target.maxTokens > target.contextWindow) {
     const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
