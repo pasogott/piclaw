@@ -1453,7 +1453,15 @@ approval. This remains quiescent copied-history qualification with caller-owned
 drain and final fencing, not live upgrade, production importer registration,
 add-on-state conversion, or rollout approval.
 
-## Observation-only host projection
+## Historical observation-only host projection — retired
+
+The unselected EF-S08 prototype below is retired under #1835. Its original
+source and qualification results remain at
+[`ed0e58042`](https://github.com/rcarmo/piclaw/tree/ed0e58042e99dac27f79bb15f685ff2b351d47d8).
+Current native observation uses public SDK conversation watches/views and the
+existing committed-terminal path; it never selected this prototype. The counts
+and limits below are historical receipts, not current gate or runtime claims.
+See [retirement evidence](../../docs/development/durable-projection-retirement-1835.md).
 
 `host-projection.ts` maps public durable observations through the actual EF-S08
 sink to existing bounded `agent_draft` payloads. Explicit accepted submission and
