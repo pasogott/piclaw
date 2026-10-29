@@ -35,7 +35,6 @@ function createControlPlaneChannel() {
       queue: { enqueue: () => {} },
       agentPool: { setSessionBinder: () => {} },
       queuedFollowupLifecycle,
-      queuePendingSteering: () => {},
       storeMessage: () => null,
       processChat: () => {},
     }),

@@ -25,8 +25,6 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "getQueuedFollowupCount"
   | "getQueuedFollowupItems"
   | "removeQueuedFollowupItem"
-  | "queuePendingSteering"
-  | "consumePendingSteering"
   | "updateAgentStatus"
   | "getAgentStatus"
   | "replaceQueuedFollowupPlaceholder"
@@ -424,14 +422,6 @@ export class WebChannelRuntimePublicSurfaceService {
 
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null {
     return this.channel.runtimeFollowupFacade.removeQueuedFollowupItem(chatJid, rowId);
-  }
-
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void {
-    this.channel.runtimeFollowupFacade.queuePendingSteering(chatJid, timestamp);
-  }
-
-  consumePendingSteering(chatJid: string): string[] {
-    return this.channel.runtimeFollowupFacade.consumePendingSteering(chatJid);
   }
 
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void {

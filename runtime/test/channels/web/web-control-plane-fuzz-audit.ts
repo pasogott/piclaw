@@ -113,7 +113,6 @@ function createControlPlaneService(): WebAgentControlPlaneService {
       removeQueuedFollowupForAction: async () => ({ removed: null, source: null }),
       reorderQueuedFollowupItems: async () => false,
     },
-    queuePendingSteering: () => {},
     storeMessage: () => null,
     processChat: async () => {},
   });

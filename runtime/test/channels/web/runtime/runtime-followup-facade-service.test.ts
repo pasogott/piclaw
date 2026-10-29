@@ -82,13 +82,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
     };
 
     let currentRuntimeState = {
-      queuePendingSteering: (chatJid: string, timestamp: string | undefined) => {
-        calls.push(`pending-queue:${chatJid}:${timestamp ?? ""}`);
-      },
-      consumePendingSteering: (chatJid: string) => {
-        calls.push(`pending-consume:${chatJid}`);
-        return ["2026-03-28T00:01:00.000Z"];
-      },
       updateAgentStatus: (chatJid: string, nextStatus: Record<string, unknown>) => {
         calls.push(`status-update:${chatJid}:${String(nextStatus.title ?? "")}`);
       },
@@ -149,8 +142,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
     expect(service.getQueuedFollowupCount("web:test")).toBe(3);
     expect(service.getQueuedFollowupItems("web:test")).toEqual([queuedItem]);
     expect(service.removeQueuedFollowupItem("web:test", 41)).toBe(queuedItem);
-    service.queuePendingSteering("web:test", "2026-03-28T00:02:00.000Z");
-    expect(service.consumePendingSteering("web:test")).toEqual(["2026-03-28T00:01:00.000Z"]);
     service.updateAgentStatus("web:test", status);
     expect(service.getAgentStatus("web:test")).toEqual(status);
     expect(service.replaceQueuedFollowupPlaceholder("web:test", 12, "updated", [1, 2], [{ type: "text" }], 6, true)).toBe(replaced);
@@ -187,8 +178,6 @@ describe("WebChannel runtime/follow-up facade service", () => {
       "count:web:test",
       "items:web:test",
       "remove:web:test:41",
-      "pending-queue:web:test:2026-03-28T00:02:00.000Z",
-      "pending-consume:web:test",
       "status-update:web:test:Thinking",
       "status-get:web:test",
       "replace:web:test:12:updated:1,2:6:1",

@@ -13,7 +13,6 @@ import { registerPreShutdownHook } from "../../../runtime/shutdown-registry.js";
 import { AgentBuffers } from "../agent/agent-buffers.js";
 import { AgentStatusStore } from "../agent/agent-status-store.js";
 import { getThreadRootId as getThreadRootIdForChat, resumeChat as resumeWebChat, type ChatRunControlStore, type ResumeChatContext } from "./chat-run-control.js";
-import { PendingSteeringStore } from "./pending-steering.js";
 import { resumePendingChats as resumeWebPendingChats, type WebPendingResumeContext, type WebPendingResumeStore } from "./recovery.js";
 
 /** Runtime callbacks required to bridge recovery/resume helpers back into WebChannel orchestration. */
@@ -32,11 +31,6 @@ export interface WebChannelRuntimeStateOptions {
   defaultAgentId: string;
 }
 
-interface PendingSteeringStoreLike {
-  queue(chatJid: string, timestamp: string | undefined): void;
-  consumeAll(chatJid: string): string[];
-}
-
 interface AgentStatusStoreLike {
   update(chatJid: string, status: Record<string, unknown>): void;
   get(chatJid: string): Record<string, unknown> | null;
@@ -52,14 +46,12 @@ interface AgentBuffersLike {
 
 /** Optional injected stores for seam-level tests. */
 export interface WebChannelRuntimeStateServiceDeps {
-  pendingSteeringStore?: PendingSteeringStoreLike;
   agentStatusStore?: AgentStatusStoreLike;
   agentBuffers?: AgentBuffersLike;
 }
 
 /** Surviving WebChannel methods delegate pending-input resume and local UI observations here. */
 export class WebChannelRuntimeStateService {
-  private readonly pendingSteeringStore: PendingSteeringStoreLike;
   private readonly agentStatusStore: AgentStatusStoreLike;
   private readonly agentBuffers: AgentBuffersLike;
 
@@ -68,7 +60,6 @@ export class WebChannelRuntimeStateService {
     private readonly options: WebChannelRuntimeStateOptions,
     deps: WebChannelRuntimeStateServiceDeps = {}
   ) {
-    this.pendingSteeringStore = deps.pendingSteeringStore ?? new PendingSteeringStore();
     this.agentStatusStore = deps.agentStatusStore ?? new AgentStatusStore();
     this.agentBuffers = deps.agentBuffers ?? new AgentBuffers();
     registerPreShutdownHook(() => {
@@ -106,14 +97,6 @@ export class WebChannelRuntimeStateService {
 
   resumePendingChats(chatJid?: string, store?: WebPendingResumeStore): void {
     resumeWebPendingChats(this.getPendingResumeContext(), chatJid, store);
-  }
-
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void {
-    this.pendingSteeringStore.queue(chatJid, timestamp);
-  }
-
-  consumePendingSteering(chatJid: string): string[] {
-    return this.pendingSteeringStore.consumeAll(chatJid);
   }
 
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void {

@@ -35,8 +35,6 @@ type RuntimeFollowupQueuedLifecycle = Pick<
 
 type RuntimeFollowupRuntimeState = Pick<
   WebChannelRuntimeStateService,
-  | "queuePendingSteering"
-  | "consumePendingSteering"
   | "updateAgentStatus"
   | "getAgentStatus"
   | "getThreadRootId"
@@ -130,14 +128,6 @@ export class WebChannelRuntimeFollowupFacadeService {
 
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null {
     return this.deps.getQueuedFollowupLifecycle().removeQueuedFollowupItem(chatJid, rowId);
-  }
-
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void {
-    this.deps.getRuntimeState().queuePendingSteering(chatJid, timestamp);
-  }
-
-  consumePendingSteering(chatJid: string): string[] {
-    return this.deps.getRuntimeState().consumePendingSteering(chatJid);
   }
 
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void {

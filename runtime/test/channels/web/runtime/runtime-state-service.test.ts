@@ -94,7 +94,6 @@ describe("web runtime state service", () => {
   test("state and runtime store delegations stay confined to injected stores", () => {
     const calls: string[] = [];
     const statusMap = new Map<string, Record<string, unknown>>();
-    const pendingMap = new Map<string, string[] | null>();
     const expandedMap = new Map<string, { thought?: boolean; draft?: boolean }>();
     const bufferMap = new Map<string, { thought?: { text: string; totalLines: number }; draft?: { text: string; totalLines: number } }>();
 
@@ -107,18 +106,6 @@ describe("web runtime state service", () => {
       dispose: () => {
         calls.push("status.dispose");
         statusMap.clear();
-      },
-    };
-    const pendingSteeringStore = {
-      queue: (chatJid: string, timestamp: string | undefined) => {
-        calls.push(`pending.queue:${chatJid}:${timestamp ?? ""}`);
-        pendingMap.set(chatJid, timestamp ? [timestamp] : null);
-      },
-      consumeAll: (chatJid: string) => {
-        calls.push(`pending.consume:${chatJid}`);
-        const value = pendingMap.get(chatJid) ?? [];
-        pendingMap.delete(chatJid);
-        return value ?? [];
       },
     };
     const agentBuffers = {
@@ -146,30 +133,25 @@ describe("web runtime state service", () => {
       },
       {
         agentStatusStore,
-        pendingSteeringStore,
         agentBuffers,
       }
     );
 
     for(const name of ['loadState','saveState','getContextUsage','setContextUsage'])expect(service).not.toHaveProperty(name);
     service.updateAgentStatus("web:1", { type: "intent", title: "Thinking", turn_id: "turn-1" });
-    service.queuePendingSteering("web:1", "2026-03-27T20:05:00.000Z");
     service.setPanelExpanded("turn-1", "thought", true);
     service.updateThoughtBuffer("turn-1", "line one", 1);
     service.updateDraftBuffer("turn-1", "draft one", 2);
 
     expect(service.getAgentStatus("web:1")).toEqual({ type: "intent", title: "Thinking", turn_id: "turn-1" });
-    expect(service.consumePendingSteering("web:1")).toEqual(["2026-03-27T20:05:00.000Z"]);
     expect(service.isPanelExpanded("turn-1", "thought")).toBe(true);
     expect(service.getBuffer("turn-1", "thought")).toEqual({ text: "line one", totalLines: 1 });
     expect(service.getBuffer("turn-1", "draft")).toEqual({ text: "draft one", totalLines: 2 });
     expect(calls).toEqual([
       "status.update:web:1",
-      "pending.queue:web:1:2026-03-27T20:05:00.000Z",
       "panel.set:turn-1:thought:true",
       "buffer.update:turn-1:thought:1",
       "buffer.update:turn-1:draft:2",
-      "pending.consume:web:1",
     ]);
   });
 });

@@ -143,8 +143,6 @@ export interface WebChannelLike
     threadId?: number,
     isTerminalAgentReply?: boolean
   ): InteractionRow | null;
-  queuePendingSteering(chatJid: string, timestamp: string | undefined): void;
-  consumePendingSteering(chatJid: string): string[];
 
   /** UI/runtime state consumed by endpoint contexts. */
   workspaceVisible: boolean;

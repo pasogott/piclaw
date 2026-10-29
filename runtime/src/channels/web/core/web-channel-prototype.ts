@@ -246,18 +246,6 @@ export function installWebChannelPrototype(
       value: withRuntimePublicSurface((service, chatJid: string, rowId: number): QueuedFollowupItem | null =>
         service.removeQueuedFollowupItem(chatJid, rowId)),
     },
-    queuePendingSteering: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string, timestamp: string | undefined): void => {
-        service.queuePendingSteering(chatJid, timestamp);
-      }),
-    },
-    consumePendingSteering: {
-      configurable: true,
-      writable: true,
-      value: withRuntimePublicSurface((service, chatJid: string): string[] => service.consumePendingSteering(chatJid)),
-    },
     updateAgentStatus: {
       configurable: true,
       writable: true,
