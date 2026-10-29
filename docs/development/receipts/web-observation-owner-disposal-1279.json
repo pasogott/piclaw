@@ -4,17 +4,17 @@
   "epic": 1270,
   "partial": true,
   "safetyRepairNotReduction": true,
-  "implementationBase": "6486b230d16f85ce0efa88dd11e00ee33f647ada",
+  "implementationBase": "bb0a5012ad53317ad79df750c87f6eec14863555",
   "metric": "Same stable #1270 tracked handwritten runtime/src + runtime/durable-engine/src rules/exclusions; physical includes comments/blanks.",
   "before": {
     "files": 711,
-    "physicalLOC": 144440,
-    "nonblankLines": 134048
+    "physicalLOC": 144438,
+    "nonblankLines": 134047
   },
   "after": {
     "files": 711,
-    "physicalLOC": 144444,
-    "nonblankLines": 134053
+    "physicalLOC": 144442,
+    "nonblankLines": 134052
   },
   "delta": {
     "files": 0,
@@ -114,5 +114,8 @@
     "AgentPool model/SSH interop ownership teardown",
     "provider usage listener disposal/fencing"
   ],
-  "creditNote": "Necessary net-positive safety repair: charge4physical/5nonblankgrowth; zero deletion credit. Parent timestamp/control deletions counted separately, no priorproducer/timercredit. No newregistryframework, native-effectretry or liveoperation."
+  "creditNote": "Necessary net-positive safety repair: charge4physical/5nonblankgrowth; zero deletion credit. Parent timestamp/control deletions counted separately, no priorproducer/timercredit. No newregistryframework, native-effectretry or liveoperation.",
+  "originalImplementationBase": "6486b230d16f85ce0efa88dd11e00ee33f647ada",
+  "parentMirrorMerged": true,
+  "retargetedToMain": true
 }
