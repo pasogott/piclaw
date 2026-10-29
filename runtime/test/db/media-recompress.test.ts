@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { gunzipSync } from "bun";
 import * as compression from "../../src/db/media-compression.js";
 import { migrateMediaCompression, recompressExistingMedia } from "../../src/db/media-recompress.js";
-import { initDatabase, getDb, closeDatabase } from "../../src/db/connection.js";
+import { initDatabase, initializeDatabaseSchema, getDb, closeDatabase } from "../../src/db/connection.js";
 
 const raw = new TextEncoder().encode("Original source bytes must survive compression and retry.\n".repeat(100));
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -131,7 +131,7 @@ test("empty eligible work completes, while outer startup rollback restores data 
   } finally { db.close(); }
 });
 
-test("real initializer does not record v2 on per-row errors and retries without rerunning FTS", () => {
+test("full schema boundary does not record v2 on per-row errors and retries without rerunning FTS", () => {
   const previous = process.env.PICLAW_DB_IN_MEMORY; process.env.PICLAW_DB_IN_MEMORY = "1"; closeDatabase();
   try {
     initDatabase(); const db = getDb();
@@ -139,7 +139,7 @@ test("real initializer does not record v2 on per-row errors and retries without 
     db.query("INSERT INTO media(id,filename,content_type,data,metadata) VALUES(1,'fixture.txt','text/plain',?,'{}')").run(raw);
     const before = stored(db);
     db.exec("CREATE TRIGGER fail_media BEFORE UPDATE ON media BEGIN SELECT RAISE(ABORT,'PRIVATE_ROW_ERROR'); END");
-    initDatabase(); expect(version(db)).toBe(1); expect(stored(db)).toEqual(before);
-    db.exec("DROP TRIGGER fail_media"); initDatabase(); expect(version(db)).toBe(2); expect(hash(gunzipSync(stored(db).data))).toBe(hash(raw));
+    initializeDatabaseSchema(db); expect(version(db)).toBe(1); expect(stored(db)).toEqual(before);
+    db.exec("DROP TRIGGER fail_media"); initializeDatabaseSchema(db); expect(version(db)).toBe(2); expect(hash(gunzipSync(stored(db).data))).toBe(hash(raw));
   } finally { closeDatabase(); if (previous === undefined) delete process.env.PICLAW_DB_IN_MEMORY; else process.env.PICLAW_DB_IN_MEMORY = previous; }
 });

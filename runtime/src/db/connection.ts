@@ -39,7 +39,8 @@ import { migrateMediaCompression } from "./media-recompress.js";
 import { ensureLegacyColumns } from "./legacy-columns.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
 import { registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
-import { configureSqliteRole, openSqliteRole } from "./sqlite-role-policy.js";
+import { openSqliteRole } from "./sqlite-role-policy.js";
+import { RuntimeStartupCleanupError } from "../runtime/startup-cleanup-error.js";
 import { applyOwnedMigrations } from "./migrations.js";
 import { retireAttachmentRowidIndex } from "./attachment-index-retirement.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
@@ -54,6 +55,7 @@ let dbPathCache: string | null = null;
 let stopCheckpoint: (() => void) | undefined;
 let dbFileIdentity: string | null = null;
 let dbInstance = 0;
+let cleanupFailure: RuntimeStartupCleanupError | undefined;
 function currentFileIdentity(pathname: string): string {
   const stat = fs.statSync(pathname);
   return `${stat.dev}:${stat.ino}`;
@@ -727,11 +729,12 @@ function migrateChatCursors(database: Database): void {
 
 /**
  * Open (or create) the SQLite database and run all schema migrations.
- * Must be called once at application startup before any other db/* function.
- *
- * Called by index.ts (the application entry point).
+ * Call once at startup before any other db/* function. Reuse verifies binding
+ * and liveness without reconfiguring or migrating; explicit offline schema
+ * work uses initializeDatabaseSchema on a caller-owned idle handle.
  */
 export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeConfigPaths()): void {
+  if (cleanupFailure) throw cleanupFailure;
   const useMemory = paths.databasePath === ":memory:";
   const nextMode: "memory" | "file" = useMemory ? "memory" : "file";
   const nextPath = paths.databasePath;
@@ -751,76 +754,68 @@ export function initDatabase(paths: Readonly<RuntimeConfigPaths> = getRuntimeCon
   if (db && dbPathCache !== nextCacheKey && !isolatedMemoryChange) {
     throw Error("Database bootstrap target changed; close the database before selecting another target.");
   }
-  let reuse = false;
   if (db && dbPathCache === nextCacheKey) {
-    try {
-      if (!useMemory && dbFileIdentity !== currentFileIdentity(nextPath)) throw new Error("Database file identity changed.");
-      db.prepare("SELECT 1;").get();
-      reuse = true;
-    } catch (err) {
-      debugSuppressedError(log, "Detected a stale SQLite handle; reopening the database.", err, {
-        operation: "init_database.detect_stale_handle",
-        mode: nextMode,
-        path: nextPath,
-      });
-      reuse = false;
-    }
-  }
-
-  if (!reuse) {
-    if (db) {
-      stopCheckpoint?.(); stopCheckpoint = undefined;
+    if (!useMemory) {
       try {
-        db.close();
+        if (dbFileIdentity !== currentFileIdentity(nextPath)) throw Error("Database file identity changed.");
       } catch (error) {
-        log.warn("Failed to close previous database handle before reinitializing", {
-          operation: "init_database.close_previous_handle",
-          err: error,
-        });
+        const failure = new Error("Database file identity changed.", { cause: error });
+        try { closeDatabase({ shrinkMemory: false }); }
+        catch (cleanup) { throw new RuntimeStartupCleanupError([failure, cleanup], "Database replacement cleanup uncertain"); }
+        throw failure;
       }
     }
-
-    db = null; dbPathCache = null; dbFileIdentity = null;
-    if (!useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
-    db = openSqliteRole(nextPath, { role: "root" });
-    dbPathCache = nextCacheKey;
-    dbFileIdentity = useMemory ? null : currentFileIdentity(nextPath);
-    dbInstance += 1;
+    try { db.prepare("SELECT 1;").get(); return; }
+    catch (error) {
+      // Pinned Bun closed-handle contract; storage/inspection errors are not closure.
+      if (!(error instanceof RangeError) || error.message !== "Cannot use a closed database") throw error;
+    }
+  }
+  closeDatabase({ shrinkMemory: false });
+  if (!useMemory) fs.mkdirSync(path.dirname(nextPath), { recursive: true });
+  let database: Database | undefined, releaseCheckpoint: (() => void) | undefined;
+  try {
+    database = openSqliteRole(nextPath, { role: "root" });
+    const identity = useMemory ? null : currentFileIdentity(nextPath);
+    initializeDatabaseSchema(database);
+    if (!useMemory) {
+      releaseCheckpoint = registerSqliteCheckpoint(database, nextPath);
+      if (identity !== currentFileIdentity(nextPath)) throw Error("Database file identity changed.");
+    }
     log.info("Opened database connection", {
-      operation: "init_database.open",
-      mode: nextMode,
-      path: nextPath,
-      reusedConnection: false,
+      operation: "init_database.open", mode: nextMode, path: nextPath, reusedConnection: false,
     });
-  }
-
-  if (!db) {
-    log.error("Database initialization failed", { operation: "init_database" });
-    throw new Error("Database initialization failed");
-  }
-
-  // Reuse preserves the declared path and root's existing FK policy.
-  if (reuse) configureSqliteRole(db, nextPath, { role: "root", expectedIdentity: dbFileIdentity ?? undefined });
-  const foreignKeysBeforeInitialization = (db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys === 1;
-  db.exec("PRAGMA foreign_keys = ON;");
-  const database = db;
-  // Serialize schema inspection and migration in one writer transaction. This
-  // prevents competing initializers starving behind separately committed DDL
-  // and keeps the ordered schema/owned-ledger updates atomic. Nested migration
-  // transactions become savepoints; file-header pragmas and VACUUM stay outside.
-  try { database.transaction(() => initializeSchema(database)).immediate(); }
-  finally {
-    // Preserve the caller's FK policy on failed schema checks as well as success.
-    // EF-S07 has its own FK-enabled scheduler connection in production.
-    if (!foreignKeysBeforeInitialization) db.exec("PRAGMA foreign_keys = OFF;");
-  }
-  if (!useMemory) {
-    ensureIncrementalAutoVacuum(db);
-    if (!stopCheckpoint) stopCheckpoint = registerSqliteCheckpoint(db, nextPath);
+    // Readiness is published together, only after all owned startup work succeeds.
+    db = database; dbPathCache = nextCacheKey; dbFileIdentity = identity;
+    stopCheckpoint = releaseCheckpoint; dbInstance += 1;
+  } catch (error) {
+    const cleanup = database ? disposeDatabase(database, releaseCheckpoint) : [];
+    if (cleanup.length) throw cleanupFailure = new RuntimeStartupCleanupError([error, ...cleanup], "Database initialization cleanup uncertain");
+    if (!database && error instanceof RuntimeStartupCleanupError) cleanupFailure = error;
+    throw error;
   }
 }
 
-/** Schema work only; foreign-key policy and VACUUM remain outside the batch. */
+/** Explicit offline schema boundary for an idle, caller-owned handle; no publication or maintenance. */
+export function initializeDatabaseSchema(database: Database): void {
+  if (database.inTransaction) throw Error("Database schema initialization requires an idle connection.");
+  const foreignKeys = (database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys;
+  const failures: unknown[] = [];
+  try {
+    database.exec("PRAGMA foreign_keys = ON;");
+    if ((database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
+      throw Error("Database schema requires foreign_keys ON.");
+    database.transaction(() => initializeSchema(database)).immediate();
+  } catch (error) { failures.push(error); }
+  if (!foreignKeys) {
+    try { database.exec("PRAGMA foreign_keys = OFF;"); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new RuntimeStartupCleanupError(failures, "Database schema and policy restoration failed");
+}
+
+/** One ordered schema batch; the explicit schema boundary owns its transaction. */
 function initializeSchema(database: Database): void {
   migrateLegacyConfigTables(database);
   createSchema(database);
@@ -877,44 +872,6 @@ function ensureThinkingContentDuration(database: Database): void {
   } catch (err) {
     debugSuppressedError(log, "thinking_content duration_ms migration skipped.", err, {
       operation: "db.ensure_thinking_content_duration",
-    });
-  }
-}
-
-/**
- * Switch to incremental auto_vacuum (one-time) and reclaim freelist pages
- * on every startup. Reduces database bloat from deleted rows so scans
- * and page-cache operations cover only live data.
- */
-function ensureIncrementalAutoVacuum(database: Database): void {
-  try {
-    const avRow = database.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number } | undefined;
-    if (avRow?.auto_vacuum === 0) {
-      database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-      database.exec("VACUUM;");
-      log.info("Switched database to incremental auto_vacuum", {
-        operation: "init_database.auto_vacuum_migration",
-      });
-    }
-  } catch (err) {
-    debugSuppressedError(log, "auto_vacuum migration failed (non-fatal).", err, {
-      operation: "init_database.auto_vacuum_migration",
-    });
-  }
-
-  try {
-    const row = database.prepare("PRAGMA freelist_count").get() as { freelist_count: number } | undefined;
-    const freePages = row?.freelist_count ?? 0;
-    if (freePages > 5000) {
-      database.exec("PRAGMA incremental_vacuum(10000);");
-      log.info("Reclaimed freelist pages", {
-        operation: "init_database.incremental_vacuum",
-        freePagesBefore: freePages,
-      });
-    }
-  } catch (err) {
-    debugSuppressedError(log, "Incremental vacuum failed (non-fatal).", err, {
-      operation: "init_database.incremental_vacuum",
     });
   }
 }
@@ -988,40 +945,23 @@ export function backupDatabase(destinationPath: string): SqliteBackupManifest {
   return createVerifiedSqliteBackup(db, dbPathCache, destinationPath);
 }
 
-export function closeDatabase(options?: { shrinkMemory?: boolean }): void {
+function disposeDatabase(database: Database, releaseCheckpoint?: () => void): unknown[] {
+  const failures: unknown[] = [];
+  try { releaseCheckpoint?.(); } catch (error) { failures.push(error); }
+  try { database.close(true); } catch (error) { failures.push(error); }
+  return failures;
+}
+
+/** Certifying close releases statements/cache; the legacy shrinkMemory option needs no SQL. */
+export function closeDatabase(_options?: { shrinkMemory?: boolean }): void {
   if (!db) return;
 
-  const database = db;
-  stopCheckpoint?.(); stopCheckpoint = undefined;
-  db = null;
-  dbPathCache = null;
-  dbFileIdentity = null;
+  const database = db, releaseCheckpoint = stopCheckpoint;
+  // Unpublish before cleanup; a throwing disposer cannot leave a usable singleton.
+  db = null; dbPathCache = null; dbFileIdentity = null; stopCheckpoint = undefined;
 
-  if (options?.shrinkMemory !== false) {
-    try {
-      database.exec("PRAGMA optimize;");
-    } catch (error) {
-      debugSuppressedError(log, "Failed to optimize SQLite before closing the database.", error, {
-        operation: "close_database.optimize",
-      });
-    }
-    try {
-      database.exec("PRAGMA shrink_memory;");
-    } catch (error) {
-      debugSuppressedError(log, "Failed to shrink SQLite page-cache memory before closing the database.", error, {
-        operation: "close_database.shrink_memory",
-      });
-    }
-  }
-
-  try {
-    database.close();
-  } catch (error) {
-    log.warn("Failed to close database handle", {
-      operation: "close_database.close",
-      err: error,
-    });
-  }
+  const failures = disposeDatabase(database, releaseCheckpoint);
+  if (failures.length) throw cleanupFailure = new RuntimeStartupCleanupError(failures, "Database close cleanup uncertain");
 }
 
 /**

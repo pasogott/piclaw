@@ -2,12 +2,12 @@ import "../helpers.js";
 import { Database } from "bun:sqlite";
 import { expect, test, spyOn } from "bun:test";
 import { ensureLegacyColumns } from "../../src/db/legacy-columns.js";
-import { initDatabase, getDb, closeDatabase } from "../../src/db/connection.js";
+import { initDatabase, initializeDatabaseSchema, getDb, closeDatabase } from "../../src/db/connection.js";
 
 const text = [{ name: "content_blocks", type: "TEXT" as const }];
 const notes = [{ name: "user_note", type: "TEXT" as const, notNull: true, defaultSql: "''" as const }];
 
-for (const failure of ["io", "incompatible"]) test(`real initializer refuses missing/wrong selected column and preserves FK policy: ${failure}`, () => {
+for (const failure of ["io", "incompatible"]) test(`full schema boundary refuses missing/wrong selected column and preserves FK policy: ${failure}`, () => {
   const previous = process.env.PICLAW_DB_IN_MEMORY; process.env.PICLAW_DB_IN_MEMORY = "1"; closeDatabase();
   let spy: ReturnType<typeof spyOn> | undefined;
   try {
@@ -20,7 +20,7 @@ for (const failure of ["io", "incompatible"]) test(`real initializer refuses mis
         return exec(sql);
       });
     }
-    expect(() => initDatabase()).toThrow("Legacy schema postcondition failed: messages.annotations.");
+    expect(() => initializeDatabaseSchema(db)).toThrow("Legacy schema postcondition failed: messages.annotations.");
     expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
     const columns = db.query("PRAGMA table_info(messages)").all() as { name: string; type: string }[];
     expect(columns.find(column => column.name === "annotations")?.type).toBe(failure === "io" ? undefined : "INTEGER");

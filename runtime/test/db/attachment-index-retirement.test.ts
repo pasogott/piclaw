@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
+import { closeDatabase, getDb, initDatabase, initializeDatabaseSchema } from "../../src/db/connection.js";
 import { attachmentIndexRetirement, retireAttachmentRowidIndex } from "../../src/db/attachment-index-retirement.js";
 import { attachMediaToMessage, createMedia, getMediaIdsForMessage, getMediaIdsForMessages } from "../../src/db/media.js";
 import { extensionKvGet, extensionKvList, extensionKvSet } from "../../src/db/extension-kv.js";
@@ -76,7 +76,7 @@ test("populated owned upgrade preserves raw rows, sequences, retained indexes an
   const totals = getTokenUsageTotals("web:index-fixture");
   const usageBefore = plans(() => getTokenUsageTotals("web:index-fixture"), /FROM token_usage/, ["web:index-fixture"]);
   const version = db.query("PRAGMA user_version").get(), fk = db.query("PRAGMA foreign_keys").get();
-  initDatabase(); assertRetained(db);
+  initializeDatabaseSchema(db); assertRetained(db);
   expect(data(db)).toEqual(before); expect(schema(db)).toEqual(retained);
   expect(db.query("PRAGMA user_version").get()).toEqual(version); expect(db.query("PRAGMA foreign_keys").get()).toEqual(fk);
   expect(getMediaIdsForMessage(first)).toEqual([...media].sort((a, b) => a - b));
@@ -97,7 +97,7 @@ test("populated owned upgrade preserves raw rows, sequences, retained indexes an
 test("reinitialization and older-binary index recreation preserve receipt, data and other index pages", () => {
   const db = getDb(); seed();
   const before = data(db), original = receipt(db), inventory = schema(db), version = db.query("PRAGMA schema_version").get();
-  for (let i = 0; i < 2; i++) { retireAttachmentRowidIndex(db); initDatabase(); }
+  for (let i = 0; i < 2; i++) { retireAttachmentRowidIndex(db); initializeDatabaseSchema(db); initDatabase(); }
   expect(receipt(db)).toEqual(original); expect(data(db)).toEqual(before); expect(schema(db)).toEqual(inventory);
   expect(db.query("PRAGMA schema_version").get()).toEqual(version);
   db.exec('CREATE INDEX "IDX_MESSAGE_MEDIA_MESSAGE_ROWID" ON "message_media" ("message_rowid" ASC)');
