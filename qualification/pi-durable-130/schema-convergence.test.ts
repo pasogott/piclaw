@@ -2,11 +2,64 @@ import "./src/test-guard.js";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initializeHostSchema, initializeHostDurableBindings, createHostDurableBindings, HostCutoverController } from "../../runtime/durable-engine/src/index.js";
-import { acceptedPayloadRecoveryIndex, migrateHostAcceptedPayloadLookup } from '../../runtime/durable-engine/src/host-schema.js';
+import { acceptedPayloadRecoveryIndex, migrateHostAcceptedPayloadLookup, prepareHostSchema } from '../../runtime/durable-engine/src/host-schema.js';
 import { acceptedPayloadRecoverySql, readApplicationMessagePayload } from '../../runtime/durable-engine/src/accepted-payload-recovery.js';
 import { acceptedSteerFixture } from './src/accepted-steer-recovery-fixture.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+
+for (const offline of [true, false]) {
+  test(`host schema preparation yields before its one owned transaction; offline=${offline}`, async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, 'schema-admission-'));
+    const path = join(dir, 'root.sqlite'), db = new Database(path), blocker = new Database(path);
+    let release: ReturnType<typeof setTimeout> | undefined;
+    try {
+      db.exec('PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;PRAGMA busy_timeout=0');
+      if (!offline) { initializeHostSchema(db, () => {}); removeLookupStep(db); }
+      blocker.exec('BEGIN IMMEDIATE');
+      let released = false, turns = 0;
+      const tick = setInterval(() => { turns++; }, 5);
+      try {
+        release = setTimeout(() => { blocker.exec('ROLLBACK'); released = true; }, 75);
+        await prepareHostSchema(db, () => {}, offline);
+      } finally { clearInterval(tick); }
+      expect(released).toBe(true); expect(turns).toBeGreaterThan(0);
+      expect(db.inTransaction).toBe(false); expect(lookupReceipt(db)).toHaveLength(1);
+      expect(db.query('PRAGMA busy_timeout').get()).toEqual({ timeout: 0 });
+      expect(db.query('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      clearTimeout(release); if (blocker.inTransaction) blocker.exec('ROLLBACK');
+      blocker.close(); db.close(); await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const failure of ['abort', 'owner', 'binding'] as const) {
+  test(`host schema preparation fences ${failure} across acquisition without publishing DDL`, async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, 'schema-revocation-'));
+    const path = join(dir, 'root.sqlite'), db = new Database(path), blocker = new Database(path);
+    const signal = new AbortController(); let allowed = true;
+    const guard = (kind: typeof failure) => { if (failure === kind && !allowed) throw Error('schema revoked'); };
+    try {
+      db.exec('PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;PRAGMA busy_timeout=0');
+      blocker.exec('BEGIN IMMEDIATE');
+      const pending = prepareHostSchema(db, () => guard('owner'), true, signal.signal, () => guard('binding'));
+      await Bun.sleep(0); allowed = false;
+      if (failure === 'abort') signal.abort(Error('schema revoked'));
+      blocker.exec('ROLLBACK');
+      await expect(pending).rejects.toThrow('schema revoked');
+      expect(db.query("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
+      expect(db.inTransaction).toBe(false);
+      expect(db.query('PRAGMA busy_timeout').get()).toEqual({ timeout: 0 });
+      allowed = true; await prepareHostSchema(db, () => {}, true);
+      expect(lookupReceipt(db)).toHaveLength(1);
+    } finally {
+      if (blocker.inTransaction) blocker.exec('ROLLBACK');
+      blocker.close(); db.close(); await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 
 test("host schema: FK, exact synchronous guard, atomic DDL and incompatible shapes fail closed", () => {
   const db = new Database(":memory:");
