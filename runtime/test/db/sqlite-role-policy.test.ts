@@ -43,6 +43,26 @@ for (const role of ["root", "sdk", "scheduler"] as SqliteConnectionRole[]) test(
   } finally { db.close(); }
 });
 
+test("new root files select incremental format without converting legacy files or running VACUUM", () => {
+  const ws = createTempWorkspace("sqlite-root-format-"), freshPath = join(ws.base, "new.db"), legacyPath = join(ws.base, "legacy.db");
+  const legacy = new Database(legacyPath);
+  legacy.exec("CREATE TABLE retained(value);INSERT INTO retained VALUES(42)"); legacy.close(true);
+  const exec = Database.prototype.exec; let maintenance = 0;
+  const spy = spyOn(Database.prototype, "exec").mockImplementation(function(this: Database, sql: string) {
+    if (/^\s*(?:VACUUM\b|PRAGMA\s+incremental_vacuum\b)/i.test(sql)) maintenance++;
+    return exec.call(this, sql);
+  });
+  let fresh: Database | undefined, existing: Database | undefined;
+  try {
+    fresh = openSqliteRole(freshPath, { role: "root" });
+    existing = openSqliteRole(legacyPath, { role: "root" });
+    expect(fresh.query("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+    expect(existing.query("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 0 });
+    expect(existing.query("SELECT * FROM retained").all()).toEqual([{ value: 42 }]);
+    expect(maintenance).toBe(0);
+  } finally { spy.mockRestore(); fresh?.close(true); existing?.close(true); ws.cleanup(); }
+});
+
 test("root/scheduler configure WAL while SDK writer admission remains nonblocking", () => {
   const ws = createTempWorkspace("sqlite-role-lock-"), path = join(ws.base, "roles.db");
   const root = openSqliteRole(path, { role: "root" });

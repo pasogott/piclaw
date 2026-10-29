@@ -30,7 +30,7 @@ for (const mode of ["fresh", "empty-file", "existing", "rollback", "late-rollbac
         const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
         expect(exit, stderr).toBe(0);
         const receipt = JSON.parse(stdout.split("\n").find(line => line.startsWith('{"mode"'))!);
-        expect(receipt).toMatchObject({ mode, vacuums: 1, schemaStable: true, rowsAndFtsPreserved: true });
+        expect(receipt).toMatchObject({ mode, vacuums: 0, schemaStable: true, rowsAndFtsPreserved: true });
       } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
     });
   }, 25_000);
