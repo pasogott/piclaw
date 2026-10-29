@@ -26,4 +26,4 @@ if (additions.length || resolved.length) {
   if (resolved.length) console.error('Resolved baseline diagnostics (update the audited baseline):\n' + resolved.join('\n'));
   process.exit(1);
 }
-console.log(`Compose-reference contract and six explicit frontend modules checked; ${baseline.length} unchanged pre-existing transitive diagnostics.`);
+console.log(`Compose-reference contract, MainApp caller and six composition modules checked with strict callback variance; ${baseline.length} unchanged pre-existing out-of-seam diagnostics. Raw frontend compilation is not clean.`);
