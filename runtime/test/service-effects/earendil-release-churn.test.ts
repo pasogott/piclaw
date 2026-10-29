@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST } from "../../src/service-effects/earendil-harness-v3-compatibility/manifest.js";
+import EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST from "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-harness-compatibility-schema6.json";
+import historicalProvenance from "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-harness-compatibility-schema6.provenance.json";
 
 const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repositoryRoot = resolve(runtimeRoot, "..");
@@ -44,6 +45,19 @@ async function readPackage(name: string): Promise<Record<string, unknown>> {
 }
 
 describe("Earendil release churn gate", () => {
+  test("pins the entire inert schema-6 archive while retiring its executable normalizer", async () => {
+    const path = resolve(repositoryRoot, historicalProvenance.archive.path);
+    expect(new Bun.CryptoHasher("sha256").update(await Bun.file(path).text()).digest("hex"))
+      .toBe("1f6f640cc8ef89163b5d439304792abc735db2fc9251bcbc26bb590f660c932f");
+    expect(digestEvidence(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST))
+      .toBe("eb4d28490de9ea4f9bff77c3a9b06051fae8e835133e0ad3f1d9d734275bea7e");
+    expect(historicalProvenance.source.sha256).toBe("b7874e86bbd03d005bff57655a6308c8efd2c3025699ae815dc061c50948e91f");
+    expect(historicalProvenance.archive.wholeObjectDeepEqualityVerified).toBe(true);
+    expect(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.currentRuntime.version).toBe("0.99.1");
+    expect(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.experimentalPico3.productionImport).toBe(false);
+    expect(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.currentRuntime.productionActivation).toBe(false);
+    expect(existsSync(resolve(repositoryRoot, historicalProvenance.source.path))).toBe(false);
+  });
   test("pins the repository and lockfile to the exact coherent 1.4.0 current loop", async () => {
     const receipt = await Bun.file(resolve(repositoryRoot, "docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-140-registry.json")).json() as Array<any>;
     const rootManifest = requireRecord(await Bun.file(resolve(repositoryRoot, "package.json")).json(), "repository package.json");
