@@ -13,7 +13,12 @@ const sshConfig = (target: string, chat = 'web:fixture'): NonNullable<ReturnType
   chat_jid: chat, ssh_target: target, ssh_port: 22, private_key_keychain: 'synthetic-key', known_hosts_keychain: null,
   strict_host_key_checking: 'yes', created_at: 'fixture', updated_at: 'fixture', last_used_at: 'fixture',
 });
-afterEach(async () => { for (const pool of pools.splice(0)) await pool.shutdown().catch(() => {}); setSshToolHandlers(null); });
+afterEach(async () => {
+  const results = await Promise.allSettled(pools.splice(0).map(pool => pool.shutdown()));
+  setSshToolHandlers(null);
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Pool fixture cleanup failed');
+});
 function makePool(label: string) {
   initDatabase(); const options = createAgentPoolModelOptions();
   (options.modelRuntime as any).streamSimple = () => ({ marker: label });

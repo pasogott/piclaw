@@ -116,5 +116,21 @@
       "green": false
     }
   },
-  "creditNote": "Necessary+32physical/+31nonblanksafetygrowth;zero reduction credit. Selected registrations only, no whole interop deletion, no effect replay/raw cleanup cancellation. Prior reduction/hook work separate; final combined1279acceptance still required. Source-only,no liveoperations."
+  "creditNote": "Necessary+32physical/+31nonblanksafetygrowth;zero reduction credit. Selected registrations only, no whole interop deletion, no effect replay/raw cleanup cancellation. Prior reduction/hook work separate; final combined1279acceptance still required. Source-only,no liveoperations.",
+  "hostedFixtureCleanupCorrection": {
+    "failedCI": 40795204793,
+    "staticFinding": "silent promise catch in new owner-fencing afterEach",
+    "localStaticReproduced": true,
+    "fix": "join every shutdown with allSettled; throw AggregateError on any rejected cleanup; reset SSH fixture",
+    "productionChanges": 0,
+    "scannerOrBaselineChanges": false,
+    "assertionsUnchanged": true,
+    "after": {
+      "silentCatchBlocks": 0,
+      "silentPromiseCatches": 0,
+      "unitCases": 5,
+      "assertions": 30,
+      "strictFixtureTypes": true
+    }
+  }
 }

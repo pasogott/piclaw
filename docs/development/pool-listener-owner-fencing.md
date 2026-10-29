@@ -29,6 +29,8 @@ Focused evidence:17cases/144assertions across owner/SSH/broadcast/constructor/ho
 
 Three source type projects pass. Actual native events1/182 and close/reopen recovery1/22 pass. Graph545/0cycles, env observations and package checks pass. General import checks remain25byte-identical pre-existing findings, not green; no rule, exemption, timeout, failure or safety assertion is relaxed.
 
+Initial CI40795204793 correctly rejected an empty promise catch in the new test cleanup. The same static check reproduces it locally. Cleanup now joins every Pool shutdown with `Promise.allSettled` and propagates any failure as an AggregateError after resetting the SSH fixture; it cannot conceal a failed join. The unchanged silent-swallow guard reports0/0 and all five cases/30 assertions plus strict fixture types pass. No production code, rules or assertions change for this correction; failed receipts remain.
+
 ## Rollback and scope
 
 Reverting restores missing unregister behavior; no schema/data rollback is needed. Owned raw cleanup failures still cannot certify release or trigger replay. No auth, budget, source/grant IDs, SDK history, terminal-publication or resource-uncertainty policy changes.
