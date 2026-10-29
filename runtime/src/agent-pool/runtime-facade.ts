@@ -313,6 +313,7 @@ export class AgentRuntimeFacade {
   private readonly providerUsageRefreshInFlight = new Map<string, Promise<void>>();
   private readonly nativeProviderAuthContexts = new Map<string, NativeProviderAuthContext>();
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
+  private providerUsageRefreshGeneration = 0;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
     if (options.getDurableSession !== undefined && typeof options.getDurableSession !== "function") {
@@ -490,8 +491,10 @@ export class AgentRuntimeFacade {
     return context;
   }
 
-  setProviderUsageRefreshListener(listener: ((event: ProviderUsageRefreshEvent) => void) | undefined): void {
+  setProviderUsageRefreshListener(listener: ((event: ProviderUsageRefreshEvent) => void) | undefined): () => void {
+    const generation = ++this.providerUsageRefreshGeneration;
     this.providerUsageRefreshListener = listener;
+    return () => { if (this.providerUsageRefreshGeneration === generation) this.providerUsageRefreshListener = undefined; };
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {

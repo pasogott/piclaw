@@ -89,6 +89,7 @@ export interface WebServerLifecycleGatewayDeps extends JsonResponder {
   uiBridge: UiBridgeLike;
   sse: SseHubLike;
   runtimeState?: { dispose(): void };
+  sessionBroadcast?: { dispose(): void };
   serve?: typeof Bun.serve;
   readTextFile?: (path: string) => Promise<string>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<unknown>;
@@ -106,6 +107,7 @@ export interface WebServerLifecycleGatewayChannel extends JsonResponder, Workspa
   uiBridge: UiBridgeLike;
   sse: SseHubLike;
   runtimeState?: { dispose(): void };
+  sessionBroadcast?: { dispose(): void };
 }
 
 export function createWebServerLifecycleGateway(
@@ -127,6 +129,7 @@ export function createWebServerLifecycleGateway(
     uiBridge: channel.uiBridge,
     sse: channel.sse,
     runtimeState: channel.runtimeState,
+    sessionBroadcast: channel.sessionBroadcast,
   });
 }
 
@@ -339,6 +342,7 @@ export class WebServerLifecycleGatewayService {
     const failures: unknown[] = [];
     for (const cleanup of [
       () => closeCdpViewConnections(),
+      () => this.deps.sessionBroadcast?.dispose(),
       () => this.deps.sse.closeAll(),
       () => this.deps.uiBridge.stop(),
       () => this.deps.runtimeState?.dispose(),

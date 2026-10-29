@@ -53,18 +53,19 @@ if (scenario === 'registration') {
       services[0]!.dispose(); services[0]!.dispose();
       assert.deepEqual(counts, [1, 0]); assert.equal(timers.size, 1);
     } else {
-      let leave!: () => void;
+      let leave!: () => void, providerReleased = 0;
       const entered = new Promise<void>(resolve => { leave = resolve; });
       const gateway = new WebServerLifecycleGatewayService({
         webServerConfig: { host: '127.0.0.1', port: 0, idleTimeout: 1 }, webRuntimeConfig: { terminalEnabled: false },
         json: (body: unknown, status = 200) => Response.json(body, { status }),
         sse: { closeAll() {} }, uiBridge: { stop() {} }, terminalService: { shutdown() {} }, vncService: { shutdown() {} },
-        runtimeState: services[0],
+        runtimeState: services[0], sessionBroadcast: { dispose() { providerReleased++; } },
       } as any);
       const request = gateway.runInternalDispatch(() => entered);
       const stopping = gateway.stop(); await Promise.resolve();
-      assert.deepEqual(counts, [0, 0]); leave(); await request; await stopping; await gateway.stop();
-      assert.deepEqual(counts, [1, 0]); assert.equal(timers.size, 1);
+      assert.deepEqual(counts, [0, 0]); assert.equal(providerReleased, 0);
+      leave(); await request; await stopping; await gateway.stop();
+      assert.deepEqual(counts, [1, 0]); assert.equal(timers.size, 1); assert.equal(providerReleased, 1);
     }
     if (scenario !== 'failure') {
       assert.equal(services[1]!.getAgentStatus('shared')?.type, 'done');

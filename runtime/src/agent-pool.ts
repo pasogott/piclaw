@@ -265,6 +265,8 @@ export class AgentPool {
   private sessionManager: AgentPoolServices["sessionManager"];
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
+  private readonly releaseModelInterop: () => void;
+  private readonly releaseSshHandlers: () => void;
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly dreamDispatch?:AgentPoolOptions['dispatchDreamOperation'];
   dispatchDreamOperation(request:import('./agent-pool/contracts.js').NativeDreamRequest):Promise<AgentOutput>{
@@ -345,7 +347,7 @@ export class AgentPool {
       onWarn: (message, details) => log.warn(message, details),
       onError: (message, details) => log.error(message, details),
     }));
-    setSshToolHandlers({
+    this.releaseSshHandlers = setSshToolHandlers({
       get: (chatJid) => this.getSshConfig(chatJid),
       isActive: (chatJid) => hasLiveChatSshConnection(chatJid),
       set: (chatJid, config) => this.setSshConfig(chatJid, config),
@@ -356,15 +358,22 @@ export class AgentPool {
     runtimeInterop.getChatJid = getChatJid;
     runtimeInterop.getChatChannel = getChatChannel;
     runtimeInterop.registerChannelDetector = registerChannelDetector;
-    runtimeInterop.getModelRegistry = () => this.modelRegistry;
     runtimeInterop.hasKnownModelCost = createKnownModelCostResolver(getPiclawAgentDir());
-    runtimeInterop.streamSimple = (model, context, options) => this.modelRuntime.streamSimple(model, context, options);
     const getSessionEntry = (chatJid = getChatJid("")): PoolEntry | undefined => {
       const normalizedChatJid = String(chatJid || "").trim();
       return normalizedChatJid ? this.pool.get(normalizedChatJid) : undefined;
     };
-    runtimeInterop.getSessionId = (chatJid) => getSessionEntry(chatJid)?.runtime.session.sessionId ?? null;
-    runtimeInterop.getScopedModels = (chatJid) => getSessionEntry(chatJid)?.runtime.session.scopedModels ?? [];
+    const ownedModelInterop: Pick<RuntimeInteropBridge, "getModelRegistry" | "streamSimple" | "getSessionId" | "getScopedModels"> = {
+      getModelRegistry: () => this.modelRegistry,
+      streamSimple: (model, context, options) => this.modelRuntime.streamSimple(model, context, options),
+      getSessionId: (chatJid) => getSessionEntry(chatJid)?.runtime.session.sessionId ?? null,
+      getScopedModels: (chatJid) => getSessionEntry(chatJid)?.runtime.session.scopedModels ?? [],
+    };
+    Object.assign(runtimeInterop, ownedModelInterop);
+    this.releaseModelInterop = () => {
+      for (const key of ["getModelRegistry", "streamSimple", "getSessionId", "getScopedModels"] as const)
+        if (runtimeInterop[key] === ownedModelInterop[key]) delete runtimeInterop[key];
+    };
     runtimeInterop.addLogSink = addLogSink;
     runtimeInterop.removeLogSink = removeLogSink;
     runtimeInterop.getKeychainEntry = getKeychainEntry;
@@ -448,8 +457,8 @@ export class AgentPool {
 
   setProviderUsageRefreshListener(
     listener: Parameters<AgentRuntimeFacade["setProviderUsageRefreshListener"]>[0],
-  ): void {
-    this.runtimeFacade.setProviderUsageRefreshListener(listener);
+  ): () => void {
+    return this.runtimeFacade.setProviderUsageRefreshListener(listener);
   }
 
   /** Return the current context token usage for a chat session, or null if unknown. */
@@ -675,6 +684,8 @@ export class AgentPool {
       this.cleanupTimer = null;
     }
     await this.sessionManager?.shutdown();
+    this.releaseModelInterop();
+    this.releaseSshHandlers();
   }
 
   /** The native backend owns recovery for the entire application, not legacy sessions. */
