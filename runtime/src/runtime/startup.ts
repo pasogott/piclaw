@@ -22,6 +22,7 @@ import {
   STORE_DIR,
   WORKSPACE_DIR,
   getPushoverConfig,
+  getRuntimeConfigPaths,
   getProgressWatchdogSafetyWarning,
 } from "../core/config.js";
 import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, initDatabase } from "../db.js";
@@ -172,7 +173,7 @@ export function initializeRuntimeEnvironment(state: RuntimeState): ReturnType<ty
   if (migration === "migrated") log.info("Migrated legacy instance configuration permissions to private mode.", { operation: "mcp_config.permissions_migrated" });
   if (migration === "unavailable") log.warn("Instance configuration permission migration failed; agents will start without MCP if its policy is unavailable.", { operation: "mcp_config.permissions_migration_failed" });
 
-  initDatabase();
+  initDatabase(getRuntimeConfigPaths());
   const access = validateAccessStartup(getDb());
   startAuthMaintenance();
   if (access.effectiveMode === "single-user") installAddonRuntimeApi();

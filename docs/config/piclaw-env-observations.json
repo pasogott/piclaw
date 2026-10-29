@@ -53,20 +53,20 @@
     "production": {
       "referencedNames": 143,
       "directReaderNames": 7,
-      "directReaderOccurrences": 13,
+      "directReaderOccurrences": 11,
       "helperReaderNames": 10,
       "helperReaderOccurrences": 10,
       "semanticReaderNames": 17,
-      "semanticReaderOccurrences": 23
+      "semanticReaderOccurrences": 21
     },
     "runtimeSrc": {
       "referencedNames": 142,
       "directReaderNames": 7,
-      "directReaderOccurrences": 13,
+      "directReaderOccurrences": 11,
       "helperReaderNames": 10,
       "helperReaderOccurrences": 10,
       "semanticReaderNames": 17,
-      "semanticReaderOccurrences": 23
+      "semanticReaderOccurrences": 21
     },
     "extensions": {
       "referencedNames": 1,
@@ -1108,6 +1108,7 @@
             "docs/development/attachment-index-retirement.md",
             "docs/development/auth-contention.md",
             "docs/development/auth-legacy-repair.md",
+            "docs/development/database-bootstrap-snapshot.md",
             "docs/development/db-startup-performance.md",
             "docs/development/mcp-owner-lifecycle.md",
             "docs/development/mcp-settings-api.md",
@@ -1153,10 +1154,11 @@
         },
         "production": {
           "referenced": true,
-          "directReaders": 6,
+          "directReaders": 4,
           "helperReaders": 0,
-          "semanticReaders": 6,
+          "semanticReaders": 4,
           "files": [
+            "runtime/src/core/config-paths.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"
@@ -1169,10 +1171,11 @@
         },
         "runtimeSrc": {
           "referenced": true,
-          "directReaders": 6,
+          "directReaders": 4,
           "helperReaders": 0,
-          "semanticReaders": 6,
+          "semanticReaders": 4,
           "files": [
+            "runtime/src/core/config-paths.ts",
             "runtime/src/core/config-runtime.ts",
             "runtime/src/db/connection.ts",
             "runtime/src/runtime/progress-watchdog-supervisor.ts"

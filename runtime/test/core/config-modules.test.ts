@@ -15,7 +15,6 @@ import {
   getConfigPath,
   getDataDir,
   getDomainConfigOptions,
-  getRuntimeBootstrapPathOverrides,
   getRuntimeRoot,
   getStoreDir,
   getWorkspaceDir,
@@ -73,12 +72,14 @@ test("resolveRuntimeConfigPaths preserves CLI workspace and environment preceden
   expect(envPaths.workspaceDir).toBe("/env/ws");
   expect(envPaths.storeDir).toBe("/env/store");
   expect(envPaths.dataDir).toBe("/env/data");
+  expect(envPaths.databasePath).toBe("/env/store/messages.db");
 
   const cliPaths = resolveRuntimeConfigPaths({ cliWorkspace: "/cli/ws", env });
   expect(cliPaths.workspaceDir).toBe("/cli/ws");
   expect(cliPaths.storeDir).toBe("/cli/ws/.piclaw/store");
   expect(cliPaths.dataDir).toBe("/cli/ws/.piclaw/data");
   expect(cliPaths.configPath).toBe("/cli/ws/.piclaw/config.json");
+  expect(cliPaths.databasePath).toBe("/cli/ws/.piclaw/store/messages.db");
 });
 
 test("bootstrap path helpers preserve sentinels, trimming, and runtime-root fallbacks", () => {
@@ -95,6 +96,7 @@ test("bootstrap path helpers preserve sentinels, trimming, and runtime-root fall
     runtimeRoot: "/runtime/root",
   });
   expect(resolveRuntimeConfigPaths({ env }).storeDir).toBe(resolve(":memory:"));
+  expect(resolveRuntimeConfigPaths({ env }).databasePath).toBe(":memory:");
   expect(resolveRuntimeRoot("/fallback", env)).toBe("/runtime/root");
   expect(resolveRuntimeRoot("/fallback", {} as NodeJS.ProcessEnv)).toBe("/fallback");
 });
@@ -132,7 +134,7 @@ test("config context resolves path overrides at call time", () => {
     expect(getStoreDir()).toBe("/live/store");
     expect(getDataDir()).toBe("/live/data");
     expect(getRuntimeRoot("/fallback")).toBe("/live/runtime");
-    expect(getRuntimeBootstrapPathOverrides()).toEqual({
+    expect(readRuntimeBootstrapPathOverrides()).toEqual({
       workspace: "/live/ws",
       store: "/live/store",
       data: "/live/data",
