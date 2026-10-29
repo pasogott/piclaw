@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import "../helpers.js";
 
-import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
+import { closeDatabase, getDb, initDatabase, initializeDatabaseSchema } from "../../src/db/connection.js";
 import { getTimeline, hasOlderMessages } from "../../src/db/messages.js";
 
 const CHAT_INDEX = "idx_messages_chat_jid";
@@ -125,6 +125,7 @@ function assertReinitialization(ids: Map<string, number[]>) {
   const rows = messageRows();
   const definitions = indexDefinitions();
   const pages = assertPages(ids);
+  initializeDatabaseSchema(getDb());
   for (let i = 0; i < 2; i++) {
     initDatabase();
     assertIndexes();
@@ -162,7 +163,7 @@ for (const historicalIndex of [false, true]) {
       }
     }
 
-    initDatabase();
+    initializeDatabaseSchema(getDb());
     assertIndexes();
     assertPlans();
     expect(messageRows()).toEqual(rows);

@@ -41,6 +41,9 @@ export function configureSqliteRole(database: Database, path: string, options: S
   const cache = root && !memory ? zfs ? -8000 : -1000 : -2000;
   const mmap = root && !memory && !zfs ? 268435456 : 0;
   database.exec(`PRAGMA busy_timeout=${timeout}`);
+  // Format only a new zero-page root file, before WAL creates its header; never VACUUM here.
+  if (root && !memory && pragma(database, "page_count", "page_count") === 0)
+    database.exec("PRAGMA auto_vacuum=INCREMENTAL");
   if (!memory && pragma(database, "journal_mode", "journal_mode") !== "wal") {
     // SDK admission must not inherit a synchronous writer-wait loop.
     if (options.role === "sdk") {

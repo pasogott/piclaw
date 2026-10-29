@@ -107,8 +107,7 @@ applicationTest("historical core upgrade classifies its one approved spelling di
     expect(db.query("SELECT * FROM piclaw_agent_entries ORDER BY entry_seq").all()).toEqual(before.entries);
     closeDatabase(); initDatabase();
     const reopened = inventory(getDb(), "core");
-    // Existing close-time PRAGMA optimize may create optional sqlite_stat1.
-    // Every new object still needs an exact declared owner/shape.
+    // Optional statistics from explicit maintenance still require an exact owner/shape.
     const beforeKeys = new Set(result.objects.map(object => `${object.kind}:${object.name}`));
     expect(reopened.objects.filter(object => !beforeKeys.has(`${object.kind}:${object.name}`))
       .every(object => object.owner === "sqlite:planner-statistics")).toBe(true);
