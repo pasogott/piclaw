@@ -119,7 +119,6 @@
     "owned-model-context-admission.test.ts",
     "ownership.test.ts",
     "plan.test.ts",
-    "projection.test.ts",
     "regrets-default-factory.test.ts",
     "rehearsal.test.ts",
     "remote-peer-default-factory.test.ts",

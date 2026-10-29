@@ -15,8 +15,6 @@ export { prepareLegacyImport, prepareLegacyTreeImport, importCopiedLegacy, impor
 export type { CopiedLegacyInput, GetLegacyContext, CopiedLegacyTreeInput } from "./legacy-import.js";
 export { IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS, LegacyImportManifest, LegacyTreeImportManifest } from "./legacy-import-schema.js";
 export type { LegacyImportBinding, LegacyTreeHostBinding, LegacyTreeImportBinding } from "./legacy-import-schema.js";
-export { observeProjection } from "./host-projection.js";
-export type { ProjectionBinding, ProjectionPorts } from "./host-projection.js";
 export { createScheduledRunDispatch } from "./host-scheduled-run.js";
 export type { ScheduledAgentInput, CurrentScheduledTask, ReadCurrentTask } from "./host-scheduled-run.js";
 export { prepareCopiedUpgrade, prepareCopiedApplicationUpgrade } from "./copied-upgrade.js";

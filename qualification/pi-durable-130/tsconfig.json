@@ -62,7 +62,6 @@
     "installed-tool-catalog.test.ts",
     "installed-delegate-catalog.test.ts",
     "vertical.test.ts",
-    "projection.test.ts",
     "addon-host-services.test.ts",
     "delegate.test.ts",
     "native-delegate-parallel.test.ts",
