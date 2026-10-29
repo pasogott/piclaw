@@ -138,5 +138,5 @@ try {
 } finally {
   registration?.mockRestore();
   Database.prototype.exec = exec; Database.prototype.close = close;
-  try { closeDatabase({ shrinkMemory: false }); } catch { /* Uncertain disposal remains fail-closed; fixture closes its injected resource explicitly. */ }
+  closeDatabase({ shrinkMemory: false });
 }
