@@ -9,6 +9,7 @@ import { describe, test, expect, spyOn } from "bun:test";
 import "../../helpers.js";
 import { UiBridge } from "../../../src/channels/web/theming/ui-bridge.js";
 import { createUiContext } from "../../../src/channels/web/ui-context.js";
+import { initDatabase, closeDatabase } from "../../../src/db/connection.js";
 
 function makeChannel(options: { chatStateTtlMs?: number } = {}) {
   const events: Array<{ type: string; payload: any }> = [];
@@ -143,21 +144,26 @@ describe("ui-context", () => {
   });
 
   test("UiBridge prunes stale per-chat state and rejects stale pending requests", async () => {
-    const { uiBridge } = makeChannel({ chatStateTtlMs: 10 });
-    const staleUi = uiBridge.createUiContext("web:stale");
-    staleUi.setEditorText("Alpha");
-    staleUi.setTheme("tango");
-    const pendingConfirm = staleUi.confirm("Confirm", "Are you sure?", { timeout: 1000 });
+    // setTheme persists through extension KV; this case must own its database
+    // rather than depend on whichever earlier suite last opened the singleton.
+    initDatabase();
+    try {
+      const { uiBridge } = makeChannel({ chatStateTtlMs: 10 });
+      const staleUi = uiBridge.createUiContext("web:stale");
+      staleUi.setEditorText("Alpha");
+      staleUi.setTheme("tango");
+      const pendingConfirm = staleUi.confirm("Confirm", "Are you sure?", { timeout: 1000 });
 
-    await Bun.sleep(20);
+      await Bun.sleep(20);
 
-    const freshUi = uiBridge.createUiContext("web:fresh");
-    freshUi.setEditorText("Beta");
+      const freshUi = uiBridge.createUiContext("web:fresh");
+      freshUi.setEditorText("Beta");
 
-    await expect(pendingConfirm).rejects.toThrow("Web UI chat state expired");
-    expect(uiBridge.pendingUiRequests.size).toBe(0);
-    expect(uiBridge.editorTextByChat.has("web:stale")).toBe(false);
-    expect(uiBridge.themeByChat.has("web:stale")).toBe(false);
-    expect(uiBridge.editorTextByChat.get("web:fresh")).toBe("Beta");
+      await expect(pendingConfirm).rejects.toThrow("Web UI chat state expired");
+      expect(uiBridge.pendingUiRequests.size).toBe(0);
+      expect(uiBridge.editorTextByChat.has("web:stale")).toBe(false);
+      expect(uiBridge.themeByChat.has("web:stale")).toBe(false);
+      expect(uiBridge.editorTextByChat.get("web:fresh")).toBe("Beta");
+    } finally { closeDatabase(); }
   });
 });

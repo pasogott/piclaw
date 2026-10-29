@@ -45,7 +45,13 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     let releaseAck!: () => void;
     let holdAck = new Promise<void>(resolve => { releaseAck = resolve; });
     let lastPost: any;
-    const durablePosts: any[] = [];
+    // Enough rows to exercise Classic's virtualized history window, not only
+    // an empty timeline where every acknowledged row is already mounted.
+    const durablePosts: any[] = Array.from({length:160}, (_, index) => ({
+      id:1000+index, chat_jid:chatJid, type:index%2?'agent':'user',
+      timestamp:'2026-10-28T00:00:00Z',
+      data:{content:`History ${index}\n\n${'Historical context. '.repeat(30)}`, is_bot_message:index%2===1, sender_name:'Fixture'},
+    }));
     let ackAt = 0;
     const modelPayload = () => ({ current: model, thinking_level: thinking, thinking_level_label: thinking, supports_thinking: true, available_model_count: 2, model_options: [{ id: model, context_window: 200000 }], oobe: { provider_ready_completed_instance: true } });
     const contextPayload = () => ({ tokens, percent: tokens / 2000, contextWindow: 200000, sessionGeneration: "fixture-generation" });
@@ -147,6 +153,22 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
         const button = document.querySelector<HTMLButtonElement>('.compose-box .send-btn, .chat__send-btn');
         return button != null && !button.disabled;
       });
+      const scroller = page.locator(skin === 'classic' ? '.timeline' : '.message-list').first();
+      const readHistory = async () => {
+        await scroller.evaluate((el:HTMLElement) => { el.scrollTop = -3000; });
+        await page.waitForTimeout(150);
+        expect(await scroller.evaluate(el => el.scrollTop)).toBeLessThan(-60);
+      };
+      const expectSubmittedRowVisible = async (id:number) => {
+        await page.waitForFunction(({id,skin}) => {
+          const row=document.querySelector(skin==='classic'?`#post-${id}`:`[data-message-id="${id}"]`);
+          const root=document.querySelector(skin==='classic'?'.timeline':'.message-list');
+          if(!row || !root) return false;
+          const r=row.getBoundingClientRect(),s=root.getBoundingClientRect();
+          return r.bottom>s.top && r.top<s.bottom;
+        }, {id,skin}, {timeout:1500});
+      };
+      await readHistory();
       await input.fill('Latency probe submission');
       await input.press('Enter');
       await page.locator('[data-submission-state="sending"]').waitFor({ timeout: 1500 });
@@ -157,6 +179,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       releaseAck();
       await page.waitForFunction(()=>document.querySelector('#post-777001,[data-message-id="777001"]'),{},{timeout:1500});
       expect(accepted).toBe(1);
+      await expectSubmittedRowVisible(777001);
       await page.locator('[data-submission-state]').waitFor({state:'hidden',timeout:1500});
       expect(await page.getByText('Message accepted. Waiting for agent…',{exact:true}).count()).toBe(0);
       await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:777000,type:'tool_status',title:'Previous turn',turn_id:'previous'});
@@ -171,10 +194,12 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.waitForTimeout(150);
       // Event first, response later must likewise leave exactly one durable row.
       sseFirst=true;
+      await readHistory();
       await input.fill('Second latency probe');await input.press('Enter');
       await page.waitForFunction(()=>document.querySelector('#post-777002,[data-message-id="777002"]'),{},{timeout:1500});
       await page.waitForTimeout(300);
       expect(accepted).toBe(2);
+      await expectSubmittedRowVisible(777002);
       expect(await page.locator('#post-777002,[data-message-id="777002"]').count()).toBe(1);
       expect(await page.locator('[data-submission-state="waiting"]').count()).toBe(0);
       queueNext=true;
@@ -200,7 +225,10 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await waitForSubmitReady();
       expect(await input.inputValue()).toContain('Next draft while queue acknowledgement is pending');
       expect(shortcutPosts).toHaveLength(1);
-      expect(shortcutPosts[0]).toMatchObject({content:'Ctrl steer while busy',mode:'steer',persist_steer:true});
+      expect(shortcutPosts[0]).toMatchObject({content:'Ctrl steer while busy',mode:'steer'});
+      // Classic retired the legacy flag when native accepted-input storage became
+      // authoritative; Visual still sends it, but both must send steering mode.
+      expect(shortcutPosts[0].persist_steer).toBe(skin==='visual' ? true : undefined);
       await page.locator('#post-778001,[data-message-id="778001"]').waitFor();
       expect(await page.locator('#post-778001,[data-message-id="778001"]').count()).toBe(1);
       expect(await page.getByText('Steering queued for the current turn.',{exact:true}).count()).toBe(0);
@@ -216,7 +244,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await input.press('Meta+Enter');
       await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
       expect(shortcutPosts).toHaveLength(3);
-      expect(shortcutPosts.every(post => post.mode === 'steer' && post.persist_steer === true)).toBe(true);
+      expect(shortcutPosts.every(post => post.mode === 'steer' && post.persist_steer === (skin==='visual' ? true : undefined))).toBe(true);
       expect(await page.locator('#post-778002,[data-message-id="778002"]').count()).toBe(1);
       expect(await page.locator('#post-778003,[data-message-id="778003"]').count()).toBe(1);
       for (const invalid of ['json', 'empty'] as const) {

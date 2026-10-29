@@ -330,12 +330,11 @@ test('scrollToPostedTimelineMessage waits for the existing row and highlights it
       remove: mock(() => {}),
     },
   } as any;
-  let lookups = 0;
-  const getElementById = mock((id: string) => {
-    lookups += 1;
-    if (id !== 'post-77') return null;
-    return lookups >= 3 ? element : null;
-  });
+  let reveals = 0;
+  // Simulate an acknowledgement before the row enters the rendered post list:
+  // only a later reveal can move the virtual window and mount it.
+  const requestReveal = mock(() => { reveals += 1; });
+  const getElementById = mock((id: string) => id === 'post-77' && reveals >= 3 ? element : null);
   const rafQueue: Array<() => void> = [];
   const timeoutQueue: Array<() => void> = [];
   const scrollToBottom = mock(() => {});
@@ -343,6 +342,7 @@ test('scrollToPostedTimelineMessage waits for the existing row and highlights it
   scrollToPostedTimelineMessage({
     id: 77,
     scrollToBottom,
+    requestReveal,
     getElementById,
     scheduleRaf: (callback) => { rafQueue.push(callback); },
     scheduleTimeout: (callback, delayMs) => {
@@ -363,6 +363,7 @@ test('scrollToPostedTimelineMessage waits for the existing row and highlights it
   }
 
   expect(getElementById).toHaveBeenCalled();
+  expect(requestReveal).toHaveBeenCalledTimes(3);
   expect(element.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
   expect(element.classList.add).toHaveBeenCalledWith('post-highlight');
   expect(element.classList.remove).toHaveBeenCalledWith('post-highlight');
