@@ -103,7 +103,7 @@ test("live draft buffers never persist a second restart-recovery payload", () =>
   let writes=0; const buffers=new Map<string,any>();
   const state={load(){},save(){writes++;},getAgentStatuses:()=>({}),setAgentStatus(){},setContextUsage(){},getContextUsage:()=>null,
     setDraftRecovery(){writes++;},getDraftRecovery(){throw Error("Legacy draft read");}};
-  const service=new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){}},
+  const service=new WebChannelRuntimeStateService({getAssistantName:()=>"Test",enqueue(){},async processChat(){}},
     {defaultAgentId:"default",stateKey:"draft-no-recovery"},{state,agentStatusStore:{load(){},update(){},get:()=>null,dispose(){}},
       agentBuffers:{setPanelExpanded(){},isPanelExpanded:()=>false,updateBuffer:(id,panel,text,totalLines)=>buffers.set(id+panel,{text,totalLines}),
         getBuffer:(id,panel)=>buffers.get(id+panel)}});

@@ -12,8 +12,8 @@ const RECOVERY_REPLAY_DELAY_MS = 2000;
 import { registerPreShutdownHook } from "../../../runtime/shutdown-registry.js";
 import { AgentBuffers } from "../agent/agent-buffers.js";
 import { AgentStatusStore } from "../agent/agent-status-store.js";
-import { getThreadRootId as getThreadRootIdForChat, resumeChat as resumeWebChat, type ChatRunControlStore, type ResumeChatContext } from "./chat-run-control.js";
-import { resumePendingChats as resumeWebPendingChats, type WebPendingResumeContext, type WebPendingResumeStore } from "./recovery.js";
+import { getThreadRootId as getThreadRootIdForChat, resumeChat as resumeWebChat, type ChatRunControlStore } from "./chat-run-control.js";
+import { resumePendingChats as resumeWebPendingChats, type WebPendingResumeStore } from "./recovery.js";
 
 /** Runtime callbacks required to bridge recovery/resume helpers back into WebChannel orchestration. */
 export interface WebChannelRuntimeStateCallbacks {
@@ -21,7 +21,6 @@ export interface WebChannelRuntimeStateCallbacks {
   isChatLaneBusy?(chatJid: string): boolean;
   readNativeTurnState?(chatJid: string): { operation: { operation_id: string; phase: string } | null; queued: number };
   getAssistantName(): string;
-  getChatCursor(chatJid: string): string;
   enqueue(task: () => Promise<void>, key: string, laneKey?: string): void;
   processChat(chatJid: string, agentId: string, threadRootId?: number | null): Promise<void>;
 }
@@ -54,6 +53,8 @@ export interface WebChannelRuntimeStateServiceDeps {
 export class WebChannelRuntimeStateService {
   private readonly agentStatusStore: AgentStatusStoreLike;
   private readonly agentBuffers: AgentBuffersLike;
+  private readonly unregisterShutdown: () => void;
+  private disposed = false;
 
   constructor(
     private readonly callbacks: WebChannelRuntimeStateCallbacks,
@@ -62,29 +63,14 @@ export class WebChannelRuntimeStateService {
   ) {
     this.agentStatusStore = deps.agentStatusStore ?? new AgentStatusStore();
     this.agentBuffers = deps.agentBuffers ?? new AgentBuffers();
-    registerPreShutdownHook(() => {
-      this.agentStatusStore.dispose();
-    });
+    this.unregisterShutdown = registerPreShutdownHook(() => this.dispose());
   }
 
-  private getResumeChatContext(): ResumeChatContext {
-    return {
-      defaultAgentId: this.options.defaultAgentId,
-      enqueue: (task, key, laneKey) => this.callbacks.enqueue(task, key, laneKey),
-      processChat: (chatJid, agentId, threadRootId) => this.callbacks.processChat(chatJid, agentId, threadRootId),
-    };
-  }
-
-  private getPendingResumeContext(): WebPendingResumeContext {
-    return {
-      assistantName: this.callbacks.getAssistantName(),
-      defaultAgentId: this.options.defaultAgentId,
-      enqueue: (task, key, laneKey) => this.callbacks.enqueue(task, key, laneKey),
-      processChat: (chatJid, agentId, threadRootId) =>
-        this.callbacks.processChat(chatJid, agentId, threadRootId ?? undefined),
-      recoveryDelayMs: RECOVERY_REPLAY_DELAY_MS,
-      sleep: (ms) => Bun.sleep(ms),
-    };
+  dispose(): void {
+    if (this.disposed) return;
+    this.agentStatusStore.dispose();
+    this.unregisterShutdown();
+    this.disposed = true;
   }
 
   getThreadRootId(chatJid: string, messageId: string, store?: ChatRunControlStore): number | null {
@@ -92,18 +78,32 @@ export class WebChannelRuntimeStateService {
   }
 
   resumeChat(chatJid: string, threadRootId?: number | null): void {
-    resumeWebChat(chatJid, threadRootId, this.getResumeChatContext());
+    if (this.disposed) return;
+    resumeWebChat(chatJid, threadRootId, {
+      defaultAgentId: this.options.defaultAgentId,
+      enqueue: this.callbacks.enqueue.bind(this.callbacks),
+      processChat: this.callbacks.processChat.bind(this.callbacks),
+    });
   }
 
   resumePendingChats(chatJid?: string, store?: WebPendingResumeStore): void {
-    resumeWebPendingChats(this.getPendingResumeContext(), chatJid, store);
+    if (this.disposed) return;
+    resumeWebPendingChats({
+      assistantName: this.callbacks.getAssistantName(),
+      defaultAgentId: this.options.defaultAgentId,
+      enqueue: this.callbacks.enqueue.bind(this.callbacks),
+      processChat: (chat, agent, thread) => this.callbacks.processChat(chat, agent, thread ?? undefined),
+      recoveryDelayMs: RECOVERY_REPLAY_DELAY_MS,
+      sleep: (ms) => Bun.sleep(ms),
+    }, chatJid, store);
   }
 
   updateAgentStatus(chatJid: string, status: Record<string, unknown>): void {
-    this.agentStatusStore.update(chatJid, status);
+    if (!this.disposed) this.agentStatusStore.update(chatJid, status);
   }
 
   getAgentStatus(chatJid: string): Record<string, unknown> | null {
+    if (this.disposed) return null;
     const saved = this.agentStatusStore.get(chatJid);
     if (this.callbacks.isNativeRuntime?.() !== true || !this.callbacks.readNativeTurnState) return saved;
     const { operation, queued } = this.callbacks.readNativeTurnState(chatJid);

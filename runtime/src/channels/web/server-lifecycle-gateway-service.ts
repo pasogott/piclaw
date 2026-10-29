@@ -88,6 +88,7 @@ export interface WebServerLifecycleGatewayDeps extends JsonResponder {
   vncService: VncServiceLike;
   uiBridge: UiBridgeLike;
   sse: SseHubLike;
+  runtimeState?: { dispose(): void };
   serve?: typeof Bun.serve;
   readTextFile?: (path: string) => Promise<string>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<unknown>;
@@ -104,6 +105,7 @@ export interface WebServerLifecycleGatewayChannel extends JsonResponder, Workspa
   vncService: VncServiceLike;
   uiBridge: UiBridgeLike;
   sse: SseHubLike;
+  runtimeState?: { dispose(): void };
 }
 
 export function createWebServerLifecycleGateway(
@@ -124,6 +126,7 @@ export function createWebServerLifecycleGateway(
     vncService: channel.vncService,
     uiBridge: channel.uiBridge,
     sse: channel.sse,
+    runtimeState: channel.runtimeState,
   });
 }
 
@@ -338,6 +341,7 @@ export class WebServerLifecycleGatewayService {
       () => closeCdpViewConnections(),
       () => this.deps.sse.closeAll(),
       () => this.deps.uiBridge.stop(),
+      () => this.deps.runtimeState?.dispose(),
       () => this.deps.terminalService.shutdown(),
       () => this.deps.vncService.shutdown(),
       () => {

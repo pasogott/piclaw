@@ -159,7 +159,6 @@ describe("web channel constructor wiring factory", () => {
 
     const deps: WebChannelConstructorFactoryDeps = {
       getIdentityConfig: () => identity,
-      getChatCursor: (chatJid) => `cursor:${chatJid}`,
       createSessionBroadcast: (agentPool) => {
         creationOrder.push("sessionBroadcast");
         expect(agentPool).toBe(channel.agentPool);
@@ -240,6 +239,7 @@ describe("web channel constructor wiring factory", () => {
         expect(seenChannel.vncService).toBe(channel.vncService);
         expect(seenChannel.uiBridge).toBe(sessionBroadcast.uiBridge);
         expect(seenChannel.sse).toBe(sessionBroadcast.sse);
+        expect(seenChannel.runtimeState).toBe(runtimeState);
         expect(configs).toEqual({
           webServerConfig: options.webServerConfig,
           webRuntimeConfig: options.webRuntimeConfig,
@@ -345,7 +345,7 @@ describe("web channel constructor wiring factory", () => {
     expect(runtimeStateCallbacks).not.toBeNull();
     runtimeStateCallbacks?.enqueue(async () => {}, "resume:web:test", "chat:web:test");
     await runtimeStateCallbacks?.processChat("web:test", "agent-a", 42);
-    expect(runtimeStateCallbacks?.getChatCursor("web:test")).toBe("cursor:web:test");
+    expect(runtimeStateCallbacks).not.toHaveProperty("getChatCursor");
     expect(queueCalls).toEqual([{ key: "resume:web:test", laneKey: "chat:web:test" }]);
     expect(processCalls).toEqual([{ chatJid: "web:test", agentId: "agent-a", threadRootId: 42 }]);
 

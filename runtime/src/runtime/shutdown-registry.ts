@@ -30,7 +30,7 @@ export function createShutdownCompletion(): { promise: Promise<void>; complete: 
 
 let registeredShutdown: ShutdownFn | null = null;
 let pendingShutdownReason: string | null = null;
-const preShutdownHooks = new Set<PreShutdownHook>();
+const preShutdownHooks = new Set<{ hook: PreShutdownHook }>();
 let preShutdownHooksRan = false;
 
 /**
@@ -43,11 +43,13 @@ export function registerShutdownHandler(handler: ShutdownFn): void {
 
 /**
  * Register a best-effort hook that runs immediately before graceful shutdown
- * begins. Used for cheap persistence cleanup such as clearing transient UI
- * state that should not survive a clean restart.
+ * begins. Each registration owns its release, including a reused callback.
+ * Releasing cannot cancel cleanup that has already started.
  */
-export function registerPreShutdownHook(hook: PreShutdownHook): void {
-  preShutdownHooks.add(hook);
+export function registerPreShutdownHook(hook: PreShutdownHook): () => void {
+  const registration = { hook };
+  preShutdownHooks.add(registration);
+  return () => { preShutdownHooks.delete(registration); };
 }
 
 export async function runPreShutdownHooksOnce(): Promise<void> {
@@ -55,7 +57,7 @@ export async function runPreShutdownHooksOnce(): Promise<void> {
   preShutdownHooksRan = true;
   // Start every independent cleanup before awaiting any of them. A stuck hook
   // is bounded by shutdown.ts and must not prevent later hooks from starting.
-  await Promise.all([...preShutdownHooks].map(async (hook, index) => {
+  await Promise.all([...preShutdownHooks].map(async ({ hook }, index) => {
     try {
       await hook();
     } catch (error) {
