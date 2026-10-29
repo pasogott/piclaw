@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createMcpExtension, createToolSearchExtension, createCodemodeExtension } from "@earendil-works/pi-coding-agent";
 import { checkMcpPublic140, matchNegativeDiagnostics, MCP_GIT_HEAD, MCP_VERSION, missingSeams } from "../../../scripts/check-earendil-mcp-public-140.ts";
+import historicalHarnessEvidence from "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-harness-compatibility-schema6.json";
 
 const root = resolve(import.meta.dir, "../../..");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
@@ -43,11 +44,12 @@ test("1.4.0 keeps wrapper ownership and does not activate native MCP or Harness"
   expect(typeof createToolSearchExtension).toBe("function");
   expect(typeof createCodemodeExtension).toBe("function");
   expect(session).not.toMatch(/AgentHarness|Pico3|pi-durable/);
-  const manifest = readFileSync(resolve(root, "runtime/src/service-effects/earendil-harness-v3-compatibility/manifest.ts"), "utf8");
-  expect(manifest).toContain('currentRuntimeVersion: "0.99.1"'); // Frozen evidence, not the installed target.
-  expect(manifest).toContain('harnessActivation: "latent_only"');
-  expect(manifest).toContain('"productionImport": false');
-  expect(manifest).toContain('"productionActivation": false');
+  expect(historicalHarnessEvidence.authority.currentRuntimeVersion).toBe("0.99.1"); // Frozen as-of evidence, not installed target.
+  expect(historicalHarnessEvidence.authority.harnessActivation).toBe("latent_only");
+  expect(historicalHarnessEvidence.experimentalPico3.productionImport).toBe(false);
+  expect(historicalHarnessEvidence.experimentalPico3.productionActivation).toBe(false);
+  expect(historicalHarnessEvidence.currentRuntime.productionImport).toBe(false);
+  expect(historicalHarnessEvidence.currentRuntime.productionActivation).toBe(false);
 });
 
 test("1.4.0 public SDK, MCP and ToolLoadout.getPromptGuidelines types compile with all ten measured gaps retained", () => {
