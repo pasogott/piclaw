@@ -30,6 +30,8 @@
     "../../runtime/src/types/gifenc.d.ts",
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
+    "host-input-handoff.test.ts",
+    "sdk-handoff-failure.test.ts",
     "code-review-fixture.ts",
     "editable-table-fixture.ts",
     "office-viewer-fixture.ts",

@@ -48,6 +48,9 @@ export interface HostDurableBindings {
   bind(input: AcceptedInput): Promise<HostInputBinding>;
   getOrBind(input: AcceptedInput): Promise<{ content: string }>;
   recordSubmission(input: AcceptedInput, submissionId: SubmissionId): Promise<void>;
+  /** Optional host-only precommit correlation on the exact owned active transaction.
+   * Caller MUST roll back on failure; neither acknowledgement nor execution authority. */
+  recordSubmissionInTransaction?(input: AcceptedInput, submissionId: SubmissionId, transactionDatabase: import("bun:sqlite").Database): void;
 }
 /** Host-private evidence, never a public timeline payload (message may contain thinking). */
 export interface SettledAnswer {
@@ -72,6 +75,8 @@ export interface MaterializedAnswer {
   readonly mediaIds: readonly number[];
 }
 export interface RuntimeOptions {
+  /** Fresh producer only; atomic root ACK plus exact execution harness. */
+  readonly completeInputHandoff?: (input: AcceptedInput, submissionId: SubmissionId, capturedOperation: OperationSnapshot, intent: boolean, signal?: AbortSignal) => Promise<void>;
   readonly incarnation: string;
   readonly onOperationSettled?: (operationId: string, processExit?: NativeExitReceipt) => void | Promise<void>;
   /** New work is sealed while an exact native shutdown request settles. */
@@ -176,7 +181,7 @@ function cancellationSnapshot(r: AcceptCancellationRequest): AcceptCancellationR
 // Private snapshot type cannot be confused with caller-owned RuntimeOptions.
 type RuntimeSnapshot = Omit<RuntimeOptions, "work" | "terminal"> & {
   readonly captured: true;
-  readonly work: Pick<ServiceWorkStore, "getOperation" | "acceptCancellation" | "bindHarness"> & Partial<Pick<CurrentPiclawServiceWorkStore, "finishHarness">>;
+  readonly work: Pick<ServiceWorkStore, "getOperation" | "acceptCancellation"> & Partial<Pick<CurrentPiclawServiceWorkStore, "finishHarness">>;
   readonly terminal: Pick<TerminalSettlementStore, "getTerminal" | "commitTerminal">;
 };
 function currentHarnessModels(options: HarnessOptions) {
@@ -189,6 +194,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId } = o;
   return Object.freeze({ incarnation, sessionId, captured: true as const,
+    completeInputHandoff: o.completeInputHandoff?.bind(o),
     codemodeExecute: o.codemodeExecute,
     onStorageFailure: o.onStorageFailure?.bind(o),
     assertAdmission: o.assertAdmission?.bind(o),
@@ -205,7 +211,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o), cancelSideSource: o.cancelSideSource?.bind(o),
     cancelOperationSource: o.cancelOperationSource?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
-    work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
+    work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
     bindings: Object.freeze({ assertSourceCurrent: bindings.assertSourceCurrent?.bind(bindings),
       get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
@@ -225,6 +231,8 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
 
 /** One caller-owned authority domain, not a global chat/user router. */
 export class HostConversationRuntime {
+  private readonly inputHandoffs = new Map<string, { input: AcceptedInput; intent: boolean; fresh: boolean; ready: Promise<SubmissionId> }>();
+  private handoffKey(input: AcceptedInput) { return JSON.stringify([input.conversationId, input.requestId]); }
   private closed = false;
   private changingModel = false;
   private sessionCommandChat?: string;
@@ -1456,6 +1464,24 @@ export class HostConversationRuntime {
       }
       if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
         throw Error("Exact host tool run required");
+      // All waits are outside SDK mutation callbacks and physical writer admission.
+      // Restart the entire observation after completion, including Delegate/tool fences.
+      for (const id of live.run.inputs) {
+        const handle = await this.harness.submission(id, this.context);
+        const record = await handle?.status(this.context); this.fence();
+        if (!record?.requestId) continue;
+        const join = this.inputHandoffs.get(JSON.stringify([conversationId, record.requestId]));
+        if (join?.fresh) {
+          if (record.type !== "input" || record.conversationId !== conversationId || record.entry === undefined)
+            throw Error("Exact live handoff evidence required");
+          const entry = await this.harness.commit(tx => tx.entry(record.entry!), this.context); this.fence();
+          const data = entry?.data as Record<string, unknown> | undefined;
+          if (entry?.kind !== "host.accepted" || !data || data.role !== (join.intent ? "intent" : "primary") ||
+            Object.entries(join.input).some(([key, value]) => data[key] !== value)) throw Error("Input handoff identity conflict");
+          await awaitWithContext(join.ready, withAbortSignal(this.observations.signal, this.context)); this.fence();
+          return this.captureSource(conversationId, taskId, callId);
+        }
+      }
       // Only the immutable assistant message owning this exact live MODEL call
       // supplies physical model identity. Tool input has no model metadata.
       const sourceModel = callId === undefined ? undefined : await this.harness.commit(async tx => {
@@ -1517,14 +1543,13 @@ export class HostConversationRuntime {
           !this.routed(input)) throw Error("Host binding conflict");
         await this.assertPublicRoute(input);
         const bound = await this.port(data.role === "intent").get(input); this.fence();
-        if (!bound || (bound.submissionId !== submissionId && !(callId === undefined && bound.submissionId === null && data.role === "primary"))) throw Error("Host binding conflict");
+        if (!bound || bound.submissionId !== submissionId) throw Error("Host binding conflict");
         const current = value(await o.work.getOperation(input.operationId)); this.fence();
         if (!current || current.chatJid !== input.chatJid || current.phase !== "executing" || current.cancellation ||
           !current.claimedSourceSeqs.includes(input.sourceSeq) || (operation && (operation.operationId !== current.operationId || operation.version !== current.version)))
           throw Error("Host operation authority unavailable");
-        if (current.harness ? current.harness.sessionId !== o.sessionId ||
-          (!live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId) && data.role !== "intent")
-          : callId !== undefined || data.role !== "primary" || current.primarySourceSeq !== input.sourceSeq)
+        if (!current.harness || current.harness.sessionId !== o.sessionId ||
+          (!live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId) && data.role !== "intent"))
           throw Error("Exact host harness required");
         operation = current; inputs.push(bound);
       }
@@ -1635,6 +1660,15 @@ export class HostConversationRuntime {
     }, this.context); this.fence();
     return record;
   }
+  private async assertCompletedHandoff(input: AcceptedInput, id: SubmissionId, intent = false) {
+    const record = await this.record(input, intent);
+    const bound = await this.port(intent).get(input); this.fence();
+    const operation = value(await this.options.work.getOperation(input.operationId)); this.fence();
+    if (!record || record.id !== id || bound?.submissionId !== id || !operation?.harness ||
+      operation.harness.sessionId !== this.options.sessionId ||
+      (!intent && operation.harness.harnessOperationId !== String(id))) throw Error("Exact completed input handoff required");
+    return operation;
+  }
   private async progress(aborting?: AcceptedInput) {
     const inspection = await this.harness.inspect(this.context); this.fence();
     await this.options.authorizeScheduling(inspection, aborting); this.fence();
@@ -1642,7 +1676,33 @@ export class HostConversationRuntime {
   submit(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy); }
   /** Targets the accepted host operation, NOT an exact physical model generation. */
   submitIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy, true); }
-  private async admitInput(input: AcceptedInput, intent = false) {
+  private admitInput(input: AcceptedInput, intent = false): Promise<SubmissionId> {
+    try { this.fence(); this.options.assertAdmission?.(input); }
+    catch (error) { return Promise.reject(error); }
+    // Maintenance waiters are not active admissions. Even identity conflicts
+    // wait for this barrier, so close can seal them before any handoff starts.
+    if (this.changingModel && this.maintenance) {
+      const maintenance = this.maintenance;
+      return maintenance.then(() => {
+        this.fence();
+        if (this.changingModel && this.maintenance === maintenance) throw Error("Runtime maintenance in progress");
+        return this.admitInput(input, intent);
+      });
+    }
+    const key = this.handoffKey(input), prior = this.inputHandoffs.get(key);
+    if (prior) {
+      if (prior.intent !== intent || Object.entries(input).some(([k, v]) => prior.input[k as keyof AcceptedInput] !== v))
+        return Promise.reject(Error("Input handoff identity conflict"));
+      return prior.ready;
+    }
+    // Install before the producer's first await; no SDK admission occurs during maintenance.
+    const join = { input, intent, fresh: false, ready: undefined as unknown as Promise<SubmissionId> };
+    join.ready = Promise.resolve().then(() => this.produceInput(input, intent))
+      .finally(() => { this.inputHandoffs.delete(key); });
+    this.inputHandoffs.set(key, join);
+    return join.ready;
+  }
+  private async produceInput(input: AcceptedInput, intent = false) {
     this.fence();
     this.options.assertAdmission?.(input);
     // Join only owned compaction completion, never its detachable observer. This wait
@@ -1667,16 +1727,47 @@ export class HostConversationRuntime {
       return prior.id; // Acknowledgement repair is not permission to resume.
     }
     if (operation.terminal || operation.cancellation) throw new Error("Operation no longer executable");
+    if (!this.options.completeInputHandoff) throw Error("Input handoff completion unavailable");
+    this.inputHandoffs.get(this.handoffKey(input))!.fresh = true;
     await this.progress();
-    const submission = await conversation.submit({ type: "input", requestId: input.requestId, content,
-      ...(intent ? { whenBusy: "steer" as const } : {}),
-      entry: { kind: "host.accepted", data: { ...input, role: intent ? "intent" : "primary" } } }, this.context);
+    let submissionId: SubmissionId;
+    try {
+      submissionId = (await conversation.submit({ type: "input", requestId: input.requestId, content,
+        ...(intent ? { whenBusy: "steer" as const } : {}),
+        entry: { kind: "host.accepted", data: { ...input, role: intent ? "intent" : "primary" } } }, this.context)).id;
+    } catch (error) {
+      // Only this original live producer can reconcile a lost return. Session or
+      // backend failure may make evidence unreadable: retain uncertainty, never reopen/resubmit.
+      try {
+        this.fence();
+        const accepted = await this.record(input, intent);
+        if (!accepted || accepted.status === "unanswered") throw error;
+        await this.harness.inspect(this.context); this.fence();
+        submissionId = accepted.id;
+      } catch { throw error; }
+    }
     this.fence();
-    // Recheck the returned durable evidence too: submit itself deduplicates by request ID.
+    // Recheck public evidence even after a normal return; dedup alone proves no content identity.
     const admitted = await this.record(input, intent);
-    if (!admitted || admitted.id !== submission.id) throw new Error("Submission binding conflict");
-    await port.recordSubmission(input, submission.id); this.fence();
-    return submission.id;
+    if (!admitted || admitted.id !== submissionId) throw new Error("Submission binding conflict");
+    const prove = async () => {
+      const current = await this.assertCompletedHandoff(input, submissionId, intent);
+      this.options.assertAdmission?.(input);
+      if (current.phase !== "executing" || current.cancellation || current.terminal ||
+        current.version !== operation.version + (!intent && !operation.harness ? 1 : 0) ||
+        (intent && current.harness?.harnessOperationId !== operation.harness?.harnessOperationId) ||
+        !current.claimedSourceSeqs.includes(input.sourceSeq)) throw Error("Input handoff authority changed");
+      this.options.bindings.assertSourceCurrent?.(input);
+    };
+    try { await this.options.completeInputHandoff(input, submissionId, freezeTree(structuredClone(operation)), intent, this.observations.signal); }
+    catch (error) {
+      // A root acknowledgement may be lost AFTER commit. Never infer rollback,
+      // resubmit, or repair a prior/reopened record. Reading fails closed if Session failed.
+      try { await prove(); } catch { throw error; }
+    }
+    this.fence();
+    await prove();
+    return submissionId;
   }
   /** ACK-only recovery of an existing, content/provenance-checked submission.
    * Never creates an input or grants scheduler progress. */
@@ -2035,6 +2126,7 @@ export class HostConversationRuntime {
       const { operation } = await this.checked(input);
       const record = await this.record(input);
       if (!record || record.id !== submissionId || operation.terminal || operation.cancellation) throw new Error("Exact live submission required");
+      await this.assertCompletedHandoff(input, submissionId);
       await this.progress(); this.harness.resume();
     });
   }
@@ -2048,6 +2140,7 @@ export class HostConversationRuntime {
         await this.checked(copy); observation.abortSignal?.throwIfAborted();
         const record = await this.record(copy); observation.abortSignal?.throwIfAborted();
         if (!record || record.id !== submissionId) throw new Error("Exact submission required");
+        await this.assertCompletedHandoff(copy, submissionId);
         await this.progress(); observation.abortSignal?.throwIfAborted();
         const handle = await this.harness.submission(submissionId, observation); this.fence();
         observation.abortSignal?.throwIfAborted();
@@ -2068,7 +2161,10 @@ export class HostConversationRuntime {
           for (const seq of sequences) {
             const binding = bindings?.find(value => value.sourceSeq === seq);
             const record = binding && await this.record(binding, true); this.fence();
-            if (record) records.push(record);
+            if (record && binding?.submissionId === record.id) {
+              await this.assertCompletedHandoff(binding, record.id, true);
+              records.push(record);
+            }
           }
           if (records.length !== sequences.length) {
             missingSince ??= Date.now();
@@ -2145,11 +2241,9 @@ export class HostConversationRuntime {
     if (!operation) throw new Error("Missing operation");
     // Never refresh away an attachment/version fence after inspecting accepted inputs.
     if (operation.version !== initialVersion) return null;
-    if (!operation.harness) {
-      if (!primarySubmissionId) throw Error("Exact host primary binding required");
-      operation = value(await o.work.bindHarness(sealed({effect:effect(`runtime:bind:v2:${input.requestId}`,input.operationId,input.sourceSeq),
-        expectedVersion:operation.version,sessionId:o.sessionId,harnessOperationId:String(primarySubmissionId)}))); this.fence();
-    }
+    // ACK-only/reopened evidence cannot create execution authority during settlement.
+    // Retain the original outcome and host hold until an explicitly qualified owner can reconcile it.
+    if (!operation.harness) return null;
     if (operation.phase !== "settling") {
       if (!o.work.finishHarness) throw new Error("Host settlement API required");
       if (operation.harness!.sessionId !== o.sessionId || operation.harness!.harnessOperationId !== String(primarySubmissionId))

@@ -1,4 +1,5 @@
 import "./src/test-guard.js";
+import { createInputHandoffCompletion } from "../../runtime/durable-engine/src/host-bindings.js";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -84,7 +85,15 @@ async function setup(busy = false) {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => { assert(); expect(db.inTransaction).toBe(true); return true; },
     applyTerminalEffects(commit, scope) { return hooks.terminalEffects?.(commit, scope); },
   }));
-  const options: RuntimeOptions = { cancelOperationSource(input, expectedVersion) {
+  const bindings = createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
+      manifest: [{ chatJid: "web:runtime", branchId: "existing-main", conversationId: id }],
+      async resolveContent(ref) {
+        const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
+        if (!payload) throw new Error("Missing host payload"); return payload.content;
+      } });
+  const options: RuntimeOptions = { completeInputHandoff: createInputHandoffCompletion(db, {
+      domain: "runtime", incarnation: "copy-A", sessionId: "existing-host-session", bindings, work, assertCurrent: assert,
+    }), cancelOperationSource(input, expectedVersion) {
       db.transaction(() => {
         assert();
         const operation = db.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?")
@@ -103,12 +112,7 @@ async function setup(busy = false) {
       async acceptCancellation(request) { await hooks.cancellation?.(); return work.acceptCancellation(request); } }, terminal, existingConversationIds: [id], conversationFor: (chat, branch) => {
       if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch");
       return hooks.resolveConversation?.() ?? id;
-    }, bindings: createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
-      manifest: [{ chatJid: "web:runtime", branchId: "existing-main", conversationId: id }],
-      async resolveContent(ref) {
-        const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
-        if (!payload) throw new Error("Missing host payload"); return payload.content;
-      } }), async authorizeScheduling(inspection) {
+    }, bindings, async authorizeScheduling(inspection) {
       authorizations++;
       await hooks.authorize?.();
       // Fail closed: this fixture grants progress only when there is no recovered live work.
@@ -451,8 +455,11 @@ for (const queued of [false, true]) {
     f.base.host.modelHold ??= barrier();
     await f.runtime.close(); f.setOwner(true);
     let lost = false;
-    const bindings = f.options.bindings;
-    const options = { ...f.options, bindings: { ...bindings, async recordSubmission(i: AcceptedInput, id: Parameters<typeof bindings.recordSubmission>[1]) {
+    const bindings = f.options.bindings, complete = f.options.completeInputHandoff!;
+    const options = { ...f.options, async completeInputHandoff(...args: Parameters<typeof complete>) {
+      if (!lost) { lost = true; throw new Error("lost acknowledgement before host CAS"); }
+      return complete(...args);
+    }, bindings: { ...bindings, async recordSubmission(i: AcceptedInput, id: Parameters<typeof bindings.recordSubmission>[1]) {
       if (!lost) { lost = true; throw new Error("lost acknowledgement before host CAS"); }
       return bindings.recordSubmission(i, id);
     } } };
@@ -473,6 +480,37 @@ for (const queued of [false, true]) {
     } finally { await reopened.close(); }
   }, queued));
 }
+
+for (const failed of [false, true]) test(`runtime: unbound ACK-only settlement stays pending without creating execution authority (${failed ? 'model-error' : 'answer'})`, () => fixture(async f => {
+  const input = await f.accept();
+  await f.options.bindings.getOrBind(input);
+  await f.runtime.close(); f.setOwner(true);
+  f.base.host.modelAllowed = !failed;
+  const storage = await f.options.openStorage(), harness = await Harness.open(storage, f.options.harnessOptions, context);
+  let id: Parameters<HostConversationRuntime['resume']>[1];
+  try {
+    const conversation = (await harness.conversation(input.conversationId, context))!;
+    const submission = await conversation.submit({ type: 'input', requestId: input.requestId, content: 'hello',
+      entry: { kind: 'host.accepted', data: { ...input, role: 'primary' } } }, context);
+    id = submission.id; await harness.waitForIdle(context);
+    expect((await submission.status(context)).status).toBe(failed ? 'unanswered' : 'done');
+  } finally { await harness.close(context); }
+  // Historical correlation is acknowledgement only; it never grants a harness.
+  await f.options.bindings.recordSubmission(input, id!);
+  const reopened = await HostConversationRuntime.open(f.options, context);
+  try {
+    const before = Buffer.from(f.db.serialize()), calls = f.base.host.modelCalls, effects = f.base.host.effects, grants = f.stats().authorizations;
+    expect(value(await f.work.getOperation(input.operationId))?.harness).toBeNull();
+    expect(await reopened.settle(input)).toBeNull();
+    await expect(reopened.resume(input, id!)).rejects.toThrow('Exact completed input handoff required');
+    await expect(reopened.wait(input, id!)).rejects.toThrow('Exact completed input handoff required');
+    expect(Buffer.from(f.db.serialize())).toEqual(before);
+    expect(value(await f.work.getOperation(input.operationId))?.harness).toBeNull();
+    expect(f.base.host.modelCalls).toBe(calls); expect(f.base.host.effects).toBe(effects);
+    expect(f.stats().authorizations).toBe(grants);
+    expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(0);
+  } finally { await reopened.close(); }
+}));
 
 test("runtime: read-only session report uses committed native context and usage without model replay", () => fixture(async f => {
   const input = await f.accept();

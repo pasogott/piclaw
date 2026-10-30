@@ -687,6 +687,7 @@ test("required engine integration prerequisite cannot silently skip", () => {
   if (process.env.PICLAW_REQUIRE_DURABLE_ENGINE === "1") expect(hasEngine).toBe(true);
 });
 for (const [queuedInput, pending, steering] of [[false,false,false], [false,true,false], [true,false,false], [true,true,false], [false,false,true], [false,false,'ack-lost'], [false,false,'stale-target']] as const) test.skipIf(!hasEngine)(`HTTP accepted message uses current worker and real engine exactly once; queued=${queuedInput}; pending=${pending}; steering=${steering}`, async () => {
+  const { createInputHandoffCompletion } = await import("../../../durable-engine/src/host-bindings.js");
   const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../../durable-engine/src/index.js");
   const { SqliteStorage } = await import("../../../durable-engine/qualification/sqlite.ts");
   const { context, openFixture, barrier } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
@@ -710,20 +711,24 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
   });
   if (!terminal.ok) throw Error("terminal construction");
   const manifest = [{ chatJid: "web:default", branchId: "main", conversationId }];
+  const bindings = createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
+      async resolveContent(ref) {
+        const row = (ref.startsWith('queued-source:')
+          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
+          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
+        return row.content;
+      } });
   const runtime = await HostConversationRuntime.open({
+    completeInputHandoff: createInputHandoffCompletion(f.db, {
+      domain: "queue-test", incarnation: "queue-test", sessionId: "queue-test", bindings, work: f.work, assertCurrent: assert,
+    }),
     incarnation: "queue-test", owner: { assert, release() {} }, work: f.work, terminal: terminal.value,
     openStorage: () => SqliteStorage.open(new BunSqliteDatabase(path)),
     harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
     existingConversationIds: [conversationId], conversationFor(chat, branch) {
       if (chat !== "web:default" || branch !== "main") throw Error("binding conflict"); return conversationId;
     },
-    bindings: createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
-      async resolveContent(ref) {
-        const row = (ref.startsWith('queued-source:')
-          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
-          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
-        return row.content;
-      } }),
+    bindings,
     authorizeScheduling() { assert(); }, putAnswer(ref, text) { payloads.putText(ref, text); },
     sessionId: "queue-test", lane: "main", generation: 1, now: () => new Date().toISOString(),
   }, context);
@@ -1139,6 +1144,7 @@ test("prepared queued source authority revocation rolls back item and accepted s
 
 // Deterministic SDK integration, not a provider-backed/live-user queue mutation.
 test.skipIf(!hasEngine)('reordered native queue executes second accepted source first, closes gaps and reconciles exactly once', async () => {
+  const { createInputHandoffCompletion } = await import("../../../durable-engine/src/host-bindings.js");
   const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../../durable-engine/src/index.js");
   const { SqliteStorage } = await import("../../../durable-engine/qualification/sqlite.ts");
   const { context, openFixture, barrier } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
@@ -1163,20 +1169,24 @@ test.skipIf(!hasEngine)('reordered native queue executes second accepted source 
   });
   if (!terminal.ok) throw Error("terminal construction");
   const manifest = [{ chatJid: "web:default", branchId: "main", conversationId }];
+  const bindings = createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
+      async resolveContent(ref) {
+        const row = (ref.startsWith('queued-source:')
+          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
+          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
+        return row.content;
+      } });
   const runtime = await HostConversationRuntime.open({
+    completeInputHandoff: createInputHandoffCompletion(f.db, {
+      domain: "queue-test", incarnation: "queue-test", sessionId: "queue-test", bindings, work: f.work, assertCurrent: assert,
+    }),
     incarnation: "queue-test", owner: { assert, release() {} }, work: f.work, terminal: terminal.value,
     openStorage: () => SqliteStorage.open(new BunSqliteDatabase(path)),
     harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
     existingConversationIds: [conversationId], conversationFor(chat, branch) {
       if (chat !== "web:default" || branch !== "main") throw Error("binding conflict"); return conversationId;
     },
-    bindings: createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
-      async resolveContent(ref) {
-        const row = (ref.startsWith('queued-source:')
-          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
-          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
-        return row.content;
-      } }),
+    bindings,
     authorizeScheduling() { assert(); }, putAnswer(ref, text) { payloads.putText(ref, text); },
     sessionId: "queue-test", lane: "main", generation: 1, now: () => new Date().toISOString(),
   }, context);

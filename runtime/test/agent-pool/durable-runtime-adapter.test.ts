@@ -104,6 +104,7 @@ test.skipIf(!hasEngine)("adapter integrates real public runtime, SQL host bindin
   const { Database } = await import("bun:sqlite");
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { join } = await import("node:path");
+  const { createInputHandoffCompletion } = await import("../../durable-engine/src/host-bindings.js");
   const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../durable-engine/src/index.js");
   const { SqliteStorage } = await import("../../durable-engine/qualification/sqlite.ts");
   const { Harness } = await import("../../durable-engine/qualification/durable.ts");
@@ -161,6 +162,9 @@ test.skipIf(!hasEngine)("adapter integrates real public runtime, SQL host bindin
       }
     };
     const options = {
+      completeInputHandoff: createInputHandoffCompletion(db, {
+        domain: "adapter", incarnation: "copy-A", sessionId: "host-session", bindings, work, assertCurrent: assert,
+      }),
       incarnation: "copy-A", owner: { assert, release() { owned = false; releases++; } },
       openStorage: () => SqliteStorage.open(openFixtureConnection()),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
