@@ -48,6 +48,7 @@
     "default-application-runtime.test.ts",
     "delegate.test.ts",
     "extension-kv-authority.test.ts",
+    "goal-queued-expiry.test.ts",
     "goal-settlement.test.ts",
     "goal-terminal-race.test.ts",
     "goal-tools.test.ts",

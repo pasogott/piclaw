@@ -75,7 +75,8 @@ export interface QueuedFollowupWriteOptions {
 }
 
 export interface RemoveQueuedFollowupForActionOptions extends QueuedFollowupWriteOptions {
-  /** Host-selected, explicit DELETE action only. Never supplied by steer/drain. */
+  /** Host-selected cancellation: explicit DELETE, or separately proved lifecycle
+   * expiry. Ordinary steer/drain must never select this capability from text. */
   withdrawAcceptedSource?: QueuedInputSourceAdmission;
 }
 

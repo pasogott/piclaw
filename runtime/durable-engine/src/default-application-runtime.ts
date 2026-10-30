@@ -78,7 +78,7 @@ import { createHostResticTool } from "./host-restic-tool.js";
 import { createHostGoalTools } from "./host-goal-tools.js";
 import { createHostGoalPrompt } from "./host-goal-prompt.js";
 import { createHostGoalTerminalFence } from "./host-goal-terminal.js";
-import { createHostGoalInput } from "./host-goal-input.js";
+import { createHostGoalInput, createHostGoalQueueExpiry } from "./host-goal-input.js";
 import { createHostGoalSettlement } from "./host-goal-settlement.js";
 import { createHostGoalProgressReader } from "./host-goal-progress.js";
 import { createHostGoalPlanReader } from "./host-goal-plan.js";
@@ -1276,6 +1276,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     onRuntime(value) { captureRuntime = value; },
         prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
+        prepareQueuedInputExpiry: goal ? createHostGoalQueueExpiry(goal.addon, goalAdmission) : undefined,
         readExecutionPolicy: commandPolicy.read,
         setExecutionPolicy: commandPolicy.set,
         requestProcessExit: reason => processControls!.requestCommandExit(reason),

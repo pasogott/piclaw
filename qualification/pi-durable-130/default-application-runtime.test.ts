@@ -1857,7 +1857,39 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(2);
     failWake = true; // Optional wake failure cannot reject an already committed command.
     expect(await pool.applySlashCommand("web:default", "/goal pause")).toMatchObject({ status: "success", message: "Goal paused" });
-    await pool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
+    // Both old host controls were accepted before this lifecycle transition.
+    // The real channel must retire them, not submit a doomed SDK generation.
+    const expired = getDeferredQueuedFollowups("web:default");
+    expect(expired).toHaveLength(2);
+    const pausedGoal = extensionKvGet("goal", "thread-goal", "chat", "web:default");
+    const callsBeforeExpiry = calls;
+    const submissionsBeforeExpiry = root.query("SELECT * FROM submissions ORDER BY id").all();
+    const messagesBeforeExpiry = root.query("SELECT * FROM messages ORDER BY rowid").all();
+    const { materializeDeferredFollowups } = await import("../../runtime/src/channels/web/runtime/process-chat-control-runtime.js");
+    expect(typeof channel.expireQueuedInput).toBe("function");
+    expect((await materializeDeferredFollowups({ channel, chatJid: "web:default", agentId: "default" })).status).toBe("drained");
+    expect(getDeferredQueuedFollowups("web:default")).toEqual([]);
+    for (const item of expired) expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get("web:default", item.source_id!)).toEqual({ state: "disposed" });
+    expect(root.query("SELECT * FROM submissions ORDER BY id").all()).toEqual(submissionsBeforeExpiry);
+    expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(messagesBeforeExpiry);
+    expect(calls).toBe(callsBeforeExpiry);
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toEqual(pausedGoal);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+    closeDatabase(); initDatabase(); root = getDb();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+    const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    const reopenedChannel = new WebChannel(backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool }));
+    try {
+      expect(typeof reopenedChannel.expireQueuedInput).toBe("function");
+      expect((await materializeDeferredFollowups({ channel: reopenedChannel, chatJid: "web:default", agentId: "default" })).status).toBe("none");
+      expect(getDeferredQueuedFollowups("web:default")).toEqual([]);
+      expect(root.query("SELECT * FROM submissions ORDER BY id").all()).toEqual(submissionsBeforeExpiry);
+      expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toEqual(pausedGoal);
+      expect(calls).toBe(callsBeforeExpiry);
+      for (const item of expired) expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get("web:default", item.source_id!)).toEqual({ state: "disposed" });
+    } finally { await reopenedChannel.stop(); await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); backend.stop(); await backend.close(); }
+    closeDatabase(); owner.release();
     return;
   }
   const widgetEvents: { event: string; data: unknown }[] = [];
