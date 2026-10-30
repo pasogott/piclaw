@@ -52,7 +52,7 @@ import { BudgetRequestError } from '../../src/db/budget-request-reservations.js'
 import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork,operationBudgetWorkId } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
-import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
+import { taskModelRequestScope, taskModelHookScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "./host-model-controls.js";
 import { createHostCommandPolicy } from "./host-command-policy.js";
@@ -76,9 +76,9 @@ import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import { createHostObservabilityPrompt } from "./host-observability.js";
 import { createHostResticTool } from "./host-restic-tool.js";
 import { createHostGoalTools } from "./host-goal-tools.js";
-import { createHostGoalPrompt } from "./host-goal-prompt.js";
+import { createHostGoalPrompt, GoalRequestDenied } from "./host-goal-prompt.js";
 import { createHostGoalTerminalFence } from "./host-goal-terminal.js";
-import { createHostGoalInput } from "./host-goal-input.js";
+import { createHostGoalInput, createHostGoalQueueExpiry } from "./host-goal-input.js";
 import { createHostGoalSettlement } from "./host-goal-settlement.js";
 import { createHostGoalProgressReader } from "./host-goal-progress.js";
 import { createHostGoalPlanReader } from "./host-goal-plan.js";
@@ -814,10 +814,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if(prepared&&!prepared.accounted&&root.query('SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1').get())throw new BudgetRequestError('budget_denied');
     check(model,signal,prepared?.accounted===true);
   };
+  // SDK hook failures are reported but can still reach the model bridge. Keep
+  // expected Goal denials on the exact task-owned signal, never on the app lifetime.
+  const goalRequestDenials = new WeakMap<AbortSignal, GoalRequestDenied>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal, codex: codexServices,
     async captureSourceGuard(signal) {
       const scope = taskModelRequestScope(signal);
       if (!scope) throw Error("Native model request source unavailable");
+      const denied = goalRequestDenials.get(scope.signal);
+      if (denied) { runtime(); throw denied; } // Preserve ownership/fatal-lifetime fences first.
       if (scope.taskKind === "pi.generation") {
         const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
         requestSources.set(scope.signal, captured);
@@ -1039,7 +1044,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   // Goal and Plan retain immutable context before request-only system hooks.
   // Their shared materializer repairs only source-owned trailing snapshots at
   // the SDK pinned cutoff; neither prompt moves across later tool results.
-  if (goal) registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error) { lifetime.abort(error); } }));
+  if (goal) registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error, api) {
+    const scope = taskModelHookScope(api);
+    if (error instanceof GoalRequestDenied && scope) {
+      try { assertGoal(); } catch (fatal) { lifetime.abort(fatal); return; }
+      goalRequestDenials.set(scope.signal, error);
+    } else lifetime.abort(error);
+  } }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   if (regretsPrompt) registry.install(regretsPrompt);
@@ -1276,6 +1287,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     onRuntime(value) { captureRuntime = value; },
         prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
+        prepareQueuedInputExpiry: goal ? createHostGoalQueueExpiry(goal.addon, goalAdmission) : undefined,
         readExecutionPolicy: commandPolicy.read,
         setExecutionPolicy: commandPolicy.set,
         requestProcessExit: reason => processControls!.requestCommandExit(reason),

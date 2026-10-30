@@ -7,6 +7,7 @@
  */
 
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
+import { isDeepStrictEqual } from "node:util";
 import { getIdentityConfig, getRoutingConfig } from "../../../core/config.js";
 import { readAccessConfig } from "../../../core/config-access.js";
 import { parseControlCommand } from "../../../agent-control/index.js";
@@ -86,6 +87,7 @@ export interface DeferredControlCommandRuntime {
 }
 
 export interface QueuedFollowupMaterializationRuntime extends DeferredControlCommandRuntime {
+  expireQueuedInput?: WebChannelLike["expireQueuedInput"];
   peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   prependQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): void;
@@ -397,6 +399,7 @@ export async function materializeDeferredFollowups(
   const cursorStore = options.cursorStore ?? defaultCursorStore;
   const maxMaterializeRetries = options.maxMaterializeRetries ?? 5;
   let consumedAny = false;
+  const expire = channel.expireQueuedInput?.bind(channel);
 
   while (true) {
     const nextQueued = channel.peekQueuedFollowupItem(chatJid);
@@ -404,10 +407,31 @@ export async function materializeDeferredFollowups(
       return consumedAny ? { status: "drained" } : { status: "none" };
     }
 
+    if (expire) {
+      if (await expire(chatJid, nextQueued)) {
+        consumedAny = true;
+        broadcastConsumedFollowup(channel, chatJid, nextQueued);
+        continue;
+      }
+      // The expiry check may yield; never materialize an obsolete head or a
+      // reused negative row ID after a concurrent delete/reorder.
+      if (!isDeepStrictEqual(channel.peekQueuedFollowupItem(chatJid), nextQueued)) continue;
+    }
     const retries = nextQueued.materializeRetries ?? 0;
     const queuedInteraction = materializeQueuedFollowup(channel, chatJid, nextQueued);
 
     if (!queuedInteraction) {
+      // A lifecycle change between expiry preparation and the row transaction
+      // rolls materialization back. Retire that newly expired control now;
+      // leaving it for an unchanged-pending wakeup could strand the FIFO.
+      if (expire) {
+        if (await expire(chatJid, nextQueued)) {
+          consumedAny = true;
+          broadcastConsumedFollowup(channel, chatJid, nextQueued);
+          continue;
+        }
+        if (!isDeepStrictEqual(channel.peekQueuedFollowupItem(chatJid), nextQueued)) continue;
+      }
       // Accepted engine input cannot be discarded by the legacy retry budget.
       // Retain the existing queue/recovery surface until its binding can commit.
       if (retries >= maxMaterializeRetries && !nextQueued.source_accepted) {

@@ -427,18 +427,20 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       const admission = channel.getQueuedInputSourceAdmission!(chat)!;
       const materialize = channel.getQueuedInputMaterialization!(chat)!;
       expect(() => db.transaction(() => {
-        const queuedAt = new Date().toISOString(), sourceId = "goal-continuation:application-test";
-        const queuedRow = service.enqueueAcceptedFollowupOnce(sourceId, chat, "Queued application input", queuedAt, { source: "goal.continuation" }, admission)!;
+        const queuedAt = new Date().toISOString(), sourceId = "application-test:materialize";
+        // This fixture has no Goal owner: exercise generic host input, not a
+        // Goal control whose lifecycle cannot be proved here.
+        const queuedRow = service.enqueueAcceptedFollowupOnce(sourceId, chat, "Queued application input", queuedAt, { source: "application.test" }, admission)!;
         const stored = storeWebMessage(channel, { chatJid: chat, content: "Queued application input", mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" },
           { consumeDeferredFollowupRowId: queuedRow, materializeQueuedSource: materialize });
         expect(stored).not.toBeNull();
         expect(db.query("SELECT id FROM messages WHERE id=?").get(sourceId)).toMatchObject({ id: sourceId });
         throw Error("rollback queued application probe");
       }).immediate()).toThrow("rollback queued application probe");
-      expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all("goal-continuation:application-test")).toHaveLength(0);
-      const sourceId = "goal-continuation:withdraw-test";
+      expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all("application-test:materialize")).toHaveLength(0);
+      const sourceId = "application-test:withdraw";
       const rowId = db.transaction(() => service.enqueueAcceptedFollowupOnce(sourceId, chat, "Remove queued input", new Date().toISOString(),
-        { source: "goal.continuation" }, admission)).immediate()!;
+        { source: "application.test" }, admission)).immediate()!;
       const withdrawal = channel.getQueuedInputSourceWithdrawal!(chat)!;
       const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
       const item = getDeferredQueuedFollowups(chat).find(item => item.rowId === rowId)!;

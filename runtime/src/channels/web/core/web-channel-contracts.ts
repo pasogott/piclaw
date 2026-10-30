@@ -68,6 +68,8 @@ export interface WebChannelLike
   /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
   prepareInputSourceAdmission?(chatJid: string): Promise<void>;
   prepareInputText?(chatJid: string, text: string): PreparedInputText;
+  /** Trusted host lifecycle retirement; never selected from request fields. */
+  expireQueuedInput?(chatJid: string, item: Readonly<QueuedFollowupItem>): Promise<boolean>;
   getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
   /** Default-off trusted SQL materialization binding; not an HTTP selection. */
   getAcceptedQueuedSteering?(chatJid: string, assertCurrent?: () => void): import('../../../agent-pool/durable-queued-steering.js').AcceptedQueuedSteering | undefined;

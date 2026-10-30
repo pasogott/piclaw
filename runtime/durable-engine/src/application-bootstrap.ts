@@ -6,12 +6,14 @@ import { resolveAcceptedMessageThread } from "./host-message-thread.js";
 import { parseModelFailure } from './host-model-failure.js';
 import { assertAddonBackgroundRecoveryOwner } from './host-addon-background.js';
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
+import { getDeferredQueuedFollowups } from "../../src/db/chat-cursors.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
 import { markAddonOperationInputCommitted,readAddonOperationInputSequence } from '../../src/db/addon-operations.js';
 import { BudgetRequestError } from '../../src/db/budget-request-reservations.js';
 import { ensureBudgetWork, getBudgetWork } from "../../src/db/budget-limits.js";
 import { operationBudgetWorkId, sidePromptSourceId } from "./host-request-accounting.js";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
@@ -125,6 +127,8 @@ export interface ApplicationBootstrapOptions {
   /** Synchronous final admission check on already materialised immutable input. */
   assertInputAdmission?: (chatJid: string, content: string) => void;
   prepareInputText?: NonNullable<WebChannelOpts["prepareInputText"]>;
+  /** A host-specific revocation proof, never inferred from ordinary queued text. */
+  prepareQueuedInputExpiry?: (chat: string, item: Readonly<QueuedFollowupItem>) => (() => void) | undefined;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "harnessOptions" | "now" | "codemodeExecute" | "onStorageFailure">;
   /** Existing application payload store, with immutable answer references. */
@@ -142,6 +146,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const resolveScheduledModel = config.resolveScheduledModel?.bind(config);
   const assertInputAdmission = config.assertInputAdmission?.bind(config);
   const prepareInputText = config.prepareInputText?.bind(config);
+  const prepareQueuedInputExpiry = config.prepareQueuedInputExpiry?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   let releaseBranchControlGuard: (() => void) | undefined;
@@ -400,10 +405,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const source = work.getAcceptedSource(chat, message.id);
         if (!source || source.kind !== "message" || source.payloadRef !== `queued-source:${message.id}` || source.provenanceRef !== queuedInputProvenance(item) || source.state !== "pending")
           throw Error("Queued source payload conflict");
+        // Expiry preparation may have yielded before this transaction. Recheck
+        // current execution permission without rewriting accepted input bytes.
+        if (item.source === "goal.continuation" && /^goal-(?:command|settings|continuation|budget):/.test(item.source_id) && !prepareInputText)
+          throw Error("Queued Goal input authority unavailable");
+        prepareInputText?.(chat, message.content).assertCurrent();
         assert();
       };
     };
-    const getQueuedInputSourceWithdrawal: NonNullable<WebChannelOpts["getQueuedInputSourceWithdrawal"]> = chat => {
+    const queuedInputWithdrawal = (chat: string, actor: "application:queue-remove" | "application:goal-expired"): ReturnType<NonNullable<WebChannelOpts["getQueuedInputSourceWithdrawal"]>> => {
       assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
       return ({ chatJid, item, database: connection }) => {
         assert();
@@ -412,13 +422,44 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const stored = root.query("SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, item.source_id) as { source_hash: string } | null;
         if (!source || !stored || source.payloadRef !== `queued-source:${item.source_id}` || source.provenanceRef !== queuedInputProvenance(item))
           throw Error("Queued withdrawal payload conflict");
-        const request = { effect: { ...effect(`withdraw:${item.source_id}`), provenanceRef: "application:queue-remove" },
-          chatJid: chat, sourceId: item.source_id, sourceHash: stored.source_hash, payloadRef: source.payloadRef, actor: "application:queue-remove" };
+        const key = actor === "application:queue-remove" ? `withdraw:${item.source_id}` : `goal-expire:${item.source_id}`;
+        const request = { effect: { ...effect(key), provenanceRef: actor },
+          chatJid: chat, sourceId: item.source_id, sourceHash: stored.source_hash, payloadRef: source.payloadRef, actor };
         request.effect.requestHash = hashCanonicalRequest({ method: "withdrawUnclaimedSource.v1", ...request });
         work.withdrawUnclaimedSourceInTransaction(request, root);
         assert();
       };
     };
+    const getQueuedInputSourceWithdrawal: NonNullable<WebChannelOpts["getQueuedInputSourceWithdrawal"]> = chat =>
+      queuedInputWithdrawal(chat, "application:queue-remove");
+    const expireQueuedInput: WebChannelOpts["expireQueuedInput"] = prepareQueuedInputExpiry ? async (chat, item) => {
+      assertLive(); config.assertAdmission?.();
+      const expected = structuredClone(item);
+      if (!expected.source_accepted || !expected.source_id || !prepareQueuedInputExpiry(chat, expected)) return false;
+      const binding = routeIndex.get(chat), executable = new Error("Queued input is executable");
+      const running = hostFollowups.removeQueuedFollowupForAction(chat, expected.rowId, {
+        signal: shutdown.signal,
+        authorise(phase) {
+          assertLive(); config.assertAdmission?.();
+          if (!binding || routeIndex.get(chat) !== binding || lookup(chat, binding.branchId) !== binding) throw Error("Queued expiry route changed");
+          // Re-evaluate revocation under the acquired writer. A later Goal
+          // lifecycle is not permission to execute this old control input.
+          const assertExpired = prepareQueuedInputExpiry(chat, expected);
+          if (!assertExpired) throw executable;
+          assertExpired();
+          if (phase === "before" && !isDeepStrictEqual(hostFollowups.peekQueuedFollowupItem(chat), expected)) throw Error("Queued expiry head changed");
+          if (phase === "after" && (getDeferredQueuedFollowups(chat).some(row => row.source_id === expected.source_id) ||
+            work.getAcceptedSource(chat, expected.source_id!)?.state !== "disposed")) throw Error("Queued expiry postcondition changed");
+        },
+        withdrawAcceptedSource: queuedInputWithdrawal(chat, "application:goal-expired"),
+      }).then(result => result.removed !== null, error => {
+        if (error === executable) return false;
+        throw error;
+      });
+      hostControls.set(running, chat);
+      void running.then(() => hostControls.delete(running), () => hostControls.delete(running));
+      return running;
+    } : undefined;
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
       if (!binding || !lookup(chat, binding.branchId)) return undefined;
@@ -1087,7 +1128,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
-        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization, getQueuedInputSourceWithdrawal,
+        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization, getQueuedInputSourceWithdrawal, expireQueuedInput,
           prepareInputText: prepareInputText ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound input preparation"); return prepareInputText(chat, text); } : undefined,
           dispatchAcceptedInput: dispatch, getAcceptedQueuedSteering });
       },
