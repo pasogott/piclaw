@@ -97,10 +97,11 @@ export async function refreshAgentStatusForChat(options: RefreshAgentStatusForCh
   const requestedThought = thoughtBufferRef.current;
   const requestedDraft = draftBufferRef.current;
 
-  const restorePreviews = (response: any, restoreThought: boolean, restoreDraft: boolean) => {
+  const restorePreviews = (response: any, restoreThought: boolean, restoreDraft: boolean, missingOnly = false) => {
     const thoughtRestore = resolveAgentPreviewRestoreState(response.thought);
     if (thoughtRestore && restoreThought) {
       setAgentThought((prev) => {
+        if (missingOnly && (prev?.text || prev?.fullText)) return prev;
         if (shouldKeepExistingPreview(prev, thoughtRestore.text)) return prev;
         thoughtBufferRef.current = thoughtRestore.text;
         return thoughtRestore;
@@ -109,6 +110,7 @@ export async function refreshAgentStatusForChat(options: RefreshAgentStatusForCh
     const draftRestore = resolveAgentPreviewRestoreState(response.draft);
     if (draftRestore && restoreDraft) {
       setAgentDraft((prev) => {
+        if (missingOnly && (prev?.text || prev?.fullText)) return prev;
         if (shouldKeepExistingPreview(prev, draftRestore.text)) return prev;
         draftBufferRef.current = draftRestore.text;
         return draftRestore;
@@ -124,20 +126,21 @@ export async function refreshAgentStatusForChat(options: RefreshAgentStatusForCh
 
     const restoreThought = thoughtBufferRef.current === requestedThought;
     const restoreDraft = draftBufferRef.current === requestedDraft;
-    if (options.currentTurnIdRef?.current !== requestedTurn || agentStatusRef.current !== requestedStatus) {
+    if (options.currentTurnIdRef?.current !== requestedTurn || agentStatusRef.current !== requestedStatus
+      || !restoreThought || !restoreDraft) {
       // Live progress may supersede only the status row, not an absent preview.
-      // Recover unchanged fields only when both owners still name the same live
-      // turn; never resurrect a completed run or overwrite newer streamed text.
+      // Recover only still-empty fields when both owners name the same live
+      // turn. Superseded snapshots still return null and leave existing panes,
+      // status and newer streamed text untouched.
       const live = agentStatusRef.current;
       const liveTurn = options.currentTurnIdRef?.current;
       if (response?.status !== 'active' || !liveTurn || !live
         || ['done', 'error', 'idle'].includes(live.type)
         || readAgentTurnId(live) !== liveTurn || readAgentTurnId(response.data) !== liveTurn) return null;
-      restorePreviews(response, restoreThought, restoreDraft);
-      return response;
+      restorePreviews(response, restoreThought && requestedThought === '', restoreDraft && requestedDraft === '', true);
+      return null;
     }
 
-    if ((!restoreThought || !restoreDraft) && response?.status !== 'active') return null;
     if (!response || response.status !== 'active' || !response.data) {
       const terminalType = response?.data?.type;
       const hasTerminalPayload = terminalType === 'done' || terminalType === 'error';

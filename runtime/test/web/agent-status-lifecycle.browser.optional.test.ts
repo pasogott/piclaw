@@ -186,7 +186,8 @@ browserTest('return snapshot restores missing thought while current-turn draft k
     await page.evaluate(() => {
       const f=(window as any).statusLifecycleFixture;
       f.event('agent_draft_delta',{chat_jid:'web:hook-fixture',turn_id:'background-turn',reset:true,delta:'Newer live draft'});
-      f.release(1,{status:'active',data:{type:'tool_status',turn_id:'background-turn',tool_name:'read',title:'Background tool',status:'running'},draft:{text:'Earlier draft',totalLines:1},thought:{text:'Recovered background thought',totalLines:1}});
+      f.event('agent_status',{chat_jid:'web:hook-fixture',turn_id:'background-turn',type:'tool_status',tool_name:'read',title:'Background tool',status:'running'});
+      f.release(1,{status:'active',data:{type:'thinking',turn_id:'background-turn'},draft:{text:'Earlier draft',totalLines:1},thought:{text:'Recovered background thought',totalLines:1}});
     });
     await page.waitForFunction(() => document.querySelector('#state')!.textContent!.includes('Recovered background thought'),undefined,{timeout:1500});
     const state=JSON.parse((await page.locator('#state').textContent())!);

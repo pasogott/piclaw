@@ -94,7 +94,7 @@ for (const progressed of ['draft', 'status'] as const) test(`same-turn ${progres
   else h.agentStatusRef.current = { type: 'tool_call', turn_id: 'live-turn', title: 'Current tool' };
   const liveStatus = h.agentStatusRef.current;
   release({status:'active',data:{type:'thinking',turn_id:'live-turn'},thought:{text:'Background thought restored',totalLines:1},draft:{text:'Snapshot draft',totalLines:1}});
-  await pending;
+  expect(await pending).toBeNull();
   expect(h.state().thought.text).toBe('Background thought restored');
   if (progressed === 'draft') expect(h.options.draftBufferRef.current).toBe('Newer live draft');
   else expect(h.agentStatusRef.current).toBe(liveStatus);
@@ -122,5 +122,14 @@ test('thought progress preserves the newer thought while recovering a missing dr
  const pending=refreshAgentStatusForChat({...h.options,getAgentStatus:()=>new Promise(resolve=>{release=resolve;})});
  h.options.thoughtBufferRef.current='Newer live thought';h.options.setAgentThought({text:'Newer live thought',totalLines:1});
  release({status:'active',data:{type:'thinking',turn_id:'live-turn'},thought:{text:'Older thought',totalLines:1},draft:{text:'Recovered draft',totalLines:1}});
- await pending;expect(h.state().thought.text).toBe('Newer live thought');expect(h.state().draft.text).toBe('Recovered draft');
+ expect(await pending).toBeNull();expect(h.state().thought.text).toBe('Newer live thought');expect(h.state().draft.text).toBe('Recovered draft');
+});
+
+test('partial recovery also leaves an existing collapsed preview untouched when its full buffer is absent',async()=>{
+ const h=harness('web:return-existing-collapsed');h.options.currentTurnIdRef.current='live-turn';h.agentStatusRef.current={type:'thinking',turn_id:'live-turn'};
+ h.options.setAgentThought({text:'Existing collapsed preview',totalLines:1});
+ let release!:(value:any)=>void;const pending=refreshAgentStatusForChat({...h.options,getAgentStatus:()=>new Promise(resolve=>{release=resolve;})});
+ h.options.draftBufferRef.current='Live draft';
+ release({status:'active',data:{type:'thinking',turn_id:'live-turn'},thought:{text:'Longer snapshot should not replace the existing pane',totalLines:2}});
+ expect(await pending).toBeNull();expect(h.state().thought.text).toBe('Existing collapsed preview');
 });
