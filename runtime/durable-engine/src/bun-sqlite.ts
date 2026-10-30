@@ -170,17 +170,24 @@ export class BunSqliteDatabase implements SqliteDatabase {
           await new Promise(resolve => setTimeout(resolve, 25));
         }
       }
-      let active = true, committed = false;
-      const tx = this.executor(() => {
-        if (!active) throw new Error("SQLite transaction handle expired");
+      let phase: "callback" | "persist" | "closed" = "callback", committed = false;
+      const executorFor = (expected: "callback" | "persist") => this.executor(() => {
+        if (phase !== expected) throw new Error("SQLite transaction handle expired");
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
       });
       try {
         admission?.(); idle?.(); source?.check();
-        const value = await this.callback.run(true, () => callback(tx));
-        await source?.persist(tx);
+        // Both async phases are transaction-local; neither may enqueue facade
+        // work behind itself. The SDK handle expires before host persistence.
+        const value = await this.callback.run(true, async () => {
+          try {
+            const result = await callback(executorFor("callback"));
+            phase = "persist";
+            await source?.persist(executorFor("persist"));
+            return result;
+          } finally { phase = "closed"; }
+        });
         source?.check();
-        active = false;
         admission?.(); idle?.();
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
         this.db.exec("COMMIT");
@@ -188,7 +195,6 @@ export class BunSqliteDatabase implements SqliteDatabase {
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
         return value;
       } catch (error) {
-        active = false;
         if (committed) throw error;
         // Explicit SQL, never Bun's synchronous transaction(callback) helper.
         try { this.db.exec("ROLLBACK"); }

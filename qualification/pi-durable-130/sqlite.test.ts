@@ -168,6 +168,76 @@ describe("Bun asynchronous database facade", () => {
   });
 });
 
+describe("host persistence transaction scope", () => {
+  for (const rollback of [false, true]) test(`host persistence expires the SDK callback handle before ${rollback ? "rollback" : "commit"}`, () => disk(async path => {
+    const root = new Database(path);
+    root.exec("PRAGMA journal_mode=WAL; CREATE TABLE sample (n INTEGER)");
+    const db = new BunSqliteDatabase(path, { root, assertOwner() {}, fenceTransactions: true });
+    const entered = barrier(), hold = barrier(), rejected = new Error("host persistence rejected");
+    let callback!: SqliteExecutor, persistence!: SqliteExecutor;
+    const operation = db.withHostSourceGuard(() => {}, async tx => {
+      persistence = tx;
+      entered.release(); await hold.promise;
+      expect(await tx.all("SELECT n FROM sample")).toEqual([{ n: 1 }]);
+      await tx.run("INSERT INTO sample VALUES (2)");
+      if (rollback) throw rejected;
+    }, () => db.transaction(async tx => {
+      callback = tx;
+      await tx.run("INSERT INTO sample VALUES (1)");
+      return "original result";
+    }));
+    // Observe rejection immediately; the test may still be checking a retained handle.
+    const settled = operation.catch(error => error);
+    const expired = async (tx: SqliteExecutor) => {
+      await expect(tx.get("SELECT 1")).rejects.toThrow("expired");
+      await expect(tx.all("SELECT 1")).rejects.toThrow("expired");
+      await expect(tx.exec("INSERT INTO sample VALUES (99)")).rejects.toThrow("expired");
+      await expect(tx.run("INSERT INTO sample VALUES (99)")).rejects.toThrow("expired");
+    };
+    try {
+      await entered.promise;
+      expect(root.query("SELECT n FROM sample").all()).toEqual([]);
+      await expired(callback);
+      hold.release();
+      expect(await settled).toBe(rollback ? rejected : "original result");
+      expect(await db.all("SELECT n FROM sample ORDER BY n")).toEqual(rollback ? [] : [{ n: 1 }, { n: 2 }]);
+      await expired(callback); await expired(persistence);
+      await db.transaction(async tx => { await tx.run("INSERT INTO sample VALUES (3)"); });
+      expect(await db.all("SELECT n FROM sample ORDER BY n")).toEqual(rollback ? [{ n: 3 }] : [{ n: 1 }, { n: 2 }, { n: 3 }]);
+    } finally { hold.release(); await settled; await db.close(); root.close(); }
+  }));
+
+  for (const operation of ["read", "close"] as const) test(`host persistence rejects outer ${operation} during an actual SDK commit without queueing it`, () => disk(async path => {
+    const root = new Database(path);
+    root.exec("PRAGMA journal_mode=WAL; CREATE TABLE sample (n INTEGER)");
+    const db = new BunSqliteDatabase(path, { root, assertOwner() {}, fenceTransactions: true });
+    const storage = await SqliteStorage.open(db);
+    const before = root.query("SELECT next_seq FROM durable_metadata").get() as { next_seq: number };
+    let observed: unknown = "pending", calls = 0, attempt = Promise.resolve<unknown>(undefined);
+    try {
+      const seq = await db.withHostSourceGuard(() => {}, async tx => {
+        calls++;
+        attempt = (operation === "read" ? db.get("SELECT 1") : db.close()).then(
+          () => { observed = "resolved"; }, error => { observed = error; });
+        // A reentrant facade call must reject before this transaction can finish,
+        // not wait behind itself. One microtask observes Promise.reject without a timer.
+        await Promise.resolve();
+        expect(observed).toBeInstanceOf(Error);
+        expect((observed as Error).message).toContain("transaction handle");
+        await tx.run("INSERT INTO sample VALUES (1)");
+      }, () => storage.commit([], context));
+      await attempt;
+      expect(typeof seq).toBe("number");
+      expect(Number(seq)).toBe(before.next_seq);
+      expect(root.query("SELECT next_seq FROM durable_metadata").get()).toEqual({ next_seq: before.next_seq + 1 });
+      expect(await db.all("SELECT n FROM sample")).toEqual([{ n: 1 }]);
+      expect(calls).toBe(1);
+      await storage.commit([], context);
+      expect(root.query("SELECT next_seq FROM durable_metadata").get()).toEqual({ next_seq: before.next_seq + 2 });
+    } finally { await attempt; await storage.close(context); root.close(); }
+  }));
+});
+
 describe("public Harness on actual disk SQLite", () => {
   test("owner fence precedes file construction", () => disk(async path => {
     await expect(fixtureAt(path, { acquired: false })).rejects.toThrow("before open");
