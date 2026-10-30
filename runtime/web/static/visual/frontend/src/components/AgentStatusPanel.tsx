@@ -196,6 +196,7 @@ export function AgentStatusPanel() {
   useEffect(() => {
     let statusRevision = 0, draftRevision = 0, thoughtRevision = 0, recoveryGeneration = 0;
     let liveTurn: string | null = null, liveType: string | null = null;
+    let outputMetadataRevision = 0, outputContextPath: string | null = null;
     const knownTools = new Set<string>();
     const handleDraft = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -275,6 +276,8 @@ export function AgentStatusPanel() {
         const outputPreview = detail.output_preview ?? detail.outputPreview;
         if (delegateProgress.length > 0) {
           // Structured child rows replace the metadata-only legacy Output fallback.
+          outputMetadataRevision++;
+          outputContextPath = null;
           outputBufferRef.current = "";
           flushOutput();
         } else if (typeof outputPreview === "string" && outputPreview) {
@@ -285,13 +288,17 @@ export function AgentStatusPanel() {
           // Capture meta for output panel header
           const toolName = detail.title || detail.tool_name || "";
           const startedAt = detail.started_at || detail.startedAt || "";
-          setOutputMeta((prev) => ({ ...prev, toolName, startedAt }));
-          // Async: fetch git branch from workspace API (like classic)
-          const contextPath = extractToolContextPath(detail.tool_name, detail.tool_args);
+          const contextPath = extractToolContextPath(detail.tool_name, detail.tool_args) || null;
+          const sameContext = outputContextPath === contextPath;
+          outputContextPath = contextPath;
+          const outputRevision = ++outputMetadataRevision;
+          setOutputMeta((prev) => ({ ...prev, toolName, startedAt, gitBranch: sameContext ? prev.gitBranch : "" }));
+          // Async: fetch git branch only for the output that requested it.
           if (contextPath) {
             const branchChat = getChatJid(), branchTurn = liveTurn, branchGeneration = recoveryGeneration;
             getWorkspaceBranch(contextPath).then((result) => {
-              if (!mounted || getChatJid() !== branchChat || liveTurn !== branchTurn || recoveryGeneration !== branchGeneration) return;
+              if (!mounted || getChatJid() !== branchChat || liveTurn !== branchTurn || recoveryGeneration !== branchGeneration
+                || outputMetadataRevision !== outputRevision) return;
               if (result?.branch) {
                 setOutputMeta((prev) => ({ ...prev, gitBranch: result.branch }));
               }

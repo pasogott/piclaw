@@ -51,3 +51,31 @@ for(const [name,engine]of Object.entries({chromium,webkit})) browserTest(`${name
  expect(await page.locator('body').textContent()).toContain('Output from B');
  }finally{await browser.close();}
 },15000);
+
+for(const [name,engine]of Object.entries({chromium,webkit})) browserTest(`${name}: recovered metadata cannot overwrite newer output in the same turn`,async()=>{
+ const browser=await engine.launch({headless:true}),page=await browser.newPage();try{
+ await page.goto(`${server.url}?chat_jid=web:a`);await page.waitForFunction(()=>Boolean((window as any).panelRecovery));await page.waitForTimeout(100);
+ await page.evaluate(snapshot=>{const f=(window as any).panelRecovery;f.snapshot={...snapshot,data:{...snapshot.data,tool_args:{path:'file.ts'},output_preview:'Output from A'}};window.dispatchEvent(new Event('focus'));},snapshot);
+ await page.waitForFunction(()=>Boolean((window as any).panelRecovery.branchRelease));
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('piclaw:agent-status',{detail:{type:'tool_status',turn_id:'turn-a',tool_name:'bash',title:'Tool B',status:'running',output_preview:'Newer output from B'}})));
+ await page.waitForFunction(()=>document.body.textContent?.includes('Newer output from B'));
+ await page.evaluate(()=>(window as any).panelRecovery.branchRelease());await page.waitForTimeout(100);
+ expect(await page.locator('body').textContent()).not.toContain('STALE_BRANCH');
+ expect(await page.locator('body').textContent()).toContain('Newer output from B');
+ expect(await page.locator('body').textContent()).toContain('Tool B');
+ }finally{await browser.close();}
+},15000);
+
+for(const [name,engine]of Object.entries({chromium,webkit})) browserTest(`${name}: newer output clears branch metadata from a different context`,async()=>{
+ const browser=await engine.launch({headless:true}),page=await browser.newPage();try{
+ await page.goto(`${server.url}?chat_jid=web:a`);await page.waitForFunction(()=>Boolean((window as any).panelRecovery));await page.waitForTimeout(100);
+ await page.evaluate(snapshot=>{const f=(window as any).panelRecovery;f.snapshot={...snapshot,data:{...snapshot.data,tool_args:{path:'file.ts'},output_preview:'Output from A'}};window.dispatchEvent(new Event('focus'));},snapshot);
+ await page.waitForFunction(()=>Boolean((window as any).panelRecovery.branchRelease));
+ await page.evaluate(()=>(window as any).panelRecovery.branchRelease());
+ await page.waitForFunction(()=>document.body.textContent?.includes('STALE_BRANCH'));
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('piclaw:agent-status',{detail:{type:'tool_status',turn_id:'turn-a',tool_name:'bash',title:'Tool B',status:'running',output_preview:'Newer output without repository'}})));
+ await page.waitForFunction(()=>document.body.textContent?.includes('Newer output without repository'));
+ expect(await page.locator('body').textContent()).not.toContain('STALE_BRANCH');
+ expect(await page.locator('body').textContent()).toContain('Newer output without repository');
+ }finally{await browser.close();}
+},15000);
