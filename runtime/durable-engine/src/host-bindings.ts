@@ -172,6 +172,26 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     }, assertOwner);
     return { binding, content };
   }
+  function prepareSubmission(input: AcceptedInput, submissionId: SubmissionId): AcceptedInput {
+    const i = capture(input);
+    if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new TypeError("Invalid submission identity");
+    return i;
+  }
+  function applySubmission(i: AcceptedInput, submissionId: SubmissionId): void {
+    assertOwner(); verifySource(i);
+    const prior = read(i);
+    if (!prior || (prior.submissionId !== null && prior.submissionId !== submissionId)) throw conflict();
+    const other = db.query(`SELECT 1 FROM ${table} WHERE domain=? AND incarnation=?
+      AND submission_id=? AND NOT (conversation_id=? AND request_id=?)
+      UNION ALL SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND submission_id=?`)
+      .get(domain, incarnation, submissionId, i.conversationId, i.requestId, domain, incarnation, submissionId);
+    if (other) throw conflict();
+    db.query(`UPDATE ${table} SET submission_id=?
+      WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=? AND submission_id IS NULL`)
+      .run(submissionId, domain, incarnation, i.conversationId, i.requestId);
+    if (read(i)?.submissionId !== submissionId) throw conflict();
+    assertOwner();
+  }
   return Object.freeze({
     async list(input: AcceptedInput) {
       const i = capture(input);
@@ -195,23 +215,15 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     async bind(input: AcceptedInput) { const i = capture(input); return (await bindContent(i)).binding; },
     async getOrBind(input: AcceptedInput) { const i = capture(input); return { content: (await bindContent(i)).content }; },
     async recordSubmission(input: AcceptedInput, submissionId: SubmissionId) {
-      const i = capture(input);
-      if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new TypeError("Invalid submission identity");
-      await admitSqliteWrite(db, () => {
-        assertOwner(); verifySource(i);
-        const prior = read(i);
-        if (!prior || (prior.submissionId !== null && prior.submissionId !== submissionId)) throw conflict();
-        const other = db.query(`SELECT 1 FROM ${table} WHERE domain=? AND incarnation=?
-          AND submission_id=? AND NOT (conversation_id=? AND request_id=?)
-          UNION ALL SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND submission_id=?`)
-          .get(domain, incarnation, submissionId, i.conversationId, i.requestId, domain, incarnation, submissionId);
-        if (other) throw conflict();
-        db.query(`UPDATE ${table} SET submission_id=?
-          WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=? AND submission_id IS NULL`)
-          .run(submissionId, domain, incarnation, i.conversationId, i.requestId);
-        if (read(i)?.submissionId !== submissionId) throw conflict();
-        assertOwner();
-      }, assertOwner);
+      const i = prepareSubmission(input, submissionId);
+      await admitSqliteWrite(db, () => applySubmission(i, submissionId), assertOwner);
+    },
+    /** Host-only precommit correlation, not execution authority or acknowledgement.
+     * Caller owns this exact connection's transaction and MUST roll back on failure. */
+    recordSubmissionInTransaction(input: AcceptedInput, submissionId: SubmissionId, transactionDatabase: Database): void {
+      if (transactionDatabase !== db || !db.inTransaction) throw conflict();
+      const i = prepareSubmission(input, submissionId);
+      applySubmission(i, submissionId);
     },
   });
   }
@@ -255,3 +267,62 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     },
   });
 }
+
+/** One host-root completion, shared by production and real-store fixtures. SDK
+ * evidence is resolved by the fresh runtime producer BEFORE entering this port. */
+export function createInputHandoffCompletion(db: Database, options: {
+  domain: string; incarnation: string; sessionId: string;
+  bindings: HostDurableBindings;
+  work: Pick<import('../../src/service-effects/current-piclaw/service-work-store.js').CurrentPiclawServiceWorkStore, 'bindHarnessInTransaction'>;
+  assertCurrent(input: AcceptedInput): void;
+}): NonNullable<import('./host-runtime.js').RuntimeOptions['completeInputHandoff']> {
+  const { domain, incarnation, sessionId, bindings, work } = options;
+  const assert = options.assertCurrent.bind(options), bindHarness = work.bindHarnessInTransaction.bind(work);
+  const primaryAck = bindings.recordSubmissionInTransaction?.bind(bindings);
+  const intentAck = bindings.intents?.recordSubmissionInTransaction?.bind(bindings.intents);
+  return async (input, submissionId, captured, intent, signal) => {
+    const i = inputSnapshot(input), check = () => { signal?.throwIfAborted(); assert(i); };
+    await admitSqliteWrite(db, () => {
+      check();
+      if (i.incarnation !== incarnation || captured.operationId !== i.operationId || captured.chatJid !== i.chatJid ||
+        captured.terminal || captured.cancellation || !captured.claimedSourceSeqs.includes(i.sourceSeq)) throw conflict();
+      const row = db.query(`SELECT o.* FROM service_effect_s01_operations o
+        JOIN service_effect_s01_chats ch ON ch.chat_jid=o.chat_jid AND ch.active_operation_id=o.operation_id
+        JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid
+        JOIN service_effect_s01_sources s ON s.chat_jid=os.chat_jid AND s.source_seq=os.source_seq
+        WHERE o.operation_id=? AND o.chat_jid=? AND o.version=?
+          AND o.cancellation_source_id IS NULL AND o.terminal_disposition IS NULL
+          AND s.source_seq=? AND s.source_id=? AND s.payload_ref=? AND s.state='claimed'`)
+        .get(i.operationId, i.chatJid, captured.version, i.sourceSeq, i.sourceId, i.payloadRef) as {
+          phase: string; primary_source_seq: number; harness_session_id: string | null; harness_operation_id: string | null;
+        } | null;
+      if (!row || row.harness_session_id !== (captured.harness?.sessionId ?? null) ||
+        row.harness_operation_id !== (captured.harness?.harnessOperationId ?? null)) throw conflict();
+      if (intent) {
+        const primary = Number(row.harness_operation_id);
+        if (!Number.isSafeInteger(primary) || primary <= 0 || String(primary) !== row.harness_operation_id ||
+          row.phase !== 'executing' || row.primary_source_seq === i.sourceSeq || row.harness_session_id !== sessionId ||
+          !db.query(`SELECT 1 FROM piclaw_durable_bindings_v1 WHERE domain=? AND incarnation=? AND conversation_id=?
+            AND operation_id=? AND source_seq=? AND submission_id=?`)
+            .get(domain, incarnation, i.conversationId, i.operationId, row.primary_source_seq, primary)) throw conflict();
+      } else {
+        if (row.primary_source_seq !== i.sourceSeq || !['claimed', 'starting_harness', 'executing'].includes(row.phase) ||
+          (row.harness_session_id !== null && (row.harness_session_id !== sessionId || row.harness_operation_id !== String(submissionId)))) throw conflict();
+      }
+      const ack = intent ? intentAck : primaryAck;
+      if (!ack) throw conflict();
+      ack(i, submissionId, db); // Revalidates route/incarnation/source and exact identity.
+      if (!intent) bindHarness(sealHandoff({
+        effect: { idempotencyKey: `input-handoff:${hashCanonicalRequest({ incarnation, conversationId: i.conversationId, requestId: i.requestId, submissionId })}`, requestHash: '',
+          operationId: i.operationId, sourceSeq: i.sourceSeq, provenanceRef: 'host:input-handoff', redactionClass: 'private' as const },
+        expectedVersion: captured.version, sessionId, harnessOperationId: String(submissionId),
+      }), db);
+      const final = db.query(`SELECT 1 FROM service_effect_s01_operations WHERE operation_id=? AND phase='executing'
+        AND cancellation_source_id IS NULL AND terminal_disposition IS NULL AND harness_session_id=? AND harness_operation_id=?`)
+        .get(i.operationId, sessionId, intent ? row.harness_operation_id : String(submissionId));
+      if (!final) throw conflict();
+      check();
+    }, check, signal);
+  };
+}
+import { sealed as sealHandoff } from './host-effects.js';

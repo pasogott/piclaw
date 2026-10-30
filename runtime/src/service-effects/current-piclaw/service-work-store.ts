@@ -414,6 +414,35 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     );
   }
 
+  /**
+   * Host-only synchronous precommit receipt, NOT execution authority or an applied
+   * EffectResult. Caller owns commit/rollback and acknowledgement on this exact
+   * connection. Failures MUST escape the outer transaction. No lost-ack hook runs
+   * before commit; replay, validation and CAS use the ordinary mutation path.
+   */
+  bindHarnessInTransaction(
+    input: BindHarnessRequest,
+    transactionDatabase: Database,
+  ): OperationSnapshot {
+    if (transactionDatabase !== this.database || !this.database.inTransaction)
+      throw new EffectAdmissionError("owner_conflict");
+    const request = this.prepareMutation("bindHarness", input);
+    if (!request) throw new EffectAdmissionError("invalid_transition");
+    try {
+      const fault = this.fault("bindHarness", "before_effect");
+      if (!fault.ok || fault.injected)
+        throw new EffectAdmissionError("storage_unavailable");
+      const outcome = this.applyMutationWithinTransaction("bindHarness", request,
+        value => this.applyHarnessBinding(value as BindHarnessRequest));
+      if (!outcome.ok) throw new EffectAdmissionError(outcome.error._tag);
+      return outcome.value;
+    } catch (cause) {
+      if (cause instanceof EffectAdmissionError) throw cause;
+      throw new EffectAdmissionError(cause instanceof RollbackFault
+        ? "storage_unavailable" : mutationError(cause)._tag);
+    }
+  }
+
   /** Host-only settlement CAS, not candidate execution authority. The current owner must
    * first verify committed outcomes for EVERY claimed input; this store cannot read
    * candidate storage. Version + immutable execution binding fence late completions.

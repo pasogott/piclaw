@@ -11,6 +11,7 @@ import { hashCanonicalRequest } from "../../runtime/src/service-effects/contract
 import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { barrier } from "./src/fixture.js";
 import { configureHostWalFixtureDatabase } from "./src/sqlite-fixture-policy.js";
+import { createInputHandoffCompletion } from "../../runtime/durable-engine/src/host-bindings.js";
 
 async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>) {
   const f = await setup();
@@ -243,4 +244,189 @@ test("bindings: internal side prompt requires its exact accepted source namespac
   f.db.query("UPDATE service_effect_s01_sources SET state='pending' WHERE chat_jid=? AND source_seq=?").run(input.chatJid, input.sourceSeq);
   await expect(f.bindings.bind(input)).rejects.toThrow("Unverified host source");
   expect(f.count()).toBe(1);
+}));
+
+// Read only our isolated fixture's public host tables, never SDK-private storage.
+function atomicState(f: Awaited<ReturnType<typeof setup>>) {
+  return {
+    acks: f.db.query("SELECT * FROM piclaw_durable_bindings_v1 ORDER BY request_id").all(),
+    intents: f.db.query("SELECT * FROM piclaw_durable_intent_bindings_v1 ORDER BY request_id").all(),
+    operations: f.db.query("SELECT * FROM service_effect_s01_operations ORDER BY operation_id").all(),
+    decisions: f.db.query("SELECT * FROM service_effect_s01_decisions ORDER BY idempotency_key").all(),
+  };
+}
+function completion(f: Awaited<ReturnType<typeof setup>>) {
+  return createInputHandoffCompletion(f.db, { domain: "host", incarnation: "store-A", sessionId: "session-A",
+    bindings: f.bindings, work: f.work, assertCurrent: f.options.assertOwner });
+}
+async function capturedOperation(f: Awaited<ReturnType<typeof setup>>, i: AcceptedInput) {
+  return value(await f.work.getOperation(i.operationId))!;
+}
+function harnessRequest(i: AcceptedInput, version: number) {
+  return sealed({ effect: effect("atomic-bind", i.operationId, i.sourceSeq), expectedVersion: version,
+    sessionId: "session-A", harnessOperationId: "42" });
+}
+
+test("bindings: InTransaction primitives require an active transaction on the exact connection", () => fixture(async f => {
+  const i = await f.accept(); await f.bindings.bind(i);
+  const op = await capturedOperation(f, i), request = harnessRequest(i, op.version), before = atomicState(f);
+  const other = new Database(join(f.dir, "host.sqlite"), { strict: true });
+  try {
+    expect(() => f.bindings.recordSubmissionInTransaction!(i, 42, f.db)).toThrow();
+    expect(() => f.work.bindHarnessInTransaction(request, f.db)).toThrow();
+    expect(() => f.bindings.intents!.recordSubmissionInTransaction!(i, 42, f.db)).toThrow();
+    // Same file, even with both connections in transactions, is not the same transaction.
+    other.exec("BEGIN"); f.db.exec("BEGIN");
+    try {
+      expect(() => f.bindings.recordSubmissionInTransaction!(i, 42, other)).toThrow();
+      expect(() => f.bindings.intents!.recordSubmissionInTransaction!(i, 42, other)).toThrow();
+      expect(() => f.work.bindHarnessInTransaction(request, other)).toThrow();
+      expect(atomicState(f)).toEqual(before);
+    } finally { f.db.exec("ROLLBACK"); other.exec("ROLLBACK"); }
+  } finally { other.close(); }
+  expect(atomicState(f)).toEqual(before);
+}));
+
+test("bindings: outer rollback removes precommit ACK, harness and idempotency decision together", () => fixture(async f => {
+  const i = await f.accept(); await f.bindings.bind(i);
+  const op = await capturedOperation(f, i), before = atomicState(f);
+  expect(() => f.db.transaction(() => {
+    f.bindings.recordSubmissionInTransaction!(i, 42, f.db);
+    const bound = f.work.bindHarnessInTransaction(harnessRequest(i, op.version), f.db);
+    expect(bound.phase).toBe("executing");
+    expect(bound.harness).toEqual({ sessionId: "session-A", harnessOperationId: "42" });
+    expect((f.db.query("SELECT submission_id FROM piclaw_durable_bindings_v1").get() as { submission_id: number }).submission_id).toBe(42);
+    expect(atomicState(f).decisions).toHaveLength(before.decisions.length + 1);
+    throw Error("outer rollback");
+  })()).toThrow("outer rollback");
+  expect(atomicState(f)).toEqual(before);
+  expect(await capturedOperation(f, i)).toEqual(op);
+}));
+
+test("bindings: completion commits matching ACK and executing harness exactly once", () => fixture(async f => {
+  const i = await f.accept(); await f.bindings.bind(i);
+  const op = await capturedOperation(f, i), before = atomicState(f), complete = completion(f);
+  await complete(i, 42, op, false);
+  const bound = await capturedOperation(f, i);
+  expect((await f.bindings.get(i))?.submissionId).toBe(42);
+  expect(bound.phase).toBe("executing");
+  expect(bound.harness).toEqual({ sessionId: "session-A", harnessOperationId: "42" });
+  expect(bound.version).toBe(op.version + 1);
+  const committed = atomicState(f);
+  expect(committed.decisions).toHaveLength(before.decisions.length + 1);
+  // The completion port is fresh-producer-only: a second call with the now-current
+  // version conflicts with the original decision hash, without committing changes.
+  await expect(complete(i, 42, bound, false)).rejects.toThrow("idempotency_conflict");
+  expect(atomicState(f)).toEqual(committed);
+  await expect(complete(i, 42, op, false)).rejects.toThrow();
+  expect(atomicState(f)).toEqual(committed);
+}));
+
+for (const failure of ["before-bind", "final-sql-guard", "final-owner-guard"] as const) {
+  test(`bindings: completion rolls ACK and harness back at ${failure}`, () => fixture(async f => {
+    const i = await f.accept(); await f.bindings.bind(i);
+    const op = await capturedOperation(f, i), before = atomicState(f);
+    // These fire only after the ACK update: prove ordering inside the real transaction.
+    if (failure === "before-bind") f.db.exec(`CREATE TEMP TRIGGER fail_handoff BEFORE UPDATE OF harness_session_id
+      ON service_effect_s01_operations WHEN NEW.harness_session_id IS NOT NULL
+        AND (SELECT submission_id FROM piclaw_durable_bindings_v1)=42 BEGIN
+        SELECT RAISE(ABORT, 'after ACK before bind');
+      END`);
+    if (failure === "final-sql-guard") f.db.exec(`CREATE TEMP TRIGGER invalidate_handoff AFTER UPDATE OF harness_session_id
+      ON service_effect_s01_operations WHEN NEW.harness_session_id IS NOT NULL BEGIN
+        UPDATE service_effect_s01_operations SET phase='claimed' WHERE operation_id=NEW.operation_id;
+      END`);
+    let sawFinal = false;
+    const complete = createInputHandoffCompletion(f.db, { domain: "host", incarnation: "store-A", sessionId: "session-A",
+      bindings: f.bindings, work: f.work, assertCurrent() {
+        f.options.assertOwner();
+        if (failure === "final-owner-guard" && f.db.inTransaction &&
+          f.db.query("SELECT 1 FROM service_effect_s01_operations WHERE phase='executing' AND harness_operation_id='42'").get()) {
+          sawFinal = true;
+          expect((f.db.query("SELECT submission_id FROM piclaw_durable_bindings_v1").get() as { submission_id: number }).submission_id).toBe(42);
+          throw Error("final owner revoked");
+        }
+      } });
+    await expect(complete(i, 42, op, false)).rejects.toThrow();
+    if (failure === "final-owner-guard") expect(sawFinal).toBe(true);
+    expect(atomicState(f)).toEqual(before);
+    expect(await capturedOperation(f, i)).toEqual(op);
+    // The failure is fixture-local, not a permanent production-condition relaxation.
+    if (failure !== "final-owner-guard") f.db.exec(`DROP TRIGGER ${failure === "before-bind" ? "fail_handoff" : "invalidate_handoff"}`);
+    await completion(f)(i, 42, op, false);
+    expect((await f.bindings.get(i))?.submissionId).toBe(42);
+  }));
+}
+
+test("bindings: completion rejects changed captured version, cancellation, owner loss and mismatched harness", async () => {
+  for (const revoke of ["version", "cancel", "owner", "harness"] as const) await fixture(async f => {
+    const i = await f.accept(); await f.bindings.bind(i);
+    const op = await capturedOperation(f, i), complete = completion(f);
+    if (revoke === "version") value(await f.work.appendIntent(sealed({ effect: effect("bump", i.operationId, i.sourceSeq),
+      expectedVersion: op.version, intentId: "other-intent", kind: "queue_input", payloadRef: i.payloadRef, createdAt: at })));
+    if (revoke === "cancel") {
+      const source = value(await f.work.acceptSource(sealed({ effect: effect("cancel-source"), chatJid: i.chatJid,
+        sourceId: "cancel-source", kind: "message" as const, payloadRef: "cancel-payload", targetOperationId: i.operationId,
+        parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+      value(await f.work.acceptCancellation(sealed({ effect: effect("cancel", i.operationId, source.sourceSeq),
+        expectedVersion: op.version, sourceId: source.sourceId, sourceSeq: source.sourceSeq, cause: "stop", requestedAt: at })));
+    }
+    if (revoke === "harness") value(await f.work.bindHarness(sealed({ ...harnessRequest(i, op.version),
+      sessionId: "foreign-session", harnessOperationId: "99" })));
+    if (revoke === "owner") f.loseOwner();
+    const before = atomicState(f);
+    await expect(complete(i, 42, op, false)).rejects.toThrow();
+    // Also reject a fresh captured cancellation or conflicting harness, not just stale versions.
+    if (revoke === "cancel" || revoke === "harness") await expect(complete(i, 42, await capturedOperation(f, i), false)).rejects.toThrow();
+    expect(atomicState(f)).toEqual(before);
+  });
+});
+
+test("bindings: completion captures options and callbacks, and fences again after binding", () => fixture(async f => {
+  const i = await f.accept(); await f.bindings.bind(i);
+  const op = await capturedOperation(f, i);
+  let checks = 0;
+  const options = { domain: "host", incarnation: "store-A", sessionId: "session-A", bindings: f.bindings, work: f.work,
+    assertCurrent() { checks++; f.options.assertOwner(); } };
+  const complete = createInputHandoffCompletion(f.db, options);
+  Object.assign(options, { domain: "wrong", incarnation: "wrong", sessionId: "wrong",
+    bindings: {}, work: {}, assertCurrent() { throw Error("replacement callback"); } });
+  await complete(i, 42, op, false);
+  expect(checks).toBeGreaterThanOrEqual(2);
+  expect((await capturedOperation(f, i)).harness).toEqual({ sessionId: "session-A", harnessOperationId: "42" });
+  expect((await f.bindings.get(i))?.submissionId).toBe(42);
+}));
+
+test("bindings: intent completion preserves the original primary harness and rejects a different session", () => fixture(async f => {
+  const primary = await f.accept(); await f.bindings.bind(primary);
+  await completion(f)(primary, 42, await capturedOperation(f, primary), false);
+  const sourceId = crypto.randomUUID(), requestId = `queued-steer:${sourceId}`, content = "queued handoff";
+  const source = value(await f.work.acceptSource(sealed({ effect: effect("atomic-queued-source"), chatJid: primary.chatJid,
+    sourceId, kind: "message" as const, payloadRef: `queued-source:${sourceId}`, targetOperationId: primary.operationId,
+    parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+  // Same host-root queued proof as the existing intent fixture above (not SDK writes).
+  f.db.query("UPDATE service_effect_s01_sources SET state='claimed' WHERE chat_jid=? AND source_seq=?").run(source.chatJid, source.sourceSeq);
+  f.db.query("INSERT INTO service_effect_s01_operation_sources (operation_id,chat_jid,source_seq) VALUES (?,?,?)")
+    .run(primary.operationId, source.chatJid, source.sourceSeq);
+  const intent = { operationId: primary.operationId, intentId: requestId, kind: "queue_input", payloadRef: source.payloadRef, createdAt: at };
+  f.db.query("INSERT INTO service_effect_s01_intents (operation_id,intent_id,intent_hash,kind,payload_ref,created_at) VALUES (?,?,?,?,?,?)")
+    .run(intent.operationId, intent.intentId, hashCanonicalRequest(intent), intent.kind, intent.payloadRef, intent.createdAt);
+  f.payloads.set(source.payloadRef, content);
+  const i = { ...primary, sourceSeq: source.sourceSeq, sourceId, payloadRef: source.payloadRef, requestId,
+    requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
+  await f.bindings.intents!.bind(i);
+  const op = await capturedOperation(f, i), before = atomicState(f);
+  const wrongSession = createInputHandoffCompletion(f.db, { domain: "host", incarnation: "store-A", sessionId: "other-session",
+    bindings: f.bindings, work: f.work, assertCurrent: f.options.assertOwner });
+  await expect(wrongSession(i, 77, op, true)).rejects.toThrow();
+  await expect(completion(f)(i, 77, op, false)).rejects.toThrow();
+  expect(atomicState(f)).toEqual(before);
+  await completion(f)(i, 77, op, true);
+  expect((await f.bindings.intents!.get(i))?.submissionId).toBe(77);
+  expect((await f.bindings.get(primary))?.submissionId).toBe(42);
+  expect(await capturedOperation(f, primary)).toEqual(op);
+  expect(atomicState(f).decisions).toEqual(before.decisions);
+  const committed = atomicState(f);
+  await completion(f)(i, 77, op, true);
+  expect(atomicState(f)).toEqual(committed);
 }));

@@ -37,7 +37,7 @@ export function createDurableQueueDispatch(options: {
   const sourceFor = work.getAcceptedSource.bind(work), frontierFor = work.getChatFrontier.bind(work);
   const claim = work.claimNext.bind(work), operationFor = work.getOperation.bind(work);
   const event = options.waitForReconciliation.bind(options), shutdown = options.shutdown;
-  const correlation = options.runningCorrelation?.bind(options), bind = work.bindHarness.bind(work);
+  const correlation = options.runningCorrelation?.bind(options);
   const dispatch: AcceptedQueueDispatch = (chatJid, messageId, rowId) => {
     assert();
     const source = sourceFor(chatJid, messageId);
@@ -78,15 +78,11 @@ export function createDurableQueueDispatch(options: {
           return "pending";
         const accepted = { claimed: { source: currentSource, operation }, branchId, requestId, content };
         const id = await submit(accepted); assert();
-        if (correlation && !operation.harness) {
-          const harness = structuredClone(correlation(id));
-          if (harness.harnessOperationId !== String(id)) return 'pending';
-          const request = { effect: { idempotencyKey: `running:${operationId}:${id}`, requestHash: '', operationId,
-            sourceSeq: source.sourceSeq, provenanceRef: source.provenanceRef, redactionClass: 'private' as const },
-            expectedVersion: operation.version, ...harness, harnessOperationId: String(id) };
-          request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
-          const bound = await bind(request); assert();
-          if (!bound.ok) return 'pending';
+        if (correlation) {
+          const expected = structuredClone(correlation(id));
+          const current = await operationFor(operationId); assert();
+          if (!current.ok || !current.value?.harness || expected.harnessOperationId !== String(id) ||
+            current.value.harness.sessionId !== expected.sessionId || current.value.harness.harnessOperationId !== String(id)) return 'pending';
         }
         while (!shutdown.aborted) {
           const before = await operationFor(operationId); assert();

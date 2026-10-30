@@ -28,7 +28,7 @@ import { createDurableRecoveryDispatch } from "../../src/agent-pool/durable-reco
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service-effects/contracts/common.js";
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { createHostController, type HostControllerOptions } from "./host-controller.js";
-import { createHostDurableBindings, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
+import { createHostDurableBindings, createInputHandoffCompletion, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
 import { prepareHostSchema } from "./host-schema.js";
 import { readApplicationMessagePayload } from "./accepted-payload-recovery.js";
 import { value, effect, sealed } from "./host-effects.js";
@@ -254,7 +254,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const result:unknown=background.assertExecution(payload);if(result!==undefined){void Promise.resolve(result).catch(()=>{});throw Error('Background execution guard must be synchronous');}} });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
-      runtime: { ...r, work, terminal, bindings, assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+      runtime: { ...r, work, terminal, bindings,
+        completeInputHandoff: createInputHandoffCompletion(root, { domain: r.incarnation, incarnation: r.incarnation,
+          sessionId: r.sessionId, bindings, work, assertCurrent(input) { assert(); config.assertAdmission?.(input); } }),
+        assertAdmission: config.assertAdmission, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         replyThreadFor(input) { assert(); return resolveAcceptedMessageThread(root, input); },
         async cancelOperationSource(input, expectedVersion, retryTaskId, cause) {
           await admitSqliteWrite(root, () => {
@@ -643,9 +646,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           const submission=await runtime.submit(input);assertLive();
           const operation=value(await work.getOperation(input.operationId));assertLive();
           if(!operation)throw Error('Background operation unavailable');
-          if(!operation.harness)value(await work.bindHarness(sealed({effect:effect(`background-bind:${input.requestId}`,input.operationId,input.sourceSeq),expectedVersion:operation.version,
-            sessionId:r.sessionId,harnessOperationId:String(submission)})));
-          if(payload.policy.origin.kind==='addon')markAddonOperationInputCommitted(operationId,payload.policy.origin.inputSequence);ready=true;timedOut ||= Date.now()>=Date.parse(payload.policy.expiresAt);if(signal.aborted||timedOut)cancel();
+          if(operation.harness?.sessionId!==r.sessionId || operation.harness.harnessOperationId!==String(submission))
+            throw Error('Exact completed background handoff required');
+          if(payload.policy.origin.kind==='addon') {
+            const inputSequence=payload.policy.origin.inputSequence;
+            await admitSqliteWrite(root,()=>{lease.check();markAddonOperationInputCommitted(operationId,inputSequence);lease.check();},lease.check,signal);
+          }
+          ready=true;timedOut ||= Date.now()>=Date.parse(payload.policy.expiresAt);if(signal.aborted||timedOut)cancel();
           if(cancelling)await cancelling;else await runtime.wait(input,submission,shutdown.signal);
           if(cancelling)await cancelling;
           await runtime.joinBackgroundCompactions(input);assertLive();
@@ -819,9 +826,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const allocated = await allocateSidePromptConversation(input);
         const id = await runtime.submit(allocated);
         const operation = value(await work.getOperation(allocated.operationId)); assertLive();
-        if (operation && !operation.harness) value(await work.bindHarness(sealed({
-          effect: effect(`side-bind:${allocated.requestId}`, allocated.operationId, allocated.sourceSeq), expectedVersion: operation.version,
-          sessionId: r.sessionId, harnessOperationId: String(id) })));
+        if (operation?.harness?.sessionId !== r.sessionId || operation.harness.harnessOperationId !== String(id))
+          throw Error('Exact completed side handoff required');
         let cancelling: Promise<void> | undefined;
         let timedOut = false;
         const timeoutMs = getAgentRuntimeConfig().timeoutMs;
@@ -1002,13 +1008,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const id = await runtime.submit(input); assertLive();
       const operation = value(await work.getOperation(input.operationId));
       if (!operation) throw Error("Missing scheduled operation");
-      if (!operation.harness) {
-        const request = { effect: { idempotencyKey: `running:${input.operationId}:${id}`, requestHash: "", operationId: input.operationId,
-          sourceSeq: input.sourceSeq, provenanceRef: `scheduled_run:${input.sourceId}`, redactionClass: "private" as const },
-          expectedVersion: operation.version, sessionId: r.sessionId, harnessOperationId: String(id) };
-        request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
-        value(await work.bindHarness(request)); assertLive();
-      }
+      if (operation.harness?.sessionId !== r.sessionId || operation.harness.harnessOperationId !== String(id))
+        throw Error('Exact completed scheduled handoff required');
       await runtime.wait(input, id, shutdown.signal); assertLive();
       const state = await runtime.reconcile(input);
       if (!state.answer) throw Error("Scheduled answer unavailable");

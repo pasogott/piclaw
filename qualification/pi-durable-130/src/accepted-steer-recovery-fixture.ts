@@ -1,4 +1,5 @@
 import "./test-guard.js";
+import { createInputHandoffCompletion } from "../../../runtime/durable-engine/src/host-bindings.js";
 import check from "node:assert/strict";
 import { join, basename } from "node:path";
 import { STORE_DIR } from "../../../runtime/src/core/config.js";
@@ -107,7 +108,17 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
           },
         },
       } : bindings;
-      return { work, terminal, bindings: faultBindings };
+      const complete = createInputHandoffCompletion(db, { domain: incarnation, incarnation, sessionId: incarnation,
+        bindings, work, assertCurrent() { assert(); if (!permit) throw Error("Host scheduling gate closed"); } });
+      return { work, terminal, bindings: faultBindings,
+        async completeInputHandoff(...args: Parameters<typeof complete>) {
+          const [input, id, , intent] = args;
+          if (testConfig.loseIntentBindingAck && intent && !ackLost) {
+            committedIntentId = id; ackLost = true;
+            throw Error(`ACK lost before host binding write for ${input.requestId}: ${id}`);
+          }
+          await complete(...args);
+        } };
     }
     installTerminalSettlementCompositionSchema(db); initializeHostDurableBindings(db, assert);
     db.exec("CREATE TABLE IF NOT EXISTS recovery_fixture_identity (id TEXT PRIMARY KEY, input TEXT NOT NULL)");
