@@ -1679,13 +1679,23 @@ export class HostConversationRuntime {
   private admitInput(input: AcceptedInput, intent = false): Promise<SubmissionId> {
     try { this.fence(); this.options.assertAdmission?.(input); }
     catch (error) { return Promise.reject(error); }
+    // Maintenance waiters are not active admissions. Even identity conflicts
+    // wait for this barrier, so close can seal them before any handoff starts.
+    if (this.changingModel && this.maintenance) {
+      const maintenance = this.maintenance;
+      return maintenance.then(() => {
+        this.fence();
+        if (this.changingModel && this.maintenance === maintenance) throw Error("Runtime maintenance in progress");
+        return this.admitInput(input, intent);
+      });
+    }
     const key = this.handoffKey(input), prior = this.inputHandoffs.get(key);
     if (prior) {
       if (prior.intent !== intent || Object.entries(input).some(([k, v]) => prior.input[k as keyof AcceptedInput] !== v))
         return Promise.reject(Error("Input handoff identity conflict"));
       return prior.ready;
     }
-    // Install before any await, including admission/maintenance/source reads.
+    // Install before the producer's first await; no SDK admission occurs during maintenance.
     const join = { input, intent, fresh: false, ready: undefined as unknown as Promise<SubmissionId> };
     join.ready = Promise.resolve().then(() => this.produceInput(input, intent))
       .finally(() => { this.inputHandoffs.delete(key); });

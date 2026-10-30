@@ -108,8 +108,10 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
           },
         },
       } : bindings;
+      // Reused real controllers own scheduling admission; permit belongs only
+      // to this fixture's open() callback, not their execution authority.
       const complete = createInputHandoffCompletion(db, { domain: incarnation, incarnation, sessionId: incarnation,
-        bindings, work, assertCurrent() { assert(); if (!permit) throw Error("Host scheduling gate closed"); } });
+        bindings, work, assertCurrent: assert });
       return { work, terminal, bindings: faultBindings,
         async completeInputHandoff(...args: Parameters<typeof complete>) {
           const [input, id, , intent] = args;
