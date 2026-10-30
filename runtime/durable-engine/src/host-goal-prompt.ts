@@ -6,6 +6,12 @@ import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 import { withGoalSystemInstructions } from "./host-plan-context.js";
 
+/** Expected policy denial for one SDK request, never application ownership loss. */
+export class GoalRequestDenied extends Error {
+  readonly code = "goal_request_denied";
+  constructor(message: string) { super(message); this.name = "GoalRequestDenied"; }
+}
+
 type GoalState = { status: string; goal_id: string; lifecycle_generation: number; deadline_checkpoint?: unknown; budget_limit_reported: boolean };
 export function createHostGoalPrompt(addon: {
   loadThreadGoal(chat: string): GoalState | null;
@@ -21,7 +27,7 @@ export function createHostGoalPrompt(addon: {
   root: Database;
   runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult" | "readCommittedRunUsage" | "prepareGoalContext">;
   assertOwner(): void;
-  failClosed(error: unknown): void;
+  failClosed(error: unknown, api: Pick<Parameters<NonNullable<GenerationHooks["beforeRequest"]>>[1], "taskId" | "conversationId">): void;
 }) {
   const load = addon.loadThreadGoal.bind(addon), build = addon.buildGoalSystemPrompt.bind(addon);
   const beforeRequest: NonNullable<GenerationHooks["beforeRequest"]> = async (request, api, context) => {
@@ -39,9 +45,9 @@ export function createHostGoalPrompt(addon: {
     const budgetWrapup = () => scope(() => isGoalBudgetWrapup(addon, captured.operation.chatJid, texts, source));
     const executable = () => scope(() => {
       const goal = load(captured.operation.chatJid);
-      if (goal?.deadline_checkpoint) throw Error("Native Goal deadline checkpoint recovery unavailable");
-      if (goal?.status === "usage_limited") throw Error("Native Goal usage-limit recovery unavailable");
-      if (goal?.status === "budget_limited" && autonomous && !budgetWrapup()) throw Error("Goal budget input authority unavailable");
+      if (goal?.deadline_checkpoint) throw new GoalRequestDenied("Native Goal deadline checkpoint recovery unavailable");
+      if (goal?.status === "usage_limited") throw new GoalRequestDenied("Native Goal usage-limit recovery unavailable");
+      if (goal?.status === "budget_limited" && autonomous && !budgetWrapup()) throw new GoalRequestDenied("Goal budget input authority unavailable");
     });
     executable();
     let terminalProof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
@@ -55,12 +61,12 @@ export function createHostGoalPrompt(addon: {
         (goal.status !== "complete" && goal.status !== "stopped") ||
         !await runtime.hasGoalTerminalResult(api.conversationId, api.taskId, {
           goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status,
-        })) throw Error("Goal input lifecycle changed");
+        })) throw new GoalRequestDenied("Goal input lifecycle changed");
       authority.assertCurrent();
       terminalProof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status };
       const current = scope(() => load(captured.operation.chatJid));
       if (!current || current.goal_id !== goal.goal_id || current.lifecycle_generation !== goal.lifecycle_generation || current.status !== goal.status)
-        throw Error("Goal input lifecycle changed");
+        throw new GoalRequestDenied("Goal input lifecycle changed");
     }
     // Ordinary input does not acquire autonomous Goal accounting authority.
     if (texts.length && texts.every(text => addon.goalInputIdentity(text))) {
@@ -71,7 +77,7 @@ export function createHostGoalPrompt(addon: {
         await writer.admitWrite(() => accountCommittedGoalBatch(addon,
           { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof, source));
         if (!terminalProof && !budgetWrapup() && texts.some(text => scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled")))
-          throw Error("Goal usage changed input lifecycle");
+          throw new GoalRequestDenied("Goal usage changed input lifecycle");
       }
     }
     executable();
@@ -101,9 +107,9 @@ export function createHostGoalPrompt(addon: {
       scope(() => {
         const current = load(captured.operation.chatJid);
         if (!current || current.goal_id !== goal.goal_id || current.lifecycle_generation !== goal.lifecycle_generation || current.status !== goal.status)
-          throw Error("Goal context lifecycle changed");
+          throw new GoalRequestDenied("Goal context lifecycle changed");
         for (const text of texts) if (addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled" && !budgetWrapup())
-          throw Error("Goal input lifecycle changed");
+          throw new GoalRequestDenied("Goal input lifecycle changed");
       });
     };
     assertContributionCurrent();
@@ -125,7 +131,7 @@ export function createHostGoalPrompt(addon: {
     // to user instructions; the objective is explicitly labelled user data.
     return { messages: withGoalSystemInstructions(messages, prompt, captured.operation.chatJid, api.taskId) };
     } catch (error) {
-      options.failClosed(error);
+      options.failClosed(error, api);
       throw Error("Goal request authority unavailable");
     }
   };

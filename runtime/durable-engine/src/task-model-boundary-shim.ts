@@ -18,6 +18,13 @@ export function taskModelRequestScope(signal: AbortSignal | undefined): TaskMode
   return scope;
 }
 
+/** HookApi has no public signal. Match its public IDs to the current wrapped
+ * generation; never infer a signal from caller options or an unrelated task. */
+export function taskModelHookScope(api: Pick<TaskModelRequestScope, "taskId" | "conversationId">): TaskModelRequestScope | undefined {
+  const scope = requests.getStore();
+  return scope?.taskKind === "pi.generation" && scope.taskId === api.taskId && scope.conversationId === api.conversationId ? scope : undefined;
+}
+
 /** TEMPORARY pi-durable 1.3 adapter. Replace with an SDK task-bound model-request
  * callback. Uses exported definitions and RegistryReader, without SDK file or
  * persisted-task mutation. Includes checkpoint recovery and every phase entry.

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createRegistry, defineExtension, defineTask } from "../../runtime/durable-engine/qualification/durable.ts";
 import { context } from "./src/fixture.ts";
-import { withTaskModelRequestScope, taskModelRequestScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
+import { withTaskModelRequestScope, taskModelRequestScope, taskModelHookScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
 
 test("temporary request scope preserves exact invocation identity through awaits and rejects other signals", async () => {
   const registry = createRegistry();
@@ -19,6 +19,7 @@ test("temporary request scope preserves exact invocation identity through awaits
     phases: { async summarize(_task, actual) {
       await Promise.resolve();
       observed = taskModelRequestScope(actual.signal);
+      expect(taskModelHookScope({ taskId: actual.taskId, conversationId: actual.conversationId })).toBeUndefined();
       expect(taskModelRequestScope(new AbortController().signal)).toBeUndefined();
       expect(taskModelRequestScope(undefined)).toBeUndefined();
     } }, async abort() {} });
@@ -29,6 +30,36 @@ test("temporary request scope preserves exact invocation identity through awaits
   expect(taskModelRequestScope(controller.signal)).toBeUndefined();
   controller.abort();
   await expect(phase({}, runtime, context)).rejects.toThrow();
+});
+
+test("Goal hook identity resolves only its current public generation IDs without a HookApi signal", async () => {
+  const registry = createRegistry(), controller = new AbortController();
+  const task = defineTask({ name: "pi.generation", version: 1, initial: () => ({ phase: "request" as const }),
+    phases: { async request(_record, actual) {
+      await Promise.resolve();
+      const api = { taskId: actual.taskId, conversationId: actual.conversationId,
+        get signal(): never { throw Error("HookApi.signal is not a public SDK contract"); } };
+      expect(taskModelHookScope(api)?.signal).toBe(actual.signal);
+      expect(taskModelHookScope({ taskId: 99 as never, conversationId: actual.conversationId })).toBeUndefined();
+      expect(taskModelHookScope({ taskId: actual.taskId, conversationId: 99 as never })).toBeUndefined();
+      expect(taskModelRequestScope(undefined)).toBeUndefined();
+      expect(taskModelRequestScope(new AbortController().signal)).toBeUndefined();
+    } }, async abort() {} });
+  // Public RegistryReader fixture: the SDK registry already owns pi.generation.
+  // Substitute only its executable definition for this identity-only unit test.
+  const reader = { subscribe: registry.subscribe.bind(registry), snapshot() {
+    const snapshot = registry.snapshot();
+    return new Proxy(snapshot, { get(target, key) {
+      if (key === "task") return (name: string) => name === "pi.generation" ? task : target.task(name);
+      if (key === "tasks") return () => target.tasks().map(current => current.definition.name === "pi.generation" ? task : current);
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+  } };
+  const wrapped = withTaskModelRequestScope(reader);
+  const phase = wrapped.snapshot().task("pi.generation")!.definition.phases.request as Function;
+  await phase({}, { taskId: 12, conversationId: 34, signal: controller.signal }, context);
+  expect(taskModelHookScope({ taskId: 12 as never, conversationId: 34 as never })).toBeUndefined();
 });
 
 test("temporary request scope isolates concurrent phases and follows registry replacement", async () => {
