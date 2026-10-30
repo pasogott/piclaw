@@ -70,6 +70,7 @@ export interface WebChannelOpts {
   /** Internal host coordinator only; never derived from request fields. */
   prepareInputSourceAdmission?: WebChannelLike["prepareInputSourceAdmission"];
   prepareInputText?: WebChannelLike["prepareInputText"];
+  expireQueuedInput?: WebChannelLike["expireQueuedInput"];
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
   getQueuedInputSourceAdmission?: WebChannelLike["getQueuedInputSourceAdmission"];
   getQueuedInputSourceWithdrawal?: WebChannelLike["getQueuedInputSourceWithdrawal"];

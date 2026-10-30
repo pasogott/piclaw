@@ -80,6 +80,7 @@
     "task-model-boundary.test.ts",
     "task-model-compaction-recovery.test.ts",
     "goal-tools.test.ts",
+    "goal-queued-expiry.test.ts",
     "host-code-review-write-admission.test.ts"
   ]
 }

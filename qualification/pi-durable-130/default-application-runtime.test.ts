@@ -171,7 +171,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-retention-unit", "native-runner-denial", "native-scheduled-lease-free", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-addon-execution", "native-addon-execution-accounting", "native-addon-execution-accounting-unknown", "native-addon-execution-accounting-capped", "native-addon-execution-accounting-capped-daily", "native-addon-execution-accounting-capped-exact", "native-addon-execution-accounting-capped-denied", "native-addon-execution-accounting-capped-initial-denied", "native-addon-execution-accounting-capped-auth-denied", "native-addon-execution-accounting-capped-unknown", "native-addon-execution-accounting-capped-missing-account", "native-addon-execution-accounting-capped-account-changed", "native-addon-execution-accounting-capped-tool-race", "native-addon-execution-accounting-capped-pricing-changed", "native-addon-execution-accounting-capped-small-output", "native-addon-execution-accounting-capped-cleanup-failed", "native-addon-execution-no-account-auth-cap", "native-addon-execution-revoked", "native-addon-execution-auth-revoked", "native-addon-execution-cancelled", "native-addon-execution-deadline", "native-addon-execution-quota", "native-addon-execution-ceiling", "native-addon-execution-large-result", "native-addon-execution-live-input", "native-addon-execution-recovery-terminal", "native-addon-execution-recovery-cancel-requested", "native-addon-execution-recovery-unknown", "native-addon-execution-recovery-cancelled", "native-addon-execution-recovery-unsafe", "native-addon-execution-recovery-input-ack", "native-addon-execution-recovery-budget-blocked", "native-addon-execution-recovery-owned", "native-addon-execution-recovery-no-source", "native-addon-service-execution", "native-addon-service-budget-resume", "native-addon-service-continuation", "native-addon-service-continuation-budget-gap", "native-addon-service-continuation-interrupted", "native-addon-service-continuation-staged", "native-addon-service-continuation-compaction", "native-addon-service-continuation-compaction-background", "native-addon-service-continuation-compaction-auth-revoked", "native-addon-service-continuation-compaction-auth-budget", "native-addon-service-continuation-compaction-unknown", "native-addon-service-continuation-compaction-background-held", "native-dream-runner", "native-dream-runner-model", "native-dream-runner-tools", "native-dream-runner-held-provider", "native-dream-runner-held-tool", "native-dream-runner-lock-revoked", "native-dream-runner-accounted", "native-dream-runner-budget-denied", "native-dream-runner-deadline", "native-dream-runner-original-time", "native-dream-runner-accounted-unknown", "native-dream-runner-unsafe-result", "native-dream-runner-held-provider-accounted", "native-dream-runner-recovery-unit", "native-dream-runner-scheduled-model", "native-dream-runner-scheduled-budget", "native-dream-runner-scheduled-lease-revoked", "native-dream-runner-scheduled-token-revoked", "native-dream-runner-scheduled-tool-revoked", "native-dream-runner-scheduled-reclaim", "native-dream-runner-scheduled-budget-denied", "native-dream-runner-scheduled-unknown", "native-dream-runner-scheduled-final-revoked", "native-dream-runner-scheduled-index-revoked", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-web-cursor-ack", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-binding-revoked", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-binding-revoked", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "native-recovery-unit", "native-retention-unit", "native-runner-denial", "native-scheduled-lease-free", "native-nonweb-admission", "native-addon-admission", "native-addon-admission-rollback", "native-addon-admission-overlap", "native-addon-admission-rejected", "native-addon-admission-alias", "native-addon-admission-model-revoked", "native-addon-admission-public-model-revoked", "native-addon-execution", "native-addon-execution-accounting", "native-addon-execution-accounting-unknown", "native-addon-execution-accounting-capped", "native-addon-execution-accounting-capped-daily", "native-addon-execution-accounting-capped-exact", "native-addon-execution-accounting-capped-denied", "native-addon-execution-accounting-capped-initial-denied", "native-addon-execution-accounting-capped-auth-denied", "native-addon-execution-accounting-capped-unknown", "native-addon-execution-accounting-capped-missing-account", "native-addon-execution-accounting-capped-account-changed", "native-addon-execution-accounting-capped-tool-race", "native-addon-execution-accounting-capped-pricing-changed", "native-addon-execution-accounting-capped-small-output", "native-addon-execution-accounting-capped-cleanup-failed", "native-addon-execution-no-account-auth-cap", "native-addon-execution-revoked", "native-addon-execution-auth-revoked", "native-addon-execution-cancelled", "native-addon-execution-deadline", "native-addon-execution-quota", "native-addon-execution-ceiling", "native-addon-execution-large-result", "native-addon-execution-live-input", "native-addon-execution-recovery-terminal", "native-addon-execution-recovery-cancel-requested", "native-addon-execution-recovery-unknown", "native-addon-execution-recovery-cancelled", "native-addon-execution-recovery-unsafe", "native-addon-execution-recovery-input-ack", "native-addon-execution-recovery-budget-blocked", "native-addon-execution-recovery-owned", "native-addon-execution-recovery-no-source", "native-addon-service-execution", "native-addon-service-budget-resume", "native-addon-service-continuation", "native-addon-service-continuation-budget-gap", "native-addon-service-continuation-interrupted", "native-addon-service-continuation-staged", "native-addon-service-continuation-compaction", "native-addon-service-continuation-compaction-background", "native-addon-service-continuation-compaction-auth-revoked", "native-addon-service-continuation-compaction-auth-budget", "native-addon-service-continuation-compaction-unknown", "native-addon-service-continuation-compaction-background-held", "native-dream-runner", "native-dream-runner-model", "native-dream-runner-tools", "native-dream-runner-held-provider", "native-dream-runner-held-tool", "native-dream-runner-lock-revoked", "native-dream-runner-accounted", "native-dream-runner-budget-denied", "native-dream-runner-deadline", "native-dream-runner-original-time", "native-dream-runner-accounted-unknown", "native-dream-runner-unsafe-result", "native-dream-runner-held-provider-accounted", "native-dream-runner-recovery-unit", "native-dream-runner-scheduled-model", "native-dream-runner-scheduled-budget", "native-dream-runner-scheduled-lease-revoked", "native-dream-runner-scheduled-token-revoked", "native-dream-runner-scheduled-tool-revoked", "native-dream-runner-scheduled-reclaim", "native-dream-runner-scheduled-budget-denied", "native-dream-runner-scheduled-unknown", "native-dream-runner-scheduled-final-revoked", "native-dream-runner-scheduled-index-revoked", "native-routing-bash-active", "native-routing-control-race", "native-routing-queued-race", "native-routing-side-race", "native-routing-create-race", "native-routing-policy", "native-routing-initial-rollback", "native-routing-initial-ack", "native-usage-projection", "native-scheduler-definition", "native-plan-clear", "native-plan-initial-empty", "native-shutdown-stop-recover", "native-shutdown-close-recover", "native-process-exit", "native-process-exit-accounting", "native-process-exit-accounting-close-fail", "native-process-exit-queue-busy", "native-process-exit-shell-lease", "native-process-status", "native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-web-cursor-ack", "native-infrastructure", "native-goal", "native-goal-local-denial", "native-goal-critical-denial", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-binding-revoked", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-binding-revoked", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -368,7 +368,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
   }
   const codemodePlan = scenario.startsWith("native-codemode-plan");
   const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
-  const nativeGoal = scenario === "native-goal" || scenario === "native-goal-budget" || scenario === "native-codemode-plan-goal";
+  const nativeGoal = scenario === "native-goal" || scenario === "native-goal-local-denial" || scenario === "native-goal-critical-denial" || scenario === "native-goal-budget" || scenario === "native-codemode-plan-goal";
   const planClear = scenario === "native-plan-clear";
   const planInitiallyEmpty = scenario === "native-plan-initial-empty";
   const nativePlan = scenario.startsWith("native-plan") || nativeGoal || codemodePlan;
@@ -398,7 +398,7 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
       : 'const r=await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]});console.log(r)' } }]
       : [{ name: "plan", arguments: { action: "update", plan: [{ step: planStep, status: "in_progress" }] } }];
   }
-  if (scenario === "native-goal-budget") toolSequence = undefined; // Budget reached by the final answer, not a tool round.
+  if (scenario === "native-goal-budget" || scenario === "native-goal-local-denial" || scenario === "native-goal-critical-denial") toolSequence = undefined; // No tool round in these policy-boundary cases.
   const standardDelegate = scenario === "native-delegate-standard" || scenario === "native-delegate-standard-revoke";
   const readonlyDeny = scenario === "native-delegate-readonly-deny";
   const writeDelegate = standardDelegate || readonlyDeny;
@@ -1820,6 +1820,52 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     await reopenedPool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
     return;
   }
+  if (scenario === "native-goal-local-denial" || scenario === "native-goal-critical-denial") {
+    const critical = scenario === "native-goal-critical-denial";
+    const fatal = Error("Synthetic Goal context integrity failure");
+    const criticalSpy = critical ? spyOn(HostConversationRuntime.prototype, "prepareGoalContext").mockImplementation(async () => { throw fatal; }) : undefined;
+    try {
+      expect(await pool.applySlashCommand("web:default", "/goal Deny only this revoked generation")).toMatchObject({ status: "success" });
+      const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
+      const control = getDeferredQueuedFollowups("web:default")[0]!;
+      // It was valid when materialised, then revoked before its SDK request.
+      // This intentionally crosses the later execution fence, not queue expiry.
+      const materialized = channel.storeMessage("web:default", control.queuedContent, false, [], { consumeDeferredFollowupRowId: control.rowId });
+      expect(materialized).not.toBeNull();
+      if (!critical) expect(await pool.applySlashCommand("web:default", "/goal pause")).toMatchObject({ status: "success" });
+      expect(await bound.dispatchAcceptedInput!("web:default", control.source_id!, materialized!.id)!()).toBe("settled");
+      expect(calls).toBe(0);
+      expect(root.query("SELECT o.terminal_disposition FROM service_effect_s01_operations o JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq WHERE s.source_id=?").get(control.source_id!)).toEqual({ terminal_disposition: "failed" });
+      if (critical) {
+        expect(criticalSpy!.mock.calls).toHaveLength(1);
+        await expect(pool.applySlashCommand("web:default", "/goal status")).rejects.toThrow(fatal.message);
+        expect(calls).toBe(0);
+        return; // Unexpected integrity/ownership errors keep the global fence.
+      }
+      // Old code aborted the whole application lifetime here. The same live
+      // backend must still accept control inspection and an ordinary SDK turn.
+      expect(await pool.applySlashCommand("web:default", "/goal status")).toMatchObject({ status: "success" });
+      const ordinary = { id: "after-goal-local-denial", chat_jid: "web:default", sender: "user", sender_name: "User",
+        content: "Ordinary user request after Goal revocation", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+      const rowId = root.transaction(() => {
+        const row = storeMessage(ordinary);
+        bound.getInputSourceAdmission!(ordinary.chat_jid)!({ message: ordinary, rowId: row, database: root });
+        return row;
+      }).immediate();
+      expect(await bound.dispatchAcceptedInput!(ordinary.chat_jid, ordinary.id, rowId)!()).toBe("settled");
+      expect(calls).toBe(1);
+      expect(root.query("SELECT o.terminal_disposition FROM service_effect_s01_operations o JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq WHERE s.source_id=?").get(ordinary.id)).toEqual({ terminal_disposition: "completed" });
+      expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "paused", lifecycle_generation: 2 });
+      expect(getDeferredQueuedFollowups("web:default")).toEqual([]);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    } finally {
+      criticalSpy?.mockRestore();
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release();
+    }
+    return;
+  }
   if (scenario === "native-goal") {
     const wakes: string[] = [];
     let failWake = false;
@@ -1857,7 +1903,39 @@ for (const scenario of [...(reviewLifecycleCase ? [reviewLifecycleCase] : []), "
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(2);
     failWake = true; // Optional wake failure cannot reject an already committed command.
     expect(await pool.applySlashCommand("web:default", "/goal pause")).toMatchObject({ status: "success", message: "Goal paused" });
-    await pool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
+    // Both old host controls were accepted before this lifecycle transition.
+    // The real channel must retire them, not submit a doomed SDK generation.
+    const expired = getDeferredQueuedFollowups("web:default");
+    expect(expired).toHaveLength(2);
+    const pausedGoal = extensionKvGet("goal", "thread-goal", "chat", "web:default");
+    const callsBeforeExpiry = calls;
+    const submissionsBeforeExpiry = root.query("SELECT * FROM submissions ORDER BY id").all();
+    const messagesBeforeExpiry = root.query("SELECT * FROM messages ORDER BY rowid").all();
+    const { materializeDeferredFollowups } = await import("../../runtime/src/channels/web/runtime/process-chat-control-runtime.js");
+    expect(typeof channel.expireQueuedInput).toBe("function");
+    expect((await materializeDeferredFollowups({ channel, chatJid: "web:default", agentId: "default" })).status).toBe("drained");
+    expect(getDeferredQueuedFollowups("web:default")).toEqual([]);
+    for (const item of expired) expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get("web:default", item.source_id!)).toEqual({ state: "disposed" });
+    expect(root.query("SELECT * FROM submissions ORDER BY id").all()).toEqual(submissionsBeforeExpiry);
+    expect(root.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(messagesBeforeExpiry);
+    expect(calls).toBe(callsBeforeExpiry);
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toEqual(pausedGoal);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+    closeDatabase(); initDatabase(); root = getDb();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+    const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    const reopenedChannel = new WebChannel(backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool }));
+    try {
+      expect(typeof reopenedChannel.expireQueuedInput).toBe("function");
+      expect((await materializeDeferredFollowups({ channel: reopenedChannel, chatJid: "web:default", agentId: "default" })).status).toBe("none");
+      expect(getDeferredQueuedFollowups("web:default")).toEqual([]);
+      expect(root.query("SELECT * FROM submissions ORDER BY id").all()).toEqual(submissionsBeforeExpiry);
+      expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toEqual(pausedGoal);
+      expect(calls).toBe(callsBeforeExpiry);
+      for (const item of expired) expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get("web:default", item.source_id!)).toEqual({ state: "disposed" });
+    } finally { await reopenedChannel.stop(); await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); backend.stop(); await backend.close(); }
+    closeDatabase(); owner.release();
     return;
   }
   const widgetEvents: { event: string; data: unknown }[] = [];
